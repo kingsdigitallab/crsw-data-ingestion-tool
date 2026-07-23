@@ -155,6 +155,51 @@ def ask_choice(prompt: str, choices) -> str:
         say("Please enter one of: %s" % choice_str)
 
 
+def resolve_choice(raw, entries):
+    """Match user input against (number, value, hint) entries.
+    Number or literal value, case-insensitive. None if no match."""
+    token = (raw or "").strip().lower()
+    if not token:
+        return None
+    for number, value, _hint in entries:
+        if token == number.lower() or token == value.lower():
+            return value
+    return None
+
+
+def choice_lines(title, entries):
+    lines = [style(title + ":", "bold")]
+    if all(not hint for _n, _v, hint in entries):
+        lines.append("  " + "    ".join(
+            "%s %s" % (style("[%s]" % n, "dim"), v) for n, v, _ in entries))
+    else:
+        width = max(len(v) for _n, v, _h in entries)
+        for n, v, hint in entries:
+            lines.append("  %s %-*s   %s" % (style("[%s]" % n, "dim"),
+                                             width, v, hint))
+    return lines
+
+
+def ask_select(title, entries):
+    """Numbered select (r2 §1). Never silently defaults: invalid input
+    re-prompts with the list redisplayed."""
+    while True:
+        for line in choice_lines(title, entries):
+            say(line)
+        value = resolve_choice(input("> "), entries)
+        if value is not None:
+            return value
+        say("Enter a number or value from the list.")
+
+
+STRAND_ENTRIES = [(str(i), s, "") for i, s in enumerate(keys.STRANDS, 1)]
+STATE_ENTRIES = [(v.split("_")[0], v, h) for v, h in
+                 zip(keys.STATES, ("raw, as received", "in progress",
+                                   "released or shared"))]
+SENSITIVITY_ENTRIES = [("1", "green", "publicly shareable"),
+                       ("2", "amber", "internal, strand-scoped")]
+
+
 def ask_yes_no(prompt: str, default_no: bool = True) -> bool:
     suffix = " [y/N]: " if default_no else " [Y/n]: "
     answer = input(prompt + suffix).strip().lower()
@@ -262,14 +307,26 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
     """Collect batch metadata, honouring flags. Returns the meta dict."""
     meta = {}
 
-    meta["strand"] = args.strand or ask_choice("Strand", keys.STRANDS)
+    meta["strand"] = args.strand or ask_select("Strand", STRAND_ENTRIES)
 
-    sensitivity = args.sensitivity or ask_choice(
-        "Sensitivity", ("green", "amber", "red"))
-    if sensitivity == "red":
-        raise keys.RedDataError()
-    if sensitivity not in keys.SENSITIVITIES:
-        raise ValueError("sensitivity must be green or amber, got %r" % sensitivity)
+    if args.sensitivity:
+        sensitivity = args.sensitivity
+        if sensitivity == "red":
+            raise keys.RedDataError()
+        if sensitivity not in keys.SENSITIVITIES:
+            raise ValueError("sensitivity must be green or amber, got %r"
+                             % sensitivity)
+    else:
+        while True:
+            for line in choice_lines("Sensitivity", SENSITIVITY_ENTRIES):
+                say(line)
+            raw = input("> ").strip().lower()
+            if raw == "red":
+                raise keys.RedDataError()
+            sensitivity = resolve_choice(raw, SENSITIVITY_ENTRIES)
+            if sensitivity is not None:
+                break
+            say("Enter a number or value from the list.")
     meta["sensitivity"] = sensitivity
 
     if args.project:
@@ -296,7 +353,7 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
             break
     meta["project"] = project
 
-    meta["state"] = args.state or ask_choice("State", keys.STATES)
+    meta["state"] = args.state or ask_select("State", STATE_ENTRIES)
     meta["domain"] = ask_choice("Domain", keys.DOMAINS)
 
     while True:

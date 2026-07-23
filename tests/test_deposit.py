@@ -229,5 +229,48 @@ class TestStyle(unittest.TestCase):
         deposit.enable_vt()  # must be safe on every platform
 
 
+class TestResolveChoice(unittest.TestCase):
+    STRAND = [("1", "rs1", ""), ("2", "rs2", ""), ("3", "rs3", ""), ("4", "rs4", "")]
+    STATE = [("0", "0_raw", "raw, as received"),
+             ("1", "1_interim", "in progress"),
+             ("2", "2_final", "released or shared")]
+
+    def test_number_resolves(self):
+        self.assertEqual(deposit.resolve_choice("2", self.STRAND), "rs2")
+
+    def test_literal_resolves(self):
+        self.assertEqual(deposit.resolve_choice("rs2", self.STRAND), "rs2")
+
+    def test_case_insensitive(self):
+        self.assertEqual(deposit.resolve_choice("RS2", self.STRAND), "rs2")
+
+    def test_state_numbers_are_ordinals(self):
+        self.assertEqual(deposit.resolve_choice("0", self.STATE), "0_raw")
+        self.assertEqual(deposit.resolve_choice("2", self.STATE), "2_final")
+
+    def test_whitespace_stripped(self):
+        self.assertEqual(deposit.resolve_choice("  2 ", self.STRAND), "rs2")
+
+    def test_invalid_returns_none(self):
+        self.assertIsNone(deposit.resolve_choice("5", self.STRAND))
+        self.assertIsNone(deposit.resolve_choice("rs9", self.STRAND))
+        self.assertIsNone(deposit.resolve_choice("", self.STRAND))
+
+
+class TestChoiceLines(unittest.TestCase):
+    def test_hintless_entries_share_a_line(self):
+        lines = deposit.choice_lines("Strand", TestResolveChoice.STRAND)
+        body = "\n".join(lines)
+        self.assertIn("Strand", lines[0])
+        self.assertIn("[1] rs1", body)
+        self.assertIn("[4] rs4", body)
+        self.assertEqual(len(lines), 2)  # title + one option line
+
+    def test_hinted_entries_one_per_line(self):
+        lines = deposit.choice_lines("State", TestResolveChoice.STATE)
+        self.assertEqual(len(lines), 4)  # title + 3 options
+        self.assertTrue(any("released or shared" in l for l in lines))
+
+
 if __name__ == "__main__":
     unittest.main()
