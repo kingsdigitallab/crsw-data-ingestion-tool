@@ -84,5 +84,49 @@ class TestPreflightChecks(unittest.TestCase):
                 "permission")
 
 
+class TestCopyto(unittest.TestCase):
+    def test_uses_copyto_never_copy(self):
+        with mock.patch("transfer._run", return_value=(0, "", "")) as run:
+            transfer.copyto("rclone", "local/a.csv", "ceph", "crsw",
+                            "rs2/csac/2_final/green/a.csv")
+        args = run.call_args[0][1]
+        self.assertEqual(args[0], "copyto")  # NEVER plain "copy" (spec §9)
+        self.assertIn("ceph:crsw/rs2/csac/2_final/green/a.csv", args)
+
+    def test_failure_raises_classified_error(self):
+        with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
+            with self.assertRaises(transfer.TransferError) as ctx:
+                transfer.copyto("rclone", "a.csv", "ceph", "crsw",
+                                "rs2/x/0_raw/green/a.csv")
+            self.assertEqual(ctx.exception.kind, "permission")
+
+
+class TestKeyExists(unittest.TestCase):
+    def test_existing_key(self):
+        listing = '[{"Path":"a.csv","Name":"a.csv","Size":10}]'
+        with mock.patch("transfer._run", return_value=(0, listing, "")):
+            self.assertTrue(transfer.key_exists("rclone", "ceph", "crsw",
+                                                "rs2/csac/2_final/green/a.csv"))
+
+    def test_missing_key(self):
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "directory not found")):
+            self.assertFalse(transfer.key_exists("rclone", "ceph", "crsw",
+                                                 "rs2/csac/2_final/green/nope.csv"))
+
+
+class TestListProjects(unittest.TestCase):
+    def test_lists_and_sorts_dirs(self):
+        listing = ('[{"Path":"csac","Name":"csac","IsDir":true},'
+                   '{"Path":"aid-flows","Name":"aid-flows","IsDir":true}]')
+        with mock.patch("transfer._run", return_value=(0, listing, "")):
+            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"),
+                             ["aid-flows", "csac"])
+
+    def test_failure_returns_empty(self):
+        with mock.patch("transfer._run", return_value=(1, "", "boom")):
+            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

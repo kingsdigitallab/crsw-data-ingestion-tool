@@ -92,3 +92,51 @@ def check_write(rclone: str, remote: str, bucket: str, prefix: str) -> Optional[
         return classify_error(err)
     _run(rclone, ["deletefile", probe])  # best effort; probe is zero bytes
     return None
+
+
+def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
+           show_progress: bool = False) -> None:
+    """Upload with `rclone copyto` so the object lands at exactly `key`.
+
+    NEVER change this to `rclone copy`: copy treats the destination as a
+    directory and nests the original filename inside it (spec §9 — this
+    has already caused a real incident)."""
+    dest = "%s:%s/%s" % (remote, bucket, key)
+    if show_progress:
+        # Let rclone draw progress on the user's terminal directly.
+        proc = subprocess.run([rclone, "copyto", "--progress",
+                               str(local_path), dest])
+        if proc.returncode != 0:
+            raise TransferError("unknown",
+                                "rclone exited %d" % proc.returncode)
+        return
+    code, out, err = _run(rclone, ["copyto", str(local_path), dest],
+                          timeout=None)
+    if code != 0:
+        raise TransferError(classify_error(err), err)
+
+
+def key_exists(rclone: str, remote: str, bucket: str, key: str) -> bool:
+    """True if an object exists at exactly `key` (rclone lsjson, spec §9)."""
+    code, out, err = _run(
+        rclone, ["lsjson", "--files-only", "%s:%s/%s" % (remote, bucket, key)])
+    if code != 0:
+        return False
+    try:
+        return len(json.loads(out)) > 0
+    except ValueError:
+        return False
+
+
+def list_projects(rclone: str, remote: str, bucket: str, strand: str) -> List[str]:
+    """Existing project prefixes under a strand. Best-effort: any failure
+    returns [] and the caller simply can't offer suggestions."""
+    code, out, err = _run(
+        rclone, ["lsjson", "--dirs-only", "%s:%s/%s" % (remote, bucket, strand)])
+    if code != 0:
+        return []
+    try:
+        return sorted(entry["Name"] for entry in json.loads(out)
+                      if entry.get("IsDir"))
+    except (ValueError, KeyError):
+        return []
