@@ -1,0 +1,15 @@
+{
+  "vocabulary_version": "2026-07-23",
+  "facets": {
+    "practices": ["forced-labour", "sexual-slavery", "forced-marriage",
+                  "child-soldiering", "debt-bondage", "domestic-servitude",
+                  "forced-criminality", "human-trafficking", "forced-displacement"],
+    "themes":    ["legal-frameworks", "prosecution", "prevalence", "prevention",
+                  "survivor-experience", "reparations", "conflict-financing",
+                  "supply-chains", "humanitarian-response", "post-conflict-transition"],
+    "methods":   ["remote-sensing", "survey", "interview", "archival",
+                  "legal-analysis", "osint", "participatory", "statistical-modelling"],
+    "contexts":  ["armed-conflict", "occupation", "displacement-camps",
+                  "extractive-industries", "agriculture", "construction", "maritime"]
+  }
+}
