@@ -67,8 +67,8 @@ class TestPreview(unittest.TestCase):
 class TestParser(unittest.TestCase):
     def test_defaults(self):
         args = deposit.build_parser().parse_args(["a.csv"])
-        self.assertEqual(args.remote, "ceph")
-        self.assertEqual(args.bucket, "crsw")
+        self.assertIsNone(args.remote)
+        self.assertIsNone(args.bucket)
         self.assertFalse(args.dry_run)
 
     def test_all_flags(self):
@@ -255,6 +255,43 @@ class TestDomainFlag(unittest.TestCase):
     def test_parser_accepts_domain(self):
         args = deposit.build_parser().parse_args(["a.csv", "--domain", "quant"])
         self.assertEqual(args.domain, "quant")
+
+
+class TestConfig(unittest.TestCase):
+    def test_load_missing_returns_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(deposit.load_config(Path(d) / "nope.json"), {})
+
+    def test_save_and_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "sub" / "config.json"
+            deposit.save_config({"remote": "s3_kcl_neil", "bucket": "neil-test-01"}, p)
+            self.assertEqual(deposit.load_config(p)["remote"], "s3_kcl_neil")
+
+    def test_malformed_config_returns_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text("{not json", encoding="utf-8")
+            self.assertEqual(deposit.load_config(p), {})
+
+    def test_precedence_flag_config_default(self):
+        args = deposit.build_parser().parse_args(["a.csv", "--remote", "flagged"])
+        cfg = {"remote": "configured", "bucket": "cfg-bucket"}
+        self.assertEqual(deposit.resolve_settings(args, cfg),
+                         ("flagged", "cfg-bucket"))
+        args2 = deposit.build_parser().parse_args(["a.csv"])
+        self.assertEqual(deposit.resolve_settings(args2, {}), ("ceph", "crsw"))
+
+    def test_config_path_dirname(self):
+        self.assertEqual(deposit.config_path().name, "config.json")
+        self.assertEqual(deposit.config_path().parent.name, "crsw-deposit")
+
+
+class TestNoRemoteMessage(unittest.TestCase):
+    def test_lists_existing_remotes(self):
+        msg = deposit.MESSAGES["no_remote"].format(remote="ceph",
+                                                   remotes="s3_kcl_neil, other")
+        self.assertIn("s3_kcl_neil", msg)
 
 
 class TestStyle(unittest.TestCase):

@@ -8,6 +8,7 @@ transfer) have no interactive I/O so the future web gateway can import
 them unchanged."""
 import argparse
 import glob as globlib
+import json
 import os
 import shutil
 import sys
@@ -47,7 +48,10 @@ MESSAGES = {
     "no_remote": (
         "rclone is installed but has no remote named '{remote}'.\n"
         "Run 'rclone config file' to find your config file and add this\n"
-        "section (keys come from eResearch):\n\n" + RCLONE_STANZA),
+        "section (keys come from eResearch):\n\n" + RCLONE_STANZA + "\n"
+        "Remotes that DO exist in your rclone config: {remotes}\n"
+        "If one of those is the right one, run with --reconfigure to\n"
+        "pick it from a menu and save it."),
     "unreachable": (
         "Cannot reach the storage endpoint. The usual cause is the KCL VPN -\n"
         "check you are connected to it and try again. If the VPN is up and\n"
@@ -366,11 +370,67 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sensitivity")  # validated by hand so 'red' gets OUR message
     p.add_argument("--dry-run", action="store_true",
                    help="preview keys and sidecars, upload nothing")
-    p.add_argument("--remote", default="ceph", help="rclone remote name")
-    p.add_argument("--bucket", default="crsw", help="target bucket")
+    p.add_argument("--remote", default=None,
+                   help="rclone remote name (default: ceph, or your saved config)")
+    p.add_argument("--bucket", default=None,
+                   help="target bucket (default: crsw, or your saved config)")
+    p.add_argument("--reconfigure", action="store_true",
+                   help="re-run remote/bucket setup")
     p.add_argument("--verbose", action="store_true",
                    help="show raw rclone output on errors")
     return p
+
+
+# ----------------------------------------------------------------- config
+
+def config_path() -> Path:
+    if os.name == "nt":
+        return vocab.cache_dir() / "config.json"
+    return Path.home() / ".config" / "crsw-deposit" / "config.json"
+
+
+def load_config(path: Optional[Path] = None) -> dict:
+    path = path if path is not None else config_path()
+    try:
+        cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_config(cfg: dict, path: Optional[Path] = None) -> None:
+    path = Path(path) if path is not None else config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        warn("could not save settings to %s - flags still work" % path)
+
+
+def resolve_settings(args, cfg) -> Tuple[str, str]:
+    """Precedence: command-line flag -> config file -> built-in default."""
+    remote = args.remote or cfg.get("remote") or "ceph"
+    bucket = args.bucket or cfg.get("bucket") or "crsw"
+    return remote, bucket
+
+
+def first_run_setup(rclone) -> dict:
+    say(style("First-run setup: which rclone remote and bucket should "
+              "deposits go to?", "bold"))
+    try:
+        names = transfer.remote_names(rclone)
+    except transfer.TransferError:
+        names = []
+    if names:
+        remote = ask_select("Remote",
+                            [(str(i), n, "") for i, n in enumerate(names, 1)])
+    else:
+        remote = ask("Remote name")
+    bucket = ask("Bucket", default="crsw")
+    cfg = {"remote": remote, "bucket": bucket}
+    save_config(cfg)
+    say("Saved to %s (re-run setup any time with --reconfigure)." % config_path())
+    return cfg
 
 
 # ---------------------------------------------------------------- prompts
@@ -583,7 +643,8 @@ def preflight(args) -> Tuple[Optional[str], List[str]]:
     except transfer.TransferError as e:
         return rclone, [MESSAGES["unknown"] + _detail(args, e)]
     if args.remote not in names:
-        return rclone, [MESSAGES["no_remote"].format(remote=args.remote)]
+        return rclone, [MESSAGES["no_remote"].format(
+            remote=args.remote, remotes=", ".join(names) or "none yet")]
     kind = transfer.check_access(rclone, args.remote, args.bucket)
     if kind:
         failures.append(MESSAGES[kind])
@@ -694,6 +755,17 @@ def main(argv=None) -> int:
         return fail(MESSAGES["red_refused"], 2)
     if args.sensitivity and args.sensitivity not in keys.SENSITIVITIES:
         return fail("sensitivity must be green or amber, got %r" % args.sensitivity)
+
+    # Remote/bucket: flag -> config file -> built-in default (r2 §6).
+    cfg = load_config()
+    run_setup = args.reconfigure or (
+        not cfg and (args.remote is None or args.bucket is None))
+    if run_setup:
+        rclone_for_setup = transfer.find_rclone()
+        if rclone_for_setup:
+            cfg = first_run_setup(rclone_for_setup)
+        # no rclone -> preflight will fail with the no_rclone message anyway
+    args.remote, args.bucket = resolve_settings(args, cfg)
 
     # Local checks first: files readable?
     files, problems = resolve_files(args.files)
