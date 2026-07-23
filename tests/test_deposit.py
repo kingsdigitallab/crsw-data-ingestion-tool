@@ -158,5 +158,47 @@ class TestPerformDeposits(unittest.TestCase):
         self.assertRegex(captured["deposited"], r"Z$")
 
 
+    def test_interrupt_reports_completed_and_exits_130(self):
+        def copyto(rclone, lp, rem, b, key, **kw):
+            if "two.csv" in key:
+                raise KeyboardInterrupt()
+        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
+             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits(
+                "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")
+        self.assertEqual(code, 130)
+
+
+class TestMessageQuality(unittest.TestCase):
+    """Spec §8 finish test: if a message mentions sockets, TLS, or an S3
+    error code, it isn't finished."""
+    FORBIDDEN = ("errno", "traceback", "socket", "tls", "ssl",
+                 "xml", "getaddrinfo", "boto", "http status")
+
+    def test_no_jargon_in_user_messages(self):
+        for kind, message in deposit.MESSAGES.items():
+            lowered = message.lower()
+            for word in self.FORBIDDEN:
+                self.assertNotIn(word, lowered, "%s mentions %r" % (kind, word))
+
+    def test_messages_are_ascii(self):
+        # Managed Windows consoles use cp1252; non-ASCII garbles to '?'.
+        for kind, message in deposit.MESSAGES.items():
+            message.encode("ascii")
+
+    def test_unreachable_names_the_vpn(self):
+        self.assertIn("VPN", deposit.MESSAGES["unreachable"])
+
+    def test_no_rclone_has_download_url(self):
+        self.assertIn("https://rclone.org", deposit.MESSAGES["no_rclone"])
+
+    def test_no_remote_has_config_stanza(self):
+        self.assertIn("type = s3", deposit.MESSAGES["no_remote"])
+
+    def test_red_points_to_tre(self):
+        self.assertIn("TRE", deposit.MESSAGES["red_refused"])
+
+
 if __name__ == "__main__":
     unittest.main()

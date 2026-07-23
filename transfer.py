@@ -54,13 +54,24 @@ def classify_error(stderr: str) -> str:
     return "unknown"
 
 
+# Fail fast instead of letting rclone retry for minutes: preflight checks
+# must answer quickly so the VPN-off case is a message, not a hang.
+_FAST_FAIL = ["--retries", "1", "--low-level-retries", "2",
+              "--contimeout", "10s"]
+
+
 def _run(rclone: str, args: List[str],
          timeout: Optional[int] = 30) -> Tuple[int, str, str]:
     """Single choke-point for rclone subprocess calls (tests mock this).
-    timeout=None means no cap — required for large uploads."""
-    proc = subprocess.run(
-        [rclone] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        timeout=timeout)
+    timeout=None means no cap — required for large uploads. A hung
+    subprocess is reported as an i/o timeout so classify_error maps it
+    to 'unreachable' instead of raising a stack trace."""
+    try:
+        proc = subprocess.run(
+            [rclone] + args + _FAST_FAIL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (124, "", "i/o timeout: rclone did not respond")
     return (proc.returncode,
             proc.stdout.decode("utf-8", "replace"),
             proc.stderr.decode("utf-8", "replace"))

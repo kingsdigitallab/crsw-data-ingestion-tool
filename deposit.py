@@ -29,34 +29,34 @@ endpoint = https://OBJECT-STORE-ENDPOINT-FROM-ERESEARCH
 """
 
 # Every user-facing failure message lives here. Each message must say what
-# happened, the most likely cause, and what to do next — for someone who
+# happened, the most likely cause, and what to do next - for someone who
 # has never seen the code. No socket errors, no S3 error codes, no stack
 # traces.
 MESSAGES = {
     "red_refused": (
-        "This deposit is marked 'red'. Red data never enters shared storage —\n"
+        "This deposit is marked 'red'. Red data never enters shared storage -\n"
         "it belongs in the Trusted Research Environment (TRE). See the Data\n"
         "Governance Handbook, sections 3 and 7.3, or contact your domain steward."),
     "no_rclone": (
         "Could not find rclone. Looked on your PATH, then for ./rclone and\n"
         "./rclone.exe next to this script.\n"
         "Download it from %s and either install it or just drop the rclone\n"
-        "binary in this folder — both work." % RCLONE_DOWNLOAD_URL),
+        "binary in this folder - both work." % RCLONE_DOWNLOAD_URL),
     "no_remote": (
         "rclone is installed but has no remote named '{remote}'.\n"
         "Run 'rclone config file' to find your config file and add this\n"
         "section (keys come from eResearch):\n\n" + RCLONE_STANZA),
     "unreachable": (
-        "Cannot reach the storage endpoint. The usual cause is the KCL VPN —\n"
+        "Cannot reach the storage endpoint. The usual cause is the KCL VPN -\n"
         "check you are connected to it and try again. If the VPN is up and\n"
         "this persists, contact eResearch."),
     "credentials": (
         "The storage service rejected your credentials. If your access keys\n"
-        "are new or were recently rotated, the config may be out of date —\n"
+        "are new or were recently rotated, the config may be out of date -\n"
         "contact eResearch to confirm your keys."),
     "permission": (
         "You don't have write access to this location. Access is scoped by\n"
-        "strand, so an RS2 credential cannot write to rs3/ — this is a\n"
+        "strand, so an RS2 credential cannot write to rs3/ - this is a\n"
         "permissions question, not a bug. If you believe you should have\n"
         "access to this strand, contact eResearch."),
     "not_found": (
@@ -144,7 +144,7 @@ def resolve_files(patterns: List[str]) -> Tuple[List[Path], List[str]]:
             p = Path(m)
             if p.is_dir():
                 problems.append(
-                    "%s is a directory — deposit files individually or with a "
+                    "%s is a directory - deposit files individually or with a "
                     "glob (there is no --recursive yet)" % p)
             elif p.is_file():
                 files.append(p)
@@ -297,7 +297,7 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
     abstract = input("> ").strip()
     w = sidecar.abstract_warning(abstract)
     if w:
-        warn(w + " — recorded anyway; you can revise the sidecar later.")
+        warn(w + " - recorded anyway; you can revise the sidecar later.")
     meta["abstract"] = abstract
 
     default_licence = "internal-only" if meta["sensitivity"] == "amber" else "CC-BY-4.0"
@@ -477,7 +477,7 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
         say("\nNot deposited: %s" % ", ".join(p["path"].name for p in remaining))
         say("Re-running the same command is safe: object keys are "
             "deterministic, so completed files are simply overwritten as a "
-            "new version — nothing is duplicated.")
+            "new version - nothing is duplicated.")
     if failed is None and not interrupted:
         say("\nAll %d file(s) deposited successfully." % len(done))
         return 0
@@ -502,7 +502,7 @@ def main(argv=None) -> int:
     say("%d file(s), %s total." % (len(files), human_size(total)))
 
     # Remote preflight (§8). Dry-run downgrades failures to warnings so the
-    # preview still works offline — it's the support reproduction path.
+    # preview still works offline - it's the support reproduction path.
     rclone, failures = preflight(args)
     if failures:
         if args.dry_run:
@@ -516,7 +516,7 @@ def main(argv=None) -> int:
     vocab_dict, source = vocab.load_vocabulary()
     if source != "remote":
         warn("could not fetch the live vocabulary; using the %s copy "
-             "(version %s). Deposits still work — very new terms may be missing."
+             "(version %s). Deposits still work - very new terms may be missing."
              % (source, vocab_dict.get("vocabulary_version")))
 
     existing = (transfer.list_projects(rclone, args.remote, args.bucket, args.strand)

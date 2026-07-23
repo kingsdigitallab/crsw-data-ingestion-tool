@@ -48,6 +48,17 @@ class TestClassifyError(unittest.TestCase):
     def test_anything_else_is_unknown(self):
         self.assertEqual(transfer.classify_error("segfault or whatever"), "unknown")
 
+    def test_subprocess_timeout_reported_as_unreachable(self):
+        import subprocess as sp
+
+        def hang(cmd, stdout=None, stderr=None, timeout=None):
+            raise sp.TimeoutExpired(cmd, timeout)
+
+        with mock.patch("transfer.subprocess.run", side_effect=hang):
+            code, out, err = transfer._run("rclone", ["lsjson", "x:y"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(transfer.classify_error(err), "unreachable")
+
 
 class TestPreflightChecks(unittest.TestCase):
     def test_remote_names_parsed(self):
