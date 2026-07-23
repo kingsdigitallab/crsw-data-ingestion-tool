@@ -9,6 +9,7 @@ them unchanged."""
 import argparse
 import glob as globlib
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -70,7 +71,8 @@ MESSAGES = {
         "These terms are not in the subjects vocabulary: {terms}\n"
         "Unknown terms can't be accepted (they would silently fragment the\n"
         "catalogue). To propose an addition, open an issue on the vocabulary\n"
-        "repository or ask your domain steward. Valid terms are listed above."),
+        "repository or ask your domain steward. The numbered listing above\n"
+        "shows every valid term."),
     "collision": (
         "An object already exists at {key}.\n"
         "Depositing will create a NEW VERSION of that object (the old version\n"
@@ -198,6 +200,64 @@ STATE_ENTRIES = [(v.split("_")[0], v, h) for v, h in
                                    "released or shared"))]
 SENSITIVITY_ENTRIES = [("1", "green", "publicly shareable"),
                        ("2", "amber", "internal, strand-scoped")]
+
+
+def subject_entries(vocab_dict):
+    """(number, term, facet) numbered continuously across facets in
+    vocabulary-file order, so numbers match the displayed listing."""
+    entries = []
+    n = 0
+    for facet, terms in vocab_dict.get("facets", {}).items():
+        for term in terms:
+            n += 1
+            entries.append((str(n), term, facet))
+    return entries
+
+
+def subject_listing_lines(entries, width):
+    """Grouped-by-facet listing. Two columns at >=100 chars (r2 §4)."""
+    columns = 2 if width >= 100 else 1
+    num_w = max(len(n) for n, _t, _f in entries)
+    term_w = max(len(t) for _n, t, _f in entries)
+    lines = []
+    facet = None
+    row = []
+    for n, term, f in entries:
+        if f != facet:
+            if row:
+                lines.append("    " + "".join(row))
+                row = []
+            facet = f
+            lines.append("")
+            lines.append("  " + style(facet, "bold"))
+        cell = "%s %-*s  " % (style("[%*s]" % (num_w, n), "dim"), term_w, term)
+        row.append(cell)
+        if len(row) == columns:
+            lines.append("    " + "".join(row))
+            row = []
+    if row:
+        lines.append("    " + "".join(row))
+    return lines
+
+
+def resolve_subjects(raw, entries):
+    """Resolve comma-separated numbers/terms (r2 §4). Returns
+    (resolved deduped in order, unknown tokens). Unknown tokens are
+    named, never silently dropped."""
+    by_number = {n: t for n, t, _f in entries}
+    by_term = {t.lower(): t for _n, t, _f in entries}
+    resolved = []
+    unknown = []
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        term = by_number.get(token) or by_term.get(token.lower())
+        if term is None:
+            unknown.append(token)
+        elif term not in resolved:
+            resolved.append(term)
+    return resolved, unknown
 
 
 def ask_yes_no(prompt: str, default_no: bool = True) -> bool:
@@ -391,19 +451,22 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
             meta[field] = value
             break
 
-    terms = vocab.all_terms(vocab_dict)
+    entries = subject_entries(vocab_dict)
+    width = shutil.get_terminal_size().columns
+    for line in subject_listing_lines(entries, width):
+        say(line)
+    say("")
     while True:
-        raw = ask("Subjects (comma-separated)")
-        subjects = [s.strip() for s in raw.split(",") if s.strip()]
-        unknown = sidecar.unknown_subjects(subjects, terms)
+        raw = input(style("Subjects - select one or more "
+                          "(comma-separated numbers or terms): ", "bold"))
+        subjects, unknown = resolve_subjects(raw, entries)
+        if unknown:
+            say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))
+            continue
         if not subjects:
             say("At least one subject term is required.")
             continue
-        if unknown:
-            say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))
-            for facet, facet_terms in sorted(vocab_dict["facets"].items()):
-                say("  %s: %s" % (facet, ", ".join(sorted(facet_terms))))
-            continue
+        say("Subjects: %s" % ", ".join(subjects))
         meta["subjects"] = subjects
         break
 

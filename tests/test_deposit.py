@@ -200,6 +200,54 @@ class TestMessageQuality(unittest.TestCase):
         self.assertIn("TRE", deposit.MESSAGES["red_refused"])
 
 
+class TestSubjectSelection(unittest.TestCase):
+    VOCAB = {"vocabulary_version": "x",
+             "facets": {"practices": ["forced-labour", "sexual-slavery"],
+                        "contexts": ["armed-conflict"]}}
+
+    def test_entries_numbered_continuously_across_facets(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        self.assertEqual(entries[0], ("1", "forced-labour", "practices"))
+        self.assertEqual(entries[2], ("3", "armed-conflict", "contexts"))
+
+    def test_resolve_numbers_terms_and_mix(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        resolved, unknown = deposit.resolve_subjects("1, 3, sexual-slavery", entries)
+        self.assertEqual(resolved,
+                         ["forced-labour", "armed-conflict", "sexual-slavery"])
+        self.assertEqual(unknown, [])
+
+    def test_unknown_tokens_named_not_dropped(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        resolved, unknown = deposit.resolve_subjects("1, dragons, 99", entries)
+        self.assertEqual(resolved, ["forced-labour"])
+        self.assertEqual(unknown, ["dragons", "99"])
+
+    def test_duplicates_collapse(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        resolved, _ = deposit.resolve_subjects("1, forced-labour, 1", entries)
+        self.assertEqual(resolved, ["forced-labour"])
+
+    def test_listing_single_column_when_narrow(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        lines = deposit.subject_listing_lines(entries, width=80)
+        body = [l for l in lines if "[" in l]
+        self.assertEqual(len(body), 3)  # one term per line
+
+    def test_listing_two_columns_when_wide(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        lines = deposit.subject_listing_lines(entries, width=120)
+        body = [l for l in lines if "[" in l]
+        self.assertLess(len(body), 3)  # terms share lines
+
+    def test_facet_headings_present(self):
+        lines = deposit.subject_listing_lines(
+            deposit.subject_entries(self.VOCAB), width=80)
+        text = "\n".join(lines)
+        self.assertIn("practices", text)
+        self.assertIn("contexts", text)
+
+
 class TestDomainFlag(unittest.TestCase):
     def test_parser_accepts_domain(self):
         args = deposit.build_parser().parse_args(["a.csv", "--domain", "quant"])
