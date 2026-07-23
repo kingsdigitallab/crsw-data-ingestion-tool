@@ -12,7 +12,7 @@ GOOD_FIELDS = dict(
     strand="rs2", domain="quant", project="csac",
     state="2_final", sensitivity="green",
     coverage_start="1989", coverage_end="2025-12-31",
-    version="v3-0",
+    version="3-0",
     abstract=" ".join(["word"] * 150),
     subjects=["armed-conflict", "forced-labour"],
 )
@@ -57,9 +57,13 @@ class TestFieldChecks(unittest.TestCase):
     def test_abstract_too_long_warns(self):
         self.assertIsNotNone(sidecar.abstract_warning(" ".join(["w"] * 301)))
 
-    def test_version_pattern(self):
-        self.assertIsNone(sidecar.version_warning("v3-0"))
-        self.assertIsNotNone(sidecar.version_warning("3.0"))
+    def test_normalise_version_accepts_documented_forms(self):
+        for raw in ("3-0", "v3-0", "3.0", "v3.0", "V3-0"):
+            self.assertEqual(sidecar.normalise_version(raw), "3-0", raw)
+
+    def test_normalise_version_rejects_bare_major(self):
+        for raw in ("3", "v3", "", "3-0-1", "three-oh", "3_0"):
+            self.assertIsNone(sidecar.normalise_version(raw), raw)
 
     def test_unknown_subjects_listed(self):
         self.assertEqual(
@@ -115,6 +119,21 @@ class TestBuildAndValidate(unittest.TestCase):
         errors, warnings = sidecar.validate_sidecar(sc, VOCAB_TERMS)
         self.assertEqual(errors, [])
         self.assertTrue(any("abstract" in w for w in warnings))
+
+    def test_unnormalisable_version_is_error(self):
+        fields = dict(GOOD_FIELDS)
+        fields["version"] = "3"
+        sc = sidecar.build_sidecar(**fields)
+        errors, _ = sidecar.validate_sidecar(sc, VOCAB_TERMS)
+        self.assertTrue(any("version" in e for e in errors))
+
+    def test_non_canonical_version_is_warning(self):
+        fields = dict(GOOD_FIELDS)
+        fields["version"] = "v3-0"
+        sc = sidecar.build_sidecar(**fields)
+        errors, warnings = sidecar.validate_sidecar(sc, VOCAB_TERMS)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("version" in w for w in warnings))
 
     def test_json_round_trips(self):
         sc = sidecar.build_sidecar(**GOOD_FIELDS)

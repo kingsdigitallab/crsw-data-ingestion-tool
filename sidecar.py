@@ -24,7 +24,7 @@ RECOMMENDED_FIELDS = (
 )
 OPTIONAL_FIELDS = ("derived_from", "language", "ethics_ref", "notes")
 
-_VERSION_RE = re.compile(r"^v\d+-\d+$")
+_VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
 _YEAR_RE = re.compile(r"^\d{4}$")
 
 ABSTRACT_MIN_WORDS = 100
@@ -64,10 +64,14 @@ def abstract_warning(text: str) -> Optional[str]:
     return None
 
 
-def version_warning(value: str) -> Optional[str]:
-    if _VERSION_RE.match(value or ""):
+def normalise_version(value: str) -> Optional[str]:
+    """Normalise version input to '{major}-{minor}' (r2 §3).
+    Accepts 3-0 / v3-0 / 3.0 / v3.0; returns None for anything else -
+    a bare '3' is rejected, never guessed."""
+    m = _VERSION_IN_RE.match((value or "").strip())
+    if not m:
         return None
-    return "version %r does not match the v<major>-<minor> pattern, e.g. v3-0" % (value,)
+    return "%s-%s" % (m.group(1), m.group(2))
 
 
 def unknown_subjects(subjects: List[str], vocab_terms: Set[str]) -> List[str]:
@@ -161,9 +165,12 @@ def validate_sidecar(sc: dict, vocab_terms: Set[str],
     warn = abstract_warning(sc["abstract"])
     if warn:
         warnings.append(warn)
-    warn = version_warning(sc["version"])
-    if warn:
-        warnings.append(warn)
+    canonical = normalise_version(sc["version"])
+    if canonical is None:
+        errors.append("version %r is not two integers like 3-0" % (sc["version"],))
+    elif canonical != sc["version"]:
+        warnings.append("version %r should be stored as %r"
+                        % (sc["version"], canonical))
     return errors, warnings
 
 

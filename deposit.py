@@ -373,14 +373,12 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
         say("Steward: %s (from domain %s)" % (chosen["steward"], meta["domain"]))
 
     while True:
-        version = ask("Version", default="v1-0")
-        w = sidecar.version_warning(version)
-        if w:
-            say(w)
-            if not ask_yes_no("Use %r anyway?" % version):
-                continue
-        meta["version"] = version
-        break
+        version = sidecar.normalise_version(ask("Version", default="1-0"))
+        if version is not None:
+            meta["version"] = version
+            break
+        say("Version must be two integers like 3-0 (or 3.0 / v3-0, "
+            "which I will normalise).")
 
     for label, field in (("Coverage start (year or YYYY-MM-DD)", "coverage_start"),
                          ("Coverage end (year or YYYY-MM-DD)", "coverage_end")):
