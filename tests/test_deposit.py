@@ -200,6 +200,12 @@ class TestMessageQuality(unittest.TestCase):
         self.assertIn("TRE", deposit.MESSAGES["red_refused"])
 
 
+class TestDomainFlag(unittest.TestCase):
+    def test_parser_accepts_domain(self):
+        args = deposit.build_parser().parse_args(["a.csv", "--domain", "quant"])
+        self.assertEqual(args.domain, "quant")
+
+
 class TestStyle(unittest.TestCase):
     def test_no_color_disables(self):
         with mock.patch.dict("deposit.os.environ",

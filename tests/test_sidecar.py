@@ -123,6 +123,23 @@ class TestBuildAndValidate(unittest.TestCase):
         self.assertTrue(text.endswith("\n"))
 
 
+class TestDomainValidation(unittest.TestCase):
+    def test_fetched_codes_accepted(self):
+        fields = dict(GOOD_FIELDS)
+        fields["domain"] = "newdomain"
+        sc = sidecar.build_sidecar(**fields)
+        errors, _ = sidecar.validate_sidecar(sc, VOCAB_TERMS,
+                                             domain_codes=["newdomain"])
+        self.assertEqual(errors, [])
+
+    def test_default_falls_back_to_builtin(self):
+        fields = dict(GOOD_FIELDS)
+        fields["domain"] = "newdomain"
+        sc = sidecar.build_sidecar(**fields)
+        errors, _ = sidecar.validate_sidecar(sc, VOCAB_TERMS)
+        self.assertTrue(any("domain" in e for e in errors))
+
+
 class TestAutoFields(unittest.TestCase):
     def test_utc_now_iso_shape(self):
         self.assertRegex(sidecar.utc_now_iso(),

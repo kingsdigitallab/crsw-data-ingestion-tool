@@ -120,8 +120,12 @@ def build_sidecar(object_key, strand, domain, project, state, sensitivity,
     return sc
 
 
-def validate_sidecar(sc: dict, vocab_terms: Set[str]) -> Tuple[List[str], List[str]]:
-    """Return (errors, warnings). Errors block a deposit; warnings do not."""
+def validate_sidecar(sc: dict, vocab_terms: Set[str],
+                     domain_codes: Optional[List[str]] = None
+                     ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings). Errors block a deposit; warnings do not.
+    domain_codes: valid codes from the fetched vocabulary; None falls back
+    to the built-in list (r2 §2 - domains are fetched, not hardcoded)."""
     errors = []
     warnings = []
     for field in REQUIRED_FIELDS:
@@ -132,8 +136,10 @@ def validate_sidecar(sc: dict, vocab_terms: Set[str]) -> Tuple[List[str], List[s
 
     if sc["strand"] not in keys.STRANDS:
         errors.append("strand %r is not one of %s" % (sc["strand"], "/".join(keys.STRANDS)))
-    if sc["domain"] not in keys.DOMAINS:
-        errors.append("domain %r is not one of %s" % (sc["domain"], "/".join(keys.DOMAINS)))
+    valid_domains = list(domain_codes) if domain_codes else list(keys.DOMAINS)
+    if sc["domain"] not in valid_domains:
+        errors.append("domain %r is not one of %s"
+                      % (sc["domain"], "/".join(valid_domains)))
     if sc["state"] not in keys.STATES:
         errors.append("state %r is not one of %s" % (sc["state"], "/".join(keys.STATES)))
     if sc["sensitivity"] not in keys.SENSITIVITIES:

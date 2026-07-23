@@ -9,7 +9,9 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
+
+import keys
 
 # Single line to update once the vocabulary repo is created.
 VOCAB_URL = ("https://raw.githubusercontent.com/"
@@ -93,3 +95,21 @@ def all_terms(vocab_dict: dict) -> Set[str]:
     for facet_terms in vocab_dict.get("facets", {}).values():
         terms.update(facet_terms)
     return terms
+
+
+def domains(vocab_dict: dict) -> List[dict]:
+    """Domain entries (code/label/steward). Falls back to the built-in
+    codes so an old cached vocabulary never breaks deposits (r2 §2)."""
+    entries = []
+    for d in vocab_dict.get("domains") or []:
+        if isinstance(d, dict) and d.get("code"):
+            entries.append({"code": d["code"],
+                            "label": d.get("label", ""),
+                            "steward": d.get("steward", "")})
+    if entries:
+        return entries
+    return [{"code": c, "label": "", "steward": ""} for c in keys.DOMAINS]
+
+
+def domain_codes(vocab_dict: dict) -> List[str]:
+    return [d["code"] for d in domains(vocab_dict)]

@@ -290,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("files", nargs="+", metavar="FILE_OR_GLOB")
     p.add_argument("--strand", choices=keys.STRANDS)
     p.add_argument("--project")
+    p.add_argument("--domain", help="data domain code (see vocabulary)")
     p.add_argument("--state", choices=keys.STATES)
     p.add_argument("--sensitivity")  # validated by hand so 'red' gets OUR message
     p.add_argument("--dry-run", action="store_true",
@@ -354,7 +355,22 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
     meta["project"] = project
 
     meta["state"] = args.state or ask_select("State", STATE_ENTRIES)
-    meta["domain"] = ask_choice("Domain", keys.DOMAINS)
+
+    domain_entries = vocab.domains(vocab_dict)
+    codes = [d["code"] for d in domain_entries]
+    if args.domain:
+        if args.domain not in codes:
+            raise ValueError("domain %r is not one of: %s"
+                             % (args.domain, ", ".join(codes)))
+        meta["domain"] = args.domain
+    else:
+        meta["domain"] = ask_select(
+            "Domain", [(str(i), d["code"], d["label"])
+                       for i, d in enumerate(domain_entries, 1)])
+    chosen = next(d for d in domain_entries if d["code"] == meta["domain"])
+    if chosen["steward"] and chosen["steward"] != "TBC":
+        meta["steward"] = chosen["steward"]
+        say("Steward: %s (from domain %s)" % (chosen["steward"], meta["domain"]))
 
     while True:
         version = ask("Version", default="v1-0")
@@ -405,9 +421,10 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
     source = input("Source (archive/survey/scrape/partner org; Enter to skip): ").strip()
     if source:
         meta["source"] = source
-    steward = input("Domain steward (Enter to skip): ").strip()
-    if steward:
-        meta["steward"] = steward
+    if "steward" not in meta:
+        steward = input("Domain steward (Enter to skip): ").strip()
+        if steward:
+            meta["steward"] = steward
 
     meta["vocabulary_version"] = vocab_dict.get("vocabulary_version")
     return meta

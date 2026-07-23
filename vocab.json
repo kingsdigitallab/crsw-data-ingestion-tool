@@ -1,5 +1,12 @@
 {
   "vocabulary_version": "2026-07-23",
+  "domains": [
+    {"code": "quant", "label": "Quantitative conflict data", "steward": "Kevin Fahey"},
+    {"code": "geo",   "label": "Geospatial & Earth observation", "steward": "Doreen Boyd"},
+    {"code": "pol",   "label": "Legal & policy texts", "steward": "Katarina Schwarz"},
+    {"code": "narr",  "label": "Survivor narratives & qualitative", "steward": "TBC"},
+    {"code": "parti", "label": "Visual & participatory", "steward": "TBC"}
+  ],
   "facets": {
     "practices": ["forced-labour", "sexual-slavery", "forced-marriage",
                   "child-soldiering", "debt-bondage", "domestic-servitude",

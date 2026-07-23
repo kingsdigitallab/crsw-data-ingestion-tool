@@ -84,5 +84,31 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(vocab.cache_dir().name, "crsw-deposit")
 
 
+class TestDomains(unittest.TestCase):
+    WITH_DOMAINS = {"vocabulary_version": "x",
+                    "domains": [{"code": "quant", "label": "Quant", "steward": "Kevin Fahey"},
+                                {"code": "geo", "label": "Geo", "steward": "TBC"},
+                                "garbage-entry", {"no_code": True}],
+                    "facets": {"practices": ["forced-labour"]}}
+
+    def test_well_formed_entries_returned(self):
+        ds = vocab.domains(self.WITH_DOMAINS)
+        self.assertEqual([d["code"] for d in ds], ["quant", "geo"])
+
+    def test_missing_domains_falls_back_to_builtin(self):
+        ds = vocab.domains(GOOD)
+        self.assertEqual([d["code"] for d in ds],
+                         ["quant", "geo", "pol", "narr", "parti"])
+        self.assertEqual(ds[0]["steward"], "")
+
+    def test_domain_codes(self):
+        self.assertEqual(vocab.domain_codes(self.WITH_DOMAINS), ["quant", "geo"])
+
+    def test_bundled_vocab_has_domains_with_stewards(self):
+        data = json.loads(vocab.bundled_vocab_path().read_text(encoding="utf-8"))
+        codes = [d["code"] for d in data["domains"]]
+        self.assertEqual(codes, ["quant", "geo", "pol", "narr", "parti"])
+
+
 if __name__ == "__main__":
     unittest.main()
