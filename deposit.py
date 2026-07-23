@@ -41,8 +41,9 @@ MESSAGES = {
         "it belongs in the Trusted Research Environment (TRE). See the Data\n"
         "Governance Handbook, sections 3 and 7.3, or contact your domain steward."),
     "no_rclone": (
-        "Could not find rclone. Looked on your PATH, then for ./rclone and\n"
-        "./rclone.exe next to this script.\n"
+        "Could not find rclone.\n"
+        "Looked on your PATH, then for ./rclone and ./rclone.exe next to\n"
+        "this script.\n"
         "Download it from %s and either install it or just drop the rclone\n"
         "binary in this folder - both work." % RCLONE_DOWNLOAD_URL),
     "no_remote": (
@@ -53,24 +54,25 @@ MESSAGES = {
         "If one of those is the right one, run with --reconfigure to\n"
         "pick it from a menu and save it."),
     "unreachable": (
-        "Cannot reach the storage endpoint. The usual cause is the KCL VPN -\n"
-        "check you are connected to it and try again. If the VPN is up and\n"
+        "Cannot reach the storage endpoint - the KCL VPN is the usual cause.\n"
+        "Check you are connected to it and try again. If the VPN is up and\n"
         "this persists, contact eResearch."),
     "credentials": (
-        "The storage service rejected your credentials. If your access keys\n"
-        "are new or were recently rotated, the config may be out of date -\n"
-        "contact eResearch to confirm your keys."),
+        "The storage service rejected your credentials.\n"
+        "If your access keys are new or were recently rotated, the config\n"
+        "may be out of date - contact eResearch to confirm your keys."),
     "permission": (
-        "You don't have write access to this location. Access is scoped by\n"
-        "strand, so an RS2 credential cannot write to rs3/ - this is a\n"
-        "permissions question, not a bug. If you believe you should have\n"
-        "access to this strand, contact eResearch."),
+        "You don't have write access to this location.\n"
+        "Access is scoped by strand, so an RS2 credential cannot write to\n"
+        "rs3/ - this is a permissions question, not a bug. If you believe\n"
+        "you should have access to this strand, contact eResearch."),
     "not_found": (
-        "The bucket or path was not found on the storage service. Check the\n"
-        "--bucket value (default: crsw); if it looks right, contact eResearch."),
+        "The bucket or path was not found on the storage service.\n"
+        "Check the --bucket value (default: crsw); if it looks right,\n"
+        "contact eResearch."),
     "unknown": (
-        "The transfer failed for an unrecognised reason. Re-run with\n"
-        "--verbose and send the output to eResearch support."),
+        "The transfer failed for an unrecognised reason.\n"
+        "Re-run with --verbose and send the output to eResearch support."),
     "verify_failed": (
         "The upload appeared to finish, but the stored object is missing or\n"
         "the wrong size. The deposit is NOT confirmed - re-run it. If this\n"
