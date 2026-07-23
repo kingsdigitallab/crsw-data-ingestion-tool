@@ -9,6 +9,7 @@ them unchanged."""
 import argparse
 import glob as globlib
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -391,9 +392,96 @@ def _detail(args, e: transfer.TransferError) -> str:
     return ("\n\n--- rclone output ---\n" + e.detail) if args.verbose and e.detail else ""
 
 
-def perform_deposits(rclone, args, plans, depositor):
-    """Stub — implemented in the transfer-loop task."""
-    raise NotImplementedError
+PROGRESS_THRESHOLD = 100 * 1024 * 1024  # show rclone progress at >=100MB
+
+
+def append_log(line: str) -> None:
+    """One line per deposit, appended to <cache_dir>/deposits.log.
+    Best-effort: logging failure never fails a deposit."""
+    try:
+        d = vocab.cache_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        with open(str(d / "deposits.log"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def perform_deposits(rclone, args, plans, depositor) -> int:
+    """Upload each plan: checksum -> sidecar to temp -> data -> sidecar ->
+    verify. Not atomic (spec §7): stop on first failure and report exactly
+    what landed. Temp files always cleaned up (TemporaryDirectory)."""
+    done = []
+    failed = None      # (plan, message)
+    interrupted = False
+
+    with tempfile.TemporaryDirectory(prefix="crsw-deposit-") as tmp:
+        try:
+            for i, plan in enumerate(plans, 1):
+                say("\n[%d/%d] %s" % (i, len(plans), plan["path"].name))
+
+                say("  computing checksum...")
+                checksum = sidecar.sha256_file(plan["path"])
+
+                fields = dict(plan["fields"])
+                fields["checksum_sha256"] = checksum
+                fields["depositor"] = depositor
+                fields["deposited"] = sidecar.utc_now_iso()
+                sc = sidecar.build_sidecar(**fields)
+
+                sidecar_path = Path(tmp) / (plan["path"].name + ".meta.json")
+                sidecar_path.write_text(sidecar.sidecar_json(sc), encoding="utf-8")
+
+                size = plan["path"].stat().st_size
+                show = size >= PROGRESS_THRESHOLD and sys.stdout.isatty()
+                say("  uploading data (%s)..." % human_size(size))
+                transfer.copyto(rclone, plan["path"], args.remote, args.bucket,
+                                plan["key"], show_progress=show)
+                say("  uploading sidecar...")
+                transfer.copyto(rclone, sidecar_path, args.remote, args.bucket,
+                                plan["sidecar_key"])
+
+                say("  verifying...")
+                for key in (plan["key"], plan["sidecar_key"]):
+                    if not transfer.key_exists(rclone, args.remote,
+                                               args.bucket, key):
+                        raise transfer.TransferError(
+                            "unknown", "uploaded but not found at %s" % key)
+
+                append_log("%s\t%s\t%s\t%s" % (
+                    sidecar.utc_now_iso(), plan["key"], checksum, depositor))
+                done.append(plan)
+                say("  done: %s" % plan["key"])
+        except transfer.TransferError as e:
+            failed = (plan, MESSAGES.get(e.kind, MESSAGES["unknown"])
+                      + _detail(args, e))
+        except OSError as e:
+            failed = (plan, "Could not read %s: %s" % (plan["path"], e))
+        except KeyboardInterrupt:
+            interrupted = True
+
+    # ------- report (spec §7 step 10): what landed, what didn't, what next.
+    say("\n" + "=" * 60)
+    if done:
+        say("Deposited %d of %d file(s):" % (len(done), len(plans)))
+        for plan in done:
+            say("  %s" % plan["key"])
+    remaining = [p for p in plans if p not in done]
+    if failed is not None:
+        bad_plan, message = failed
+        say("\nFAILED on %s:" % bad_plan["path"].name)
+        say(message)
+    if interrupted:
+        say("\nInterrupted.")
+    if remaining and (failed is not None or interrupted):
+        say("\nNot deposited: %s" % ", ".join(p["path"].name for p in remaining))
+        say("Re-running the same command is safe: object keys are "
+            "deterministic, so completed files are simply overwritten as a "
+            "new version — nothing is duplicated.")
+    if failed is None and not interrupted:
+        say("\nAll %d file(s) deposited successfully." % len(done))
+        return 0
+    return 130 if interrupted else 1
 
 
 def main(argv=None) -> int:

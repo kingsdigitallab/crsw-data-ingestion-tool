@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import deposit
 
@@ -76,6 +77,85 @@ class TestParser(unittest.TestCase):
              "--state", "2_final", "--sensitivity", "green", "--dry-run"])
         self.assertTrue(args.dry_run)
         self.assertEqual(args.strand, "rs2")
+
+
+def _plan_for(path: Path):
+    key = "rs2/csac/2_final/green/" + path.name
+    return {"path": path, "key": key, "sidecar_key": key + ".meta.json",
+            "fields": dict(object_key=key, strand="rs2", domain="quant",
+                           project="csac", state="2_final", sensitivity="green",
+                           coverage_start="1989", coverage_end="2025",
+                           version="v1-0", abstract="a " * 120,
+                           subjects=["armed-conflict"],
+                           vocabulary_version="2026-07-23")}
+
+
+class _Args:
+    remote = "ceph"
+    bucket = "crsw"
+    verbose = False
+    dry_run = False
+
+
+class TestPerformDeposits(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.f1 = Path(self._tmp.name) / "one.csv"
+        self.f1.write_text("1")
+        self.f2 = Path(self._tmp.name) / "two.csv"
+        self.f2.write_text("2")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_data_uploaded_before_sidecar(self):
+        order = []
+        with mock.patch("deposit.transfer.copyto",
+                        side_effect=lambda r, lp, rem, b, key, **kw: order.append(key)), \
+             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits("rclone", _Args(),
+                                            [_plan_for(self.f1)], "tester")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(order), 2)
+        self.assertTrue(order[0].endswith("one.csv"))
+        self.assertTrue(order[1].endswith("one.csv.meta.json"))
+
+    def test_failure_stops_batch_and_reports(self):
+        def copyto(rclone, lp, rem, b, key, **kw):
+            if "two.csv" in key:
+                raise deposit.transfer.TransferError("unreachable", "boom")
+        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
+             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits(
+                "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")
+        self.assertNotEqual(code, 0)
+
+    def test_verification_failure_is_an_error(self):
+        with mock.patch("deposit.transfer.copyto"), \
+             mock.patch("deposit.transfer.key_exists", return_value=False), \
+             mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits("rclone", _Args(),
+                                            [_plan_for(self.f1)], "t")
+        self.assertNotEqual(code, 0)
+
+    def test_sidecar_written_with_checksum_and_depositor(self):
+        captured = {}
+
+        def copyto(rclone, lp, rem, b, key, **kw):
+            if key.endswith(".meta.json"):
+                import json
+                captured.update(json.loads(Path(lp).read_text(encoding="utf-8")))
+
+        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
+             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.append_log"):
+            deposit.perform_deposits("rclone", _Args(), [_plan_for(self.f1)],
+                                     "njakeman")
+        self.assertEqual(captured["depositor"], "njakeman")
+        self.assertEqual(len(captured["checksum_sha256"]), 64)
+        self.assertRegex(captured["deposited"], r"Z$")
 
 
 if __name__ == "__main__":
