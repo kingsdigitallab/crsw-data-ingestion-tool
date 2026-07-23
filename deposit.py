@@ -200,6 +200,15 @@ STATE_ENTRIES = [(v.split("_")[0], v, h) for v, h in
                                    "released or shared"))]
 SENSITIVITY_ENTRIES = [("1", "green", "publicly shareable"),
                        ("2", "amber", "internal, strand-scoped")]
+SOURCE_TYPE_ENTRIES = [
+    ("1", "archive", "existing collection or repository"),
+    ("2", "survey", "primary data collection instrument"),
+    ("3", "scrape", "automated extraction from an online source"),
+    ("4", "instrument", "sensor, satellite, or other device output"),
+    ("5", "partner", "supplied by a partner organisation"),
+    ("6", "derived", "produced from other data already held"),
+    ("7", "other", "none of the above"),
+]
 
 
 def subject_entries(vocab_dict):
@@ -315,8 +324,10 @@ def plan_deposits(files: List[Path], meta: Dict, per_file: Dict) -> List[Dict]:
             version=meta["version"], abstract=meta["abstract"],
             subjects=list(meta["subjects"]),
             vocabulary_version=meta.get("vocabulary_version"),
-            source=meta.get("source"), licence=meta.get("licence"),
-            steward=meta.get("steward"),
+            source_type=meta.get("source_type"),
+            source_detail=meta.get("source_detail"),
+            derived_from=meta.get("derived_from"),
+            licence=meta.get("licence"), steward=meta.get("steward"),
         )
         fields.update(per_file.get(path.name, {}))
         key = keys.build_key(fields["strand"], fields["project"],
@@ -479,9 +490,22 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
 
     default_licence = "internal-only" if meta["sensitivity"] == "amber" else "CC-BY-4.0"
     meta["licence"] = ask("Licence", default=default_licence)
-    source = input("Source (archive/survey/scrape/partner org; Enter to skip): ").strip()
-    if source:
-        meta["source"] = source
+
+    meta["source_type"] = ask_select("Source type", SOURCE_TYPE_ENTRIES)
+    if meta["source_type"] == "other":
+        say("Please be specific - 'other' with a vague detail is "
+            "unfindable later.")
+    detail = ask("Source detail (free text, e.g. name, URL, or "
+                 "collection reference)")
+    if len(detail) < 10:
+        warn("'%s' will not help anyone in five years - consider naming "
+             "the archive, URL, or reference." % detail)
+    meta["source_detail"] = detail
+    if meta["source_type"] == "derived":
+        parent = input("Parent object key, if known (Enter to skip): ").strip()
+        if parent:
+            meta["derived_from"] = parent
+
     if "steward" not in meta:
         steward = input("Domain steward (Enter to skip): ").strip()
         if steward:

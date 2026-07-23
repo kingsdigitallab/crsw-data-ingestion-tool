@@ -74,7 +74,15 @@ class TestFieldChecks(unittest.TestCase):
 class TestBuildAndValidate(unittest.TestCase):
     def test_build_includes_schema_version(self):
         sc = sidecar.build_sidecar(**GOOD_FIELDS)
-        self.assertEqual(sc["schema_version"], "0.2")
+        self.assertEqual(sc["schema_version"], "0.3")
+
+    def test_source_split_fields_included(self):
+        sc = sidecar.build_sidecar(source_type="archive",
+                                   source_detail="ICRC archives, Geneva",
+                                   **GOOD_FIELDS)
+        self.assertEqual(sc["source_type"], "archive")
+        self.assertEqual(sc["source_detail"], "ICRC archives, Geneva")
+        self.assertNotIn("source", sc)
 
     def test_build_omits_absent_optionals(self):
         sc = sidecar.build_sidecar(**GOOD_FIELDS)

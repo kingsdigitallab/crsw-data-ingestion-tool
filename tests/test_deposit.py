@@ -85,8 +85,9 @@ def _plan_for(path: Path):
             "fields": dict(object_key=key, strand="rs2", domain="quant",
                            project="csac", state="2_final", sensitivity="green",
                            coverage_start="1989", coverage_end="2025",
-                           version="v1-0", abstract="a " * 120,
+                           version="1-0", abstract="a " * 120,
                            subjects=["armed-conflict"],
+                           source_type="archive", source_detail="test fixture",
                            vocabulary_version="2026-07-23")}
 
 
@@ -156,6 +157,8 @@ class TestPerformDeposits(unittest.TestCase):
         self.assertEqual(captured["depositor"], "njakeman")
         self.assertEqual(len(captured["checksum_sha256"]), 64)
         self.assertRegex(captured["deposited"], r"Z$")
+        self.assertEqual(captured["schema_version"], "0.3")
+        self.assertEqual(captured["source_type"], "archive")
 
 
     def test_interrupt_reports_completed_and_exits_130(self):

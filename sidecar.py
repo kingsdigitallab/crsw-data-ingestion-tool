@@ -11,7 +11,7 @@ from typing import List, Optional, Set, Tuple
 
 import keys
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 
 REQUIRED_FIELDS = (
     "schema_version", "object_key", "strand", "domain", "project",
@@ -19,8 +19,8 @@ REQUIRED_FIELDS = (
     "version", "abstract", "subjects",
 )
 RECOMMENDED_FIELDS = (
-    "vocabulary_version", "source", "depositor", "deposited",
-    "checksum_sha256", "licence", "steward",
+    "vocabulary_version", "source_type", "source_detail", "depositor",
+    "deposited", "checksum_sha256", "licence", "steward",
 )
 OPTIONAL_FIELDS = ("derived_from", "language", "ethics_ref", "notes")
 
@@ -91,7 +91,8 @@ def default_depositor() -> str:
 
 def build_sidecar(object_key, strand, domain, project, state, sensitivity,
                   coverage_start, coverage_end, version, abstract, subjects,
-                  vocabulary_version=None, source=None, depositor=None,
+                  vocabulary_version=None, source_type=None,
+                  source_detail=None, depositor=None,
                   deposited=None, checksum_sha256=None, licence=None,
                   steward=None, derived_from=None, language=None,
                   ethics_ref=None, notes=None) -> dict:
@@ -112,7 +113,8 @@ def build_sidecar(object_key, strand, domain, project, state, sensitivity,
         "subjects": list(subjects),
     }
     extras = (
-        ("vocabulary_version", vocabulary_version), ("source", source),
+        ("vocabulary_version", vocabulary_version),
+        ("source_type", source_type), ("source_detail", source_detail),
         ("depositor", depositor), ("deposited", deposited),
         ("checksum_sha256", checksum_sha256), ("licence", licence),
         ("steward", steward), ("derived_from", derived_from),
