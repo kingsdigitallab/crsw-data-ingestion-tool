@@ -200,5 +200,34 @@ class TestMessageQuality(unittest.TestCase):
         self.assertIn("TRE", deposit.MESSAGES["red_refused"])
 
 
+class TestStyle(unittest.TestCase):
+    def test_no_color_disables(self):
+        with mock.patch.dict("deposit.os.environ",
+                             {"NO_COLOR": "1", "FORCE_COLOR": "1"}, clear=False):
+            self.assertFalse(deposit.colour_enabled())
+            self.assertEqual(deposit.style("x", "red"), "x")
+
+    def test_force_color_enables(self):
+        with mock.patch.dict("deposit.os.environ", {"FORCE_COLOR": "1"},
+                             clear=True):
+            self.assertTrue(deposit.colour_enabled())
+            self.assertEqual(deposit.style("x", "red"), "\x1b[31mx\x1b[0m")
+
+    def test_multiple_styles_combined(self):
+        with mock.patch.dict("deposit.os.environ", {"FORCE_COLOR": "1"},
+                             clear=True):
+            self.assertEqual(deposit.style("x", "bold", "cyan"),
+                             "\x1b[1;36mx\x1b[0m")
+
+    def test_not_a_tty_disables(self):
+        with mock.patch.dict("deposit.os.environ", {}, clear=True), \
+             mock.patch("deposit.sys.stdout") as out:
+            out.isatty.return_value = False
+            self.assertFalse(deposit.colour_enabled())
+
+    def test_enable_vt_never_raises(self):
+        deposit.enable_vt()  # must be safe on every platform
+
+
 if __name__ == "__main__":
     unittest.main()

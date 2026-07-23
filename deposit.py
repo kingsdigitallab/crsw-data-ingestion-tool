@@ -8,6 +8,7 @@ transfer) have no interactive I/O so the future web gateway can import
 them unchanged."""
 import argparse
 import glob as globlib
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -78,6 +79,48 @@ MESSAGES = {
 }
 
 
+# ----------------------------------------------------------------- colour
+
+_STYLE_CODES = {"bold": "1", "dim": "2", "red": "31", "green": "32",
+                "yellow": "33", "cyan": "36"}
+
+
+def enable_vt() -> None:
+    """Enable ANSI escape processing on Windows 10+ consoles.
+    Harmless no-op elsewhere or on any failure (r2 §4)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
+def colour_enabled() -> bool:
+    if "NO_COLOR" in os.environ:
+        return False
+    if "FORCE_COLOR" in os.environ:
+        return True
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def style(text: str, *names: str) -> str:
+    """The single home for ANSI escapes. Plain text when colour is off.
+    Colour must never be the only signal - the words carry the meaning."""
+    if not names or not colour_enabled():
+        return text
+    codes = ";".join(_STYLE_CODES[n] for n in names)
+    return "\x1b[%sm%s\x1b[0m" % (codes, text)
+
+
 # ---------------------------------------------------------------- helpers
 
 def say(text: str) -> None:
@@ -85,11 +128,11 @@ def say(text: str) -> None:
 
 
 def warn(text: str) -> None:
-    print("WARNING: " + text, file=sys.stderr)
+    print(style("WARNING: " + text, "yellow"), file=sys.stderr)
 
 
 def fail(text: str, code: int = 1) -> int:
-    print("\n" + text, file=sys.stderr)
+    print("\n" + style(text, "red"), file=sys.stderr)
     return code
 
 
@@ -183,7 +226,7 @@ def preview_lines(plans: List[Dict], limit: int = 3) -> List[str]:
     lines = []
     for plan in plans[:limit]:
         f = plan["fields"]
-        lines.append("  %s" % plan["key"])
+        lines.append("  %s" % style(plan["key"], "cyan"))
         lines.append("    sidecar: %s" % plan["sidecar_key"])
         if f:
             lines.append("    coverage %s to %s | %s | subjects: %s" % (
@@ -451,7 +494,7 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
                 append_log("%s\t%s\t%s\t%s" % (
                     sidecar.utc_now_iso(), plan["key"], checksum, depositor))
                 done.append(plan)
-                say("  done: %s" % plan["key"])
+                say(style("  done: %s" % plan["key"], "green"))
         except transfer.TransferError as e:
             failed = (plan, MESSAGES.get(e.kind, MESSAGES["unknown"])
                       + _detail(args, e))
@@ -479,12 +522,13 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
             "deterministic, so completed files are simply overwritten as a "
             "new version - nothing is duplicated.")
     if failed is None and not interrupted:
-        say("\nAll %d file(s) deposited successfully." % len(done))
+        say(style("\nAll %d file(s) deposited successfully." % len(done), "green"))
         return 0
     return 130 if interrupted else 1
 
 
 def main(argv=None) -> int:
+    enable_vt()
     args = build_parser().parse_args(argv)
 
     if args.sensitivity == "red":
