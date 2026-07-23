@@ -127,16 +127,25 @@ def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
         raise TransferError(classify_error(err), err)
 
 
-def key_exists(rclone: str, remote: str, bucket: str, key: str) -> bool:
-    """True if an object exists at exactly `key` (rclone lsjson, spec §9)."""
+def stat_key(rclone: str, remote: str, bucket: str, key: str) -> Optional[dict]:
+    """The lsjson entry for exactly `key` (Name, Size, ...), or None.
+    Existence alone is not verification - callers should compare Size
+    (r2 §0). Never compare checksums to ETags: multipart ETags are a
+    hash-of-hashes and will not match a plain SHA-256."""
     code, out, err = _run(
         rclone, ["lsjson", "--files-only", "%s:%s/%s" % (remote, bucket, key)])
     if code != 0:
-        return False
+        return None
     try:
-        return len(json.loads(out)) > 0
+        entries = json.loads(out)
     except ValueError:
-        return False
+        return None
+    return entries[0] if entries else None
+
+
+def key_exists(rclone: str, remote: str, bucket: str, key: str) -> bool:
+    """True if an object exists at exactly `key`."""
+    return stat_key(rclone, remote, bucket, key) is not None
 
 
 def list_projects(rclone: str, remote: str, bucket: str, strand: str) -> List[str]:

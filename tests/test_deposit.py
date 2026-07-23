@@ -98,6 +98,24 @@ class _Args:
     dry_run = False
 
 
+def _recording_copyto(uploaded, fail_on=None, exc=None):
+    """copyto mock that records the true size of each 'uploaded' file."""
+    def copyto(rclone, lp, rem, b, key, **kw):
+        if fail_on and fail_on in key:
+            raise exc
+        uploaded[key] = Path(lp).stat().st_size
+    return copyto
+
+
+def _stat_matching(uploaded):
+    """stat_key mock returning the true size of whatever copyto uploaded."""
+    def stat(rclone, remote, bucket, key):
+        if key in uploaded:
+            return {"Name": key.rsplit("/", 1)[-1], "Size": uploaded[key]}
+        return None
+    return stat
+
+
 class TestPerformDeposits(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -110,10 +128,16 @@ class TestPerformDeposits(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_data_uploaded_before_sidecar(self):
+        uploaded = {}
         order = []
-        with mock.patch("deposit.transfer.copyto",
-                        side_effect=lambda r, lp, rem, b, key, **kw: order.append(key)), \
-             mock.patch("deposit.transfer.key_exists", return_value=True), \
+
+        def copyto(rclone, lp, rem, b, key, **kw):
+            order.append(key)
+            uploaded[key] = Path(lp).stat().st_size
+
+        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
+             mock.patch("deposit.transfer.stat_key",
+                        side_effect=_stat_matching(uploaded)), \
              mock.patch("deposit.append_log"):
             code = deposit.perform_deposits("rclone", _Args(),
                                             [_plan_for(self.f1)], "tester")
@@ -123,34 +147,48 @@ class TestPerformDeposits(unittest.TestCase):
         self.assertTrue(order[1].endswith("one.csv.meta.json"))
 
     def test_failure_stops_batch_and_reports(self):
-        def copyto(rclone, lp, rem, b, key, **kw):
-            if "two.csv" in key:
-                raise deposit.transfer.TransferError("unreachable", "boom")
+        uploaded = {}
+        copyto = _recording_copyto(
+            uploaded, fail_on="two.csv",
+            exc=deposit.transfer.TransferError("unreachable", "boom"))
         with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.transfer.stat_key",
+                        side_effect=_stat_matching(uploaded)), \
              mock.patch("deposit.append_log"):
             code = deposit.perform_deposits(
                 "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")
         self.assertNotEqual(code, 0)
 
-    def test_verification_failure_is_an_error(self):
+    def test_verification_missing_object_is_error(self):
         with mock.patch("deposit.transfer.copyto"), \
-             mock.patch("deposit.transfer.key_exists", return_value=False), \
+             mock.patch("deposit.transfer.stat_key", return_value=None), \
+             mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits("rclone", _Args(),
+                                            [_plan_for(self.f1)], "t")
+        self.assertNotEqual(code, 0)
+
+    def test_size_mismatch_is_error_not_success(self):
+        with mock.patch("deposit.transfer.copyto"), \
+             mock.patch("deposit.transfer.stat_key",
+                        return_value={"Name": "one.csv", "Size": 999999}), \
              mock.patch("deposit.append_log"):
             code = deposit.perform_deposits("rclone", _Args(),
                                             [_plan_for(self.f1)], "t")
         self.assertNotEqual(code, 0)
 
     def test_sidecar_written_with_checksum_and_depositor(self):
+        uploaded = {}
         captured = {}
 
         def copyto(rclone, lp, rem, b, key, **kw):
+            uploaded[key] = Path(lp).stat().st_size
             if key.endswith(".meta.json"):
                 import json
                 captured.update(json.loads(Path(lp).read_text(encoding="utf-8")))
 
         with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.transfer.stat_key",
+                        side_effect=_stat_matching(uploaded)), \
              mock.patch("deposit.append_log"):
             deposit.perform_deposits("rclone", _Args(), [_plan_for(self.f1)],
                                      "njakeman")
@@ -162,11 +200,12 @@ class TestPerformDeposits(unittest.TestCase):
 
 
     def test_interrupt_reports_completed_and_exits_130(self):
-        def copyto(rclone, lp, rem, b, key, **kw):
-            if "two.csv" in key:
-                raise KeyboardInterrupt()
+        uploaded = {}
+        copyto = _recording_copyto(uploaded, fail_on="two.csv",
+                                   exc=KeyboardInterrupt())
         with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.key_exists", return_value=True), \
+             mock.patch("deposit.transfer.stat_key",
+                        side_effect=_stat_matching(uploaded)), \
              mock.patch("deposit.append_log"):
             code = deposit.perform_deposits(
                 "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")

@@ -71,6 +71,10 @@ MESSAGES = {
     "unknown": (
         "The transfer failed for an unrecognised reason. Re-run with\n"
         "--verbose and send the output to eResearch support."),
+    "verify_failed": (
+        "The upload appeared to finish, but the stored object is missing or\n"
+        "the wrong size. The deposit is NOT confirmed - re-run it. If this\n"
+        "happens repeatedly, contact eResearch."),
     "unknown_subject": (
         "These terms are not in the subjects vocabulary: {terms}\n"
         "Unknown terms can't be accepted (they would silently fragment the\n"
@@ -705,11 +709,19 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
                                 plan["sidecar_key"])
 
                 say("  verifying...")
-                for key in (plan["key"], plan["sidecar_key"]):
-                    if not transfer.key_exists(rclone, args.remote,
-                                               args.bucket, key):
+                for key, local in ((plan["key"], plan["path"]),
+                                   (plan["sidecar_key"], sidecar_path)):
+                    entry = transfer.stat_key(rclone, args.remote,
+                                              args.bucket, key)
+                    if entry is None:
                         raise transfer.TransferError(
-                            "unknown", "uploaded but not found at %s" % key)
+                            "verify_failed", "no object at %s" % key)
+                    expected = local.stat().st_size
+                    if entry.get("Size") != expected:
+                        raise transfer.TransferError(
+                            "verify_failed",
+                            "size mismatch at %s: local %d, stored %s"
+                            % (key, expected, entry.get("Size")))
 
                 append_log("%s\t%s\t%s\t%s" % (
                     sidecar.utc_now_iso(), plan["key"], checksum, depositor))

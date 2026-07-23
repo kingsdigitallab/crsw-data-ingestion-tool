@@ -126,6 +126,18 @@ class TestKeyExists(unittest.TestCase):
                                                  "rs2/csac/2_final/green/nope.csv"))
 
 
+class TestStatKey(unittest.TestCase):
+    def test_returns_entry_with_size(self):
+        listing = '[{"Path":"a.csv","Name":"a.csv","Size":1234}]'
+        with mock.patch("transfer._run", return_value=(0, listing, "")):
+            entry = transfer.stat_key("rclone", "ceph", "crsw", "k/a.csv")
+        self.assertEqual(entry["Size"], 1234)
+
+    def test_missing_returns_none(self):
+        with mock.patch("transfer._run", return_value=(1, "", "not found")):
+            self.assertIsNone(transfer.stat_key("rclone", "ceph", "crsw", "k"))
+
+
 class TestListProjects(unittest.TestCase):
     def test_lists_and_sorts_dirs(self):
         listing = ('[{"Path":"csac","Name":"csac","IsDir":true},'
