@@ -99,16 +99,16 @@ class TestCopyto(unittest.TestCase):
     def test_uses_copyto_never_copy(self):
         with mock.patch("transfer._run", return_value=(0, "", "")) as run:
             transfer.copyto("rclone", "local/a.csv", "ceph", "crsw",
-                            "rs2/csac/2_final/green/a.csv")
+                            "rs2/csac/green/2_final/a.csv")
         args = run.call_args[0][1]
         self.assertEqual(args[0], "copyto")  # NEVER plain "copy" (spec §9)
-        self.assertIn("ceph:crsw/rs2/csac/2_final/green/a.csv", args)
+        self.assertIn("ceph:crsw/rs2/csac/green/2_final/a.csv", args)
 
     def test_failure_raises_classified_error(self):
         with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
             with self.assertRaises(transfer.TransferError) as ctx:
                 transfer.copyto("rclone", "a.csv", "ceph", "crsw",
-                                "rs2/x/0_raw/green/a.csv")
+                                "rs2/x/green/0_raw/a.csv")
             self.assertEqual(ctx.exception.kind, "permission")
 
 
@@ -117,13 +117,13 @@ class TestKeyExists(unittest.TestCase):
         listing = '[{"Path":"a.csv","Name":"a.csv","Size":10}]'
         with mock.patch("transfer._run", return_value=(0, listing, "")):
             self.assertTrue(transfer.key_exists("rclone", "ceph", "crsw",
-                                                "rs2/csac/2_final/green/a.csv"))
+                                                "rs2/csac/green/2_final/a.csv"))
 
     def test_missing_key(self):
         with mock.patch("transfer._run",
                         return_value=(1, "", "directory not found")):
             self.assertFalse(transfer.key_exists("rclone", "ceph", "crsw",
-                                                 "rs2/csac/2_final/green/nope.csv"))
+                                                 "rs2/csac/green/2_final/nope.csv"))
 
 
 class TestStatKey(unittest.TestCase):

@@ -46,7 +46,7 @@ answers show a numbered menu — type the number or the value, either works.
 A fully-flagged `--dry-run` is the way to check a deposit before committing
 to it, and the way to reproduce a problem when asking for support.
 
-Files land at `{strand}/{project}/{state}/{sensitivity}/{filename}`, with a
+Files land at `{strand}/{project}/{sensitivity}/{state}/{filename}`, with a
 `{filename}.meta.json` sidecar next to each. Filenames are preserved exactly
 as deposited; if a name contains awkward characters the tool offers a
 correction but never applies one silently. After upload, both objects are

@@ -48,9 +48,9 @@ def suggest_filename(filename: str) -> str:
     return "".join(c for c in out if c not in PROBLEM_CHARS)
 
 
-def build_key(strand: str, project: str, state: str, sensitivity: str,
+def build_key(strand: str, project: str, sensitivity: str, state: str,
               filename: str) -> str:
-    """Build the object key {strand}/{project}/{state}/{sensitivity}/{filename}.
+    """Build the object key {strand}/{project}/{sensitivity}/{state}/{filename}.
 
     Raises RedDataError for sensitivity 'red', ValueError for any other
     invalid part. This is a backstop — deposit.py refuses red earlier."""
@@ -68,7 +68,7 @@ def build_key(strand: str, project: str, state: str, sensitivity: str,
             "project must be lowercase letters/digits with hyphens, got %r" % project)
     if not filename:
         raise ValueError("filename must not be empty")
-    return "/".join((strand, project, state, sensitivity, filename))
+    return "/".join((strand, project, sensitivity, state, filename))
 
 
 def sidecar_key(data_key: str) -> str:

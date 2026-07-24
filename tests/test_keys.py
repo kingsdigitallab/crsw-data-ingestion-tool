@@ -6,39 +6,46 @@ import keys
 class TestBuildKey(unittest.TestCase):
     def test_happy_path(self):
         self.assertEqual(
-            keys.build_key("rs2", "csac", "2_final", "green", "csac-clean-2025.csv"),
-            "rs2/csac/2_final/green/csac-clean-2025.csv",
+            keys.build_key("rs2", "csac", "green", "2_final", "csac-clean-2025.csv"),
+            "rs2/csac/green/2_final/csac-clean-2025.csv",
         )
 
     def test_key_uses_forward_slashes_only(self):
-        key = keys.build_key("rs1", "treaty-texts", "0_raw", "amber", "a.txt")
+        key = keys.build_key("rs1", "treaty-texts", "amber", "0_raw", "a.txt")
         self.assertNotIn("\\", key)
         self.assertEqual(key.count("/"), 4)
 
+    def test_round_trip(self):
+        # r3: element positions are part of the contract; a policy prefix
+        # like rs2/csac/amber/* depends on them.
+        meta = ("rs2", "csac", "amber", "1_interim", "b.csv")
+        parts = keys.build_key(*meta).split("/")
+        self.assertEqual(tuple(parts), meta)
+
     def test_invalid_strand_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs9", "csac", "2_final", "green", "a.csv")
+            keys.build_key("rs9", "csac", "green", "2_final", "a.csv")
 
     def test_invalid_state_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "csac", "final", "green", "a.csv")
+            keys.build_key("rs2", "csac", "green", "final", "a.csv")
 
     def test_red_raises_red_data_error(self):
         with self.assertRaises(keys.RedDataError):
-            keys.build_key("rs2", "csac", "2_final", "red", "a.csv")
+            keys.build_key("rs2", "csac", "red", "2_final", "a.csv")
 
     def test_uppercase_project_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "CSAC", "2_final", "green", "a.csv")
+            keys.build_key("rs2", "CSAC", "green", "2_final", "a.csv")
 
     def test_empty_filename_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "csac", "2_final", "green", "")
+            keys.build_key("rs2", "csac", "green", "2_final", "")
 
     def test_sidecar_key(self):
         self.assertEqual(
-            keys.sidecar_key("rs2/csac/2_final/green/csac-clean-2025.csv"),
-            "rs2/csac/2_final/green/csac-clean-2025.csv.meta.json",
+            keys.sidecar_key("rs2/csac/green/2_final/csac-clean-2025.csv"),
+            "rs2/csac/green/2_final/csac-clean-2025.csv.meta.json",
         )
 
 

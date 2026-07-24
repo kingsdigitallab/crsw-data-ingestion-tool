@@ -8,7 +8,7 @@ import sidecar
 VOCAB_TERMS = {"armed-conflict", "forced-labour", "human-trafficking"}
 
 GOOD_FIELDS = dict(
-    object_key="rs2/csac/2_final/green/csac-clean-2025.csv",
+    object_key="rs2/csac/green/2_final/csac-clean-2025.csv",
     strand="rs2", domain="quant", project="csac",
     state="2_final", sensitivity="green",
     coverage_start="1989", coverage_end="2025-12-31",

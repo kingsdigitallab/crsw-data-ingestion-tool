@@ -35,9 +35,9 @@ class TestPlanDeposits(unittest.TestCase):
                     coverage_start="1989", coverage_end="2025",
                     vocabulary_version="2026-07-23")
         plans = deposit.plan_deposits([Path("data/x.csv")], meta, {})
-        self.assertEqual(plans[0]["key"], "rs2/csac/2_final/green/x.csv")
+        self.assertEqual(plans[0]["key"], "rs2/csac/green/2_final/x.csv")
         self.assertEqual(plans[0]["sidecar_key"],
-                         "rs2/csac/2_final/green/x.csv.meta.json")
+                         "rs2/csac/green/2_final/x.csv.meta.json")
         self.assertEqual(plans[0]["fields"]["object_key"], plans[0]["key"])
 
     def test_per_file_overrides_take_precedence(self):
@@ -54,14 +54,25 @@ class TestPlanDeposits(unittest.TestCase):
 class TestPreview(unittest.TestCase):
     def test_truncates_after_three(self):
         plans = [{"path": Path("f%d.csv" % i),
-                  "key": "rs2/p/0_raw/green/f%d.csv" % i,
-                  "sidecar_key": "rs2/p/0_raw/green/f%d.csv.meta.json" % i,
+                  "key": "rs2/p/green/0_raw/f%d.csv" % i,
+                  "sidecar_key": "rs2/p/green/0_raw/f%d.csv.meta.json" % i,
                   "fields": {}} for i in range(5)]
         lines = deposit.preview_lines(plans)
         text = "\n".join(lines)
         self.assertIn("f0.csv", text)
         self.assertIn("2 more", text)
         self.assertNotIn("f4.csv", text)
+
+    def test_preview_shows_sensitivity_before_state(self):
+        # r3: the preview must show the reordered key the upload will use.
+        meta = dict(strand="rs2", project="csac", state="2_final",
+                    sensitivity="green", domain="quant", version="v1-0",
+                    subjects=["armed-conflict"], abstract="a " * 120,
+                    coverage_start="1989", coverage_end="2025",
+                    vocabulary_version="2026-07-23")
+        plans = deposit.plan_deposits([Path("x.csv")], meta, {})
+        text = "\n".join(deposit.preview_lines(plans))
+        self.assertIn("rs2/csac/green/2_final/x.csv", text)
 
 
 class TestParser(unittest.TestCase):
@@ -80,7 +91,7 @@ class TestParser(unittest.TestCase):
 
 
 def _plan_for(path: Path):
-    key = "rs2/csac/2_final/green/" + path.name
+    key = "rs2/csac/green/2_final/" + path.name
     return {"path": path, "key": key, "sidecar_key": key + ".meta.json",
             "fields": dict(object_key=key, strand="rs2", domain="quant",
                            project="csac", state="2_final", sensitivity="green",

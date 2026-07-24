@@ -341,7 +341,7 @@ def plan_deposits(files: List[Path], meta: Dict, per_file: Dict) -> List[Dict]:
         )
         fields.update(per_file.get(path.name, {}))
         key = keys.build_key(fields["strand"], fields["project"],
-                             fields["state"], fields["sensitivity"], path.name)
+                             fields["sensitivity"], fields["state"], path.name)
         fields["object_key"] = key
         plans.append({"path": path, "key": key,
                       "sidecar_key": keys.sidecar_key(key), "fields": fields})
@@ -832,8 +832,8 @@ def main(argv=None) -> int:
         if plan["path"].name in renames:
             new_name = renames[plan["path"].name]
             plan["key"] = keys.build_key(
-                meta["strand"], meta["project"], meta["state"],
-                meta["sensitivity"], new_name)
+                meta["strand"], meta["project"], meta["sensitivity"],
+                meta["state"], new_name)
             plan["sidecar_key"] = keys.sidecar_key(plan["key"])
             plan["fields"]["object_key"] = plan["key"]
 
