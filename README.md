@@ -30,7 +30,8 @@ endpoint = https://OBJECT-STORE-ENDPOINT-FROM-ERESEARCH
 python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
 
   --strand rs2            skip strand prompt (rs1/rs2/rs3/rs4)
-  --project csac          skip project prompt
+  --project csac          skip project prompt (a name new to the strand
+                          is confirmed once before creating it)
   --domain quant          skip domain prompt (codes from the vocabulary)
   --state 2_final         skip state prompt (0_raw/1_interim/2_final)
   --sensitivity green     skip sensitivity prompt (green/amber)
@@ -43,8 +44,11 @@ python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
 
 Anything not supplied as a flag is prompted for. Prompts with a fixed set of
 answers show a numbered menu — type the number or the value, either works.
-A fully-flagged `--dry-run` is the way to check a deposit before committing
-to it, and the way to reproduce a problem when asking for support.
+After the strand is chosen, existing projects in it are listed to pick from
+(`n` starts a new one). New project names are normalised (lowercase, hyphens)
+and need confirmation, with a warning when the name is close to an existing
+project. A fully-flagged `--dry-run` is the way to check a deposit before
+committing to it, and the way to reproduce a problem when asking for support.
 
 Files land at `{strand}/{project}/{sensitivity}/{state}/{filename}`, with a
 `{filename}.meta.json` sidecar next to each. Filenames are preserved exactly
@@ -61,7 +65,9 @@ the remote from a menu of those you already have) and saves the answer to
 `%LOCALAPPDATA%\crsw-deposit\config.json` (Windows) or
 `~/.config/crsw-deposit/config.json` (macOS/Linux). Precedence is
 command-line flag → saved config → built-in default. Run with
-`--reconfigure` to change the saved values.
+`--reconfigure` to change the saved values. Every run starts with a
+`Target:` line showing the resolved `remote:bucket` and where each value
+came from, so there is never any doubt about which storage a deposit used.
 
 ## Subjects and domains vocabulary
 

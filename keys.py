@@ -15,6 +15,7 @@ SENSITIVITIES = ("green", "amber")
 PROBLEM_CHARS = '\\/:*?"<>|'
 
 _PROJECT_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_NON_PROJECT_RE = re.compile(r"[^a-z0-9-]")
 
 
 class RedDataError(ValueError):
@@ -46,6 +47,34 @@ def suggest_filename(filename: str) -> str:
     Never applied automatically — the user must accept or edit it."""
     out = filename.replace(" ", "-")
     return "".join(c for c in out if c not in PROBLEM_CHARS)
+
+
+def normalise_project(name: str) -> str:
+    """Normalise a proposed project name to the r1 §4 rule: lowercase,
+    spaces to hyphens, anything outside [a-z0-9-] stripped, repeated
+    hyphens collapsed, edge hyphens trimmed.
+
+    A non-empty result always passes validate_project(); an empty result
+    means nothing usable remained."""
+    out = _NON_PROJECT_RE.sub("", name.lower().replace(" ", "-"))
+    return re.sub("-{2,}", "-", out).strip("-")
+
+
+def similar_projects(name: str, existing: List[str]) -> List[str]:
+    """Existing project names that near-match a normalised candidate:
+    equal after case-folding and hyphen removal, substring either way, or
+    differing only by a trailing 's'. Exact matches are excluded — the
+    caller handles "already exists" separately. Deliberately not clever
+    (r4 §2): this catches the near-duplicates that actually happen."""
+    a = name.replace("-", "")
+    matches = []
+    for entry in existing:
+        if entry == name:
+            continue
+        b = entry.lower().replace("-", "")
+        if a == b or a in b or b in a or a.rstrip("s") == b.rstrip("s"):
+            matches.append(entry)
+    return matches
 
 
 def build_key(strand: str, project: str, sensitivity: str, state: str,

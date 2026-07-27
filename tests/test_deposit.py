@@ -252,6 +252,174 @@ class TestMessageQuality(unittest.TestCase):
     def test_red_points_to_tre(self):
         self.assertIn("TRE", deposit.MESSAGES["red_refused"])
 
+    def test_not_found_names_default_bucket(self):
+        self.assertIn("crsw", deposit.MESSAGES["not_found"])
+
+    def test_write_denied_formats_target(self):
+        msg = deposit.MESSAGES["write_denied"].format(
+            target="k1078591:crsw/rs2/x/green/0_raw/")
+        self.assertIn("k1078591:crsw/rs2/x/green/0_raw/", msg)
+
+    def test_permission_names_no_specific_strand(self):
+        # The old canned "an RS2 credential cannot write to rs3/" example
+        # sent a real user chasing the wrong strand. Never again.
+        for key in ("permission", "write_denied"):
+            lowered = deposit.MESSAGES[key].lower()
+            for strand in ("rs1", "rs2", "rs3", "rs4"):
+                self.assertNotIn(strand, lowered, key)
+
+
+class TestResolveProjectChoice(unittest.TestCase):
+    ENTRIES = [("1", "csac", ""), ("2", "aid-flows", "")]
+
+    def test_n_and_new_return_sentinel(self):
+        self.assertEqual(deposit.resolve_project_choice("n", self.ENTRIES), "new")
+        self.assertEqual(deposit.resolve_project_choice(" NEW ", self.ENTRIES),
+                         "new")
+
+    def test_number_selects(self):
+        self.assertEqual(deposit.resolve_project_choice("2", self.ENTRIES),
+                         "aid-flows")
+
+    def test_name_selects_case_insensitive(self):
+        self.assertEqual(deposit.resolve_project_choice("CSAC", self.ENTRIES),
+                         "csac")
+
+    def test_unknown_is_none(self):
+        self.assertIsNone(deposit.resolve_project_choice("nope", self.ENTRIES))
+
+
+class TestPromptProject(unittest.TestCase):
+    """Drives the picker via mocked input(); say/warn are captured so the
+    honest-fallback wording is asserted, not just the return value."""
+
+    def _run(self, listing, inputs):
+        said, warned = [], []
+        with mock.patch("builtins.input", side_effect=inputs) as inp, \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn", side_effect=warned.append):
+            result = deposit.prompt_project("rs2", listing)
+        return result, said, warned, inp
+
+    def test_select_existing_by_number(self):
+        result, _, _, _ = self._run(["csac", "aid-flows"], ["1"])
+        self.assertEqual(result, "csac")
+
+    def test_new_path_normalises_and_confirms(self):
+        result, said, _, _ = self._run(["csac", "x"], ["n", "CSAC Data", "y"])
+        self.assertEqual(result, "csac-data")
+        self.assertIn("  -> normalised to: csac-data", said)
+
+    def test_empty_listing_notes_and_creates_first(self):
+        result, said, _, _ = self._run([], ["first-project", "y"])
+        self.assertEqual(result, "first-project")
+        self.assertTrue(any("No projects in rs2 yet" in s for s in said))
+
+    def test_none_listing_notes_honestly(self):
+        result, said, _, inp = self._run(None, ["solo-project", "y"])
+        self.assertEqual(result, "solo-project")
+        self.assertTrue(any("Couldn't list existing projects" in s
+                            for s in said))
+        prompts = [str(c.args[0]) for c in inp.call_args_list]
+        self.assertTrue(any("Use project" in p for p in prompts))
+        self.assertFalse(any("Create new" in p for p in prompts))
+
+    def test_near_match_warns_and_decline_reprompts(self):
+        result, _, warned, _ = self._run(
+            ["csac"], ["n", "csacs", "n", "peacekeeping", "y"])
+        self.assertEqual(result, "peacekeeping")
+        self.assertTrue(any("csac" in w for w in warned))
+
+    def test_legacy_invalid_name_reprompts(self):
+        result, said, _, _ = self._run(["CSAC", "csac-data"], ["1", "2"])
+        self.assertEqual(result, "csac-data")
+        self.assertTrue(any("predates the naming rule" in s for s in said))
+
+
+def _flagged_args():
+    return deposit.build_parser().parse_args(
+        ["a.csv", "--strand", "rs2", "--project", "csac", "--state", "2_final",
+         "--sensitivity", "green", "--domain", "quant"])
+
+
+class TestEarlyWriteProbe(unittest.TestCase):
+    VOCAB = {"vocabulary_version": "x", "facets": {"contexts": ["a"]}}
+
+    def test_denied_probe_fails_before_any_prompt(self):
+        probed = []
+
+        def prober(prefix):
+            probed.append(prefix)
+            return "permission"
+
+        with mock.patch("builtins.input", side_effect=AssertionError), \
+             mock.patch("deposit.say"):
+            with self.assertRaises(deposit.transfer.TransferError) as ctx:
+                deposit.prompt_metadata(_flagged_args(), self.VOCAB,
+                                        None, prober)
+        self.assertEqual(probed, ["rs2/csac/green/2_final"])
+        self.assertEqual(ctx.exception.kind, "permission")
+        self.assertEqual(ctx.exception.detail, "rs2/csac/green/2_final")
+
+    def test_passing_probe_continues_interview(self):
+        # Sentinel raised by the NEXT prompt (version) proves the probe
+        # passed and the interview moved on.
+        class PastProbe(Exception):
+            pass
+
+        with mock.patch("builtins.input", side_effect=PastProbe), \
+             mock.patch("deposit.say"):
+            with self.assertRaises(PastProbe):
+                deposit.prompt_metadata(_flagged_args(), self.VOCAB,
+                                        None, lambda prefix: None)
+
+
+class TestSettingSources(unittest.TestCase):
+    def test_flags_win(self):
+        args = deposit.build_parser().parse_args(
+            ["a.csv", "--remote", "k1", "--bucket", "b1"])
+        self.assertEqual(deposit.setting_sources(args, {"remote": "ceph"}),
+                         ("--remote flag", "--bucket flag"))
+
+    def test_config_next(self):
+        args = deposit.build_parser().parse_args(["a.csv"])
+        self.assertEqual(
+            deposit.setting_sources(args, {"remote": "ceph", "bucket": "crsw"}),
+            ("saved config", "saved config"))
+
+    def test_defaults_last_and_mixed(self):
+        args = deposit.build_parser().parse_args(["a.csv", "--remote", "k1"])
+        self.assertEqual(deposit.setting_sources(args, {}),
+                         ("--remote flag", "default"))
+
+
+class TestCheckProjectFlag(unittest.TestCase):
+    def test_existing_project_silent(self):
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.check_project_flag("csac", "rs2", ["csac"], False)
+
+    def test_no_listing_silent(self):
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.check_project_flag("newproj", "rs2", None, False)
+
+    def test_new_project_confirms_exactly_once(self):
+        with mock.patch("builtins.input", side_effect=["y"]) as inp:
+            deposit.check_project_flag("newproj", "rs2", ["csac"], False)
+        self.assertEqual(inp.call_count, 1)
+
+    def test_decline_raises_valueerror(self):
+        with mock.patch("builtins.input", side_effect=["n"]):
+            with self.assertRaises(ValueError):
+                deposit.check_project_flag("newproj", "rs2", ["csac"], False)
+
+    def test_dry_run_never_prompts_prints_note(self):
+        said = []
+        with mock.patch("builtins.input", side_effect=AssertionError), \
+             mock.patch("deposit.say", side_effect=said.append):
+            deposit.check_project_flag("csac-data", "rs2", ["csac"], True)
+        self.assertTrue(any("does not exist in rs2" in s for s in said))
+        self.assertTrue(any("similar to existing 'csac'" in s for s in said))
+
 
 class TestSubjectSelection(unittest.TestCase):
     VOCAB = {"vocabulary_version": "x",

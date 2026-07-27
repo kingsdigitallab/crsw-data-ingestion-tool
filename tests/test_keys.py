@@ -59,6 +59,61 @@ class TestProjectValidation(unittest.TestCase):
             self.assertFalse(keys.validate_project(name), repr(name))
 
 
+class TestNormaliseProject(unittest.TestCase):
+    def test_lowercase_and_spaces(self):
+        self.assertEqual(keys.normalise_project("CSAC Data"), "csac-data")
+
+    def test_strips_disallowed_chars(self):
+        self.assertEqual(keys.normalise_project("Trafficking (2024)!"),
+                         "trafficking-2024")
+
+    def test_collapses_and_trims_hyphens(self):
+        # spaces become hyphens, then runs collapse and edges trim
+        self.assertEqual(keys.normalise_project("a - b"), "a-b")
+        self.assertEqual(keys.normalise_project(" - csac - "), "csac")
+
+    def test_disallowed_chars_strip_not_separate(self):
+        # spec r4 §2: strip outside [a-z0-9-]; only spaces map to hyphens
+        self.assertEqual(keys.normalise_project("a__b"), "ab")
+
+    def test_unusable_input_returns_empty(self):
+        self.assertEqual(keys.normalise_project("???"), "")
+        self.assertEqual(keys.normalise_project(""), "")
+
+    def test_nonempty_result_passes_validate_project(self):
+        for raw in ("CSAC Data", "Trafficking (2024)!", "--a__b--",
+                    "x", "és-café", "A  B   C"):
+            name = keys.normalise_project(raw)
+            if name:
+                self.assertTrue(keys.validate_project(name),
+                                "%r -> %r" % (raw, name))
+
+
+class TestSimilarProjects(unittest.TestCase):
+    def test_substring_both_directions(self):
+        # The spec's own example: csac vs csac-data should warn.
+        self.assertEqual(keys.similar_projects("csac-data", ["csac"]), ["csac"])
+        self.assertEqual(keys.similar_projects("csac", ["csac-data"]),
+                         ["csac-data"])
+
+    def test_trailing_s(self):
+        self.assertEqual(keys.similar_projects("csacs", ["csac"]), ["csac"])
+
+    def test_hyphen_only_difference(self):
+        self.assertEqual(keys.similar_projects("csac-data", ["csacdata"]),
+                         ["csacdata"])
+
+    def test_case_folded_existing(self):
+        self.assertEqual(keys.similar_projects("csac", ["CSAC"]), ["CSAC"])
+
+    def test_exact_match_excluded(self):
+        self.assertEqual(keys.similar_projects("csac", ["csac"]), [])
+
+    def test_unrelated_names_empty(self):
+        self.assertEqual(
+            keys.similar_projects("peacekeeping", ["csac", "aid-flows"]), [])
+
+
 class TestFilenameChecks(unittest.TestCase):
     def test_clean_filename_has_no_problems(self):
         self.assertEqual(keys.filename_problems("csac-clean-2025.csv"), [])

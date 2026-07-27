@@ -146,9 +146,31 @@ class TestListProjects(unittest.TestCase):
             self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"),
                              ["aid-flows", "csac"])
 
-    def test_failure_returns_empty(self):
-        with mock.patch("transfer._run", return_value=(1, "", "boom")):
+    def test_empty_json_is_empty_list(self):
+        with mock.patch("transfer._run", return_value=(0, "[]", "")):
             self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"), [])
+
+    def test_missing_prefix_is_empty_list(self):
+        # An empty strand has no prefix in S3 - "directory not found" means
+        # genuinely nothing there, not a failure (r4 §2).
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "error: directory not found")):
+            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"), [])
+
+    def test_permission_failure_is_none(self):
+        # A scoped credential may write but not list; None must never be
+        # presented as "no existing projects" (r4 §2).
+        with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
+            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
+
+    def test_network_failure_is_none(self):
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "dial tcp: i/o timeout")):
+            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
+
+    def test_bad_json_is_none(self):
+        with mock.patch("transfer._run", return_value=(0, "not json", "")):
+            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
 
 
 if __name__ == "__main__":

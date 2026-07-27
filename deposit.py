@@ -63,13 +63,20 @@ MESSAGES = {
         "may be out of date - contact eResearch to confirm your keys."),
     "permission": (
         "You don't have write access to this location.\n"
-        "Access is scoped by strand, so an RS2 credential cannot write to\n"
-        "rs3/ - this is a permissions question, not a bug. If you believe\n"
-        "you should have access to this strand, contact eResearch."),
+        "Access is scoped by strand, so a credential for one strand cannot\n"
+        "write to another - this is a permissions question, not a bug. If\n"
+        "you believe you should have access here, contact eResearch."),
+    "write_denied": (
+        "You don't have write access to {target}.\n"
+        "Access is scoped by strand, so a credential for one strand cannot\n"
+        "write to another - this is a permissions question, not a bug. If\n"
+        "you believe you should have write access here, re-run with\n"
+        "--verbose and send the output to eResearch."),
     "not_found": (
-        "The bucket or path was not found on the storage service.\n"
-        "Check the --bucket value (default: crsw); if it looks right,\n"
-        "contact eResearch."),
+        "The bucket was not found on the storage service.\n"
+        "Deposits use the 'crsw' bucket by default. If you overrode it with\n"
+        "--bucket or a saved config, check that value; if you are using the\n"
+        "default, contact eResearch."),
     "unknown": (
         "The transfer failed for an unrecognised reason.\n"
         "Re-run with --verbose and send the output to eResearch support."),
@@ -420,6 +427,16 @@ def resolve_settings(args, cfg) -> Tuple[str, str]:
     return remote, bucket
 
 
+def setting_sources(args, cfg) -> Tuple[str, str]:
+    """Where each resolved setting came from, for the Target line. Must
+    be called BEFORE resolve_settings overwrites args.remote/args.bucket."""
+    remote_src = ("--remote flag" if args.remote
+                  else "saved config" if cfg.get("remote") else "default")
+    bucket_src = ("--bucket flag" if args.bucket
+                  else "saved config" if cfg.get("bucket") else "default")
+    return remote_src, bucket_src
+
+
 def first_run_setup(rclone) -> dict:
     say(style("First-run setup: which rclone remote and bucket should "
               "deposits go to?", "bold"))
@@ -441,8 +458,116 @@ def first_run_setup(rclone) -> dict:
 
 # ---------------------------------------------------------------- prompts
 
-def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dict:
-    """Collect batch metadata, honouring flags. Returns the meta dict."""
+def resolve_project_choice(raw, entries):
+    """'new' for n/new, else resolve_choice(raw, entries).
+    A project literally named 'n' or 'new' stays reachable by number."""
+    token = (raw or "").strip().lower()
+    if token in ("n", "new"):
+        return "new"
+    return resolve_choice(raw, entries)
+
+
+def prompt_new_project(strand: str, existing: List[str],
+                       confirm_create: bool = True) -> str:
+    """Ask for a project name, normalise it, warn on near-matches, and
+    confirm. confirm_create=False softens the wording to "Use project"
+    for when the listing failed and we can't actually claim it's new."""
+    while True:
+        raw = ask("New project name (lowercase, hyphens, no spaces)")
+        name = keys.normalise_project(raw)
+        if not name:
+            say("Nothing usable remains after normalising %r - project names "
+                "are lowercase letters/digits with hyphens (e.g. csac, "
+                "treaty-texts)." % raw)
+            continue
+        if name != raw:
+            say("  -> normalised to: %s" % name)
+        if name in existing:
+            # Exact match only: a legacy 'CSAC' is NOT the same prefix as
+            # 'csac' and must go through the near-match warning instead.
+            say("'%s' already exists in %s - using it." % (name, strand))
+            return name
+        similar = keys.similar_projects(name, existing)
+        if similar:
+            warn("similar to existing '%s' - sure this is different?"
+                 % "', '".join(similar))
+        if confirm_create:
+            confirmed = ask_yes_no("Create new project '%s' in %s?"
+                                   % (name, strand))
+        else:
+            confirmed = ask_yes_no("Use project '%s' in %s?" % (name, strand))
+        if confirmed:
+            return name
+
+
+def prompt_project(strand: str, listing: Optional[List[str]]) -> str:
+    """Numbered picker over existing project prefixes (r4 §2), with [n]
+    for a new one. listing is None when it could not be fetched - never
+    presented as an empty strand (it may be a permissions artefact)."""
+    if listing is None:
+        say("Couldn't list existing projects in %s - you can still enter one."
+            % strand)
+        return prompt_new_project(strand, [], confirm_create=False)
+    if not listing:
+        say("No projects in %s yet - creating the first." % strand)
+        return prompt_new_project(strand, [])
+    entries = [(str(i), p, "") for i, p in enumerate(listing, 1)]
+    while True:
+        for line in choice_lines("Existing projects in %s" % strand, entries):
+            say(line)
+        say("  %s new project" % style("[n]", "dim"))
+        choice = resolve_project_choice(input("> "), entries)
+        if choice == "new":
+            return prompt_new_project(strand, listing)
+        if choice is not None:
+            if not keys.validate_project(choice):
+                say("'%s' predates the naming rule and can't be used as-is "
+                    "(try '%s' as a new project)."
+                    % (choice, keys.normalise_project(choice)))
+                continue
+            return choice
+        say("Enter a number, a project name, or 'n' for a new project.")
+
+
+def check_project_flag(project: str, strand: str,
+                       listing: Optional[List[str]], dry_run: bool) -> None:
+    """--project skips the picker, but a name that doesn't exist in the
+    strand is a new-project creation: confirm once (r4 §2). Never prompts
+    under --dry-run - that's the non-interactive reproduction path.
+    Raises ValueError if the user declines."""
+    if listing is None or project in listing:
+        return
+    similar = keys.similar_projects(project, listing)
+    if dry_run:
+        say("note: project '%s' does not exist in %s yet - a real run will "
+            "ask to confirm creating it." % (project, strand))
+        if similar:
+            say("note: '%s' is similar to existing '%s'."
+                % (project, "', '".join(similar)))
+        return
+    if similar:
+        warn("similar to existing '%s' - sure this is different?"
+             % "', '".join(similar))
+    if not ask_yes_no("Project '%s' does not exist in %s. Create it as a "
+                      "new project?" % (project, strand)):
+        raise ValueError(
+            "nothing deposited: project '%s' was not confirmed - pick an "
+            "existing project or re-run and confirm" % project)
+
+
+def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
+                    probe_write=None) -> Dict:
+    """Collect batch metadata, honouring flags. Returns the meta dict.
+
+    list_projects is a callable strand -> Optional[List[str]] (None when
+    the remote isn't usable). It is called once - project is a batch-level
+    field, so one listing per invocation is the session cache r4 asks for.
+
+    probe_write is a callable prefix -> Optional[error kind] (None when
+    the remote isn't usable or under --dry-run). It runs as soon as the
+    full deposit prefix is known, so a write denial surfaces four prompts
+    in rather than after the whole interview (spec §8: fail early).
+    Raises transfer.TransferError with the probed prefix in .detail."""
     meta = {}
 
     meta["strand"] = args.strand or ask_select("Strand", STRAND_ENTRIES)
@@ -467,31 +592,26 @@ def prompt_metadata(args, existing_projects: List[str], vocab_dict: Dict) -> Dic
             say("Enter a number or value from the list.")
     meta["sensitivity"] = sensitivity
 
+    listing = list_projects(meta["strand"]) if list_projects else None
     if args.project:
         project = args.project
         if not keys.validate_project(project):
             raise ValueError(
                 "project %r: use lowercase letters/digits and hyphens "
                 "(e.g. csac, treaty-texts)" % project)
+        check_project_flag(project, meta["strand"], listing, args.dry_run)
     else:
-        if existing_projects:
-            say("Existing projects in %s: %s" % (
-                meta["strand"], ", ".join(existing_projects)))
-        while True:
-            project = ask("Project").lower()
-            if not keys.validate_project(project):
-                say("Project names are lowercase letters/digits with hyphens "
-                    "(e.g. csac, treaty-texts). Try again.")
-                continue
-            if existing_projects and project not in existing_projects:
-                if not ask_yes_no(
-                        "'%s' is a NEW project prefix (existing: %s). Create it?"
-                        % (project, ", ".join(existing_projects))):
-                    continue
-            break
+        project = prompt_project(meta["strand"], listing)
     meta["project"] = project
 
     meta["state"] = args.state or ask_select("State", STATE_ENTRIES)
+
+    if probe_write:
+        prefix = "/".join((meta["strand"], meta["project"],
+                           meta["sensitivity"], meta["state"]))
+        kind = probe_write(prefix)
+        if kind:
+            raise transfer.TransferError(kind, prefix)
 
     domain_entries = vocab.domains(vocab_dict)
     codes = [d["code"] for d in domain_entries]
@@ -779,7 +899,16 @@ def main(argv=None) -> int:
         if rclone_for_setup:
             cfg = first_run_setup(rclone_for_setup)
         # no rclone -> preflight will fail with the no_rclone message anyway
+    remote_src, bucket_src = setting_sources(args, cfg)
     args.remote, args.bucket = resolve_settings(args, cfg)
+
+    # Say where every deposit is headed and why - so "which remote did it
+    # use?" is answered by the output, not by reading the source.
+    detail = "remote: %s; bucket: %s" % (remote_src, bucket_src)
+    if "saved config" in (remote_src, bucket_src):
+        detail += "; config: %s" % config_path()
+    say("Target: %s  (%s)"
+        % (style("%s:%s" % (args.remote, args.bucket), "bold"), detail))
 
     # Local checks first: files readable?
     files, problems = resolve_files(args.files)
@@ -808,15 +937,24 @@ def main(argv=None) -> int:
              "(version %s). Deposits still work - very new terms may be missing."
              % (source, vocab_dict.get("vocabulary_version")))
 
-    existing = (transfer.list_projects(rclone, args.remote, args.bucket, args.strand)
-                if (rclone and remote_ok and args.strand) else [])
+    lister = ((lambda strand: transfer.list_projects(
+                   rclone, args.remote, args.bucket, strand))
+              if (rclone and remote_ok) else None)
+    prober = ((lambda prefix: transfer.check_write(
+                   rclone, args.remote, args.bucket, prefix))
+              if (rclone and remote_ok and not args.dry_run) else None)
 
     try:
-        meta = prompt_metadata(args, existing, vocab_dict)
+        meta = prompt_metadata(args, vocab_dict, lister, prober)
     except keys.RedDataError:
         return fail(MESSAGES["red_refused"], 2)
     except ValueError as e:
         return fail(str(e))
+    except transfer.TransferError as e:
+        if e.kind == "permission":
+            return fail(MESSAGES["write_denied"].format(
+                target="%s:%s/%s/" % (args.remote, args.bucket, e.detail)))
+        return fail(MESSAGES.get(e.kind, MESSAGES["unknown"]))
 
     per_file = prompt_per_file_overrides(files, meta)
 
@@ -837,12 +975,8 @@ def main(argv=None) -> int:
             plan["sidecar_key"] = keys.sidecar_key(plan["key"])
             plan["fields"]["object_key"] = plan["key"]
 
-    # Write-permission probe on the real prefix (needs strand+project).
-    if remote_ok and not args.dry_run:
-        prefix = "%s/%s" % (meta["strand"], meta["project"])
-        kind = transfer.check_write(rclone, args.remote, args.bucket, prefix)
-        if kind:
-            return fail(MESSAGES[kind])
+    # (Write permission was already probed on the full deposit prefix
+    # during prompt_metadata - spec §8: fail early.)
 
     # Collision check (§4): overwriting creates a new version, say so.
     if remote_ok:

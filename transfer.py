@@ -95,8 +95,10 @@ def check_access(rclone: str, remote: str, bucket: str) -> Optional[str]:
 
 def check_write(rclone: str, remote: str, bucket: str, prefix: str) -> Optional[str]:
     """Probe write permission on the target prefix with touch + deletefile.
-    None if writable; else an error kind. Access is scoped by strand, so
-    the probe must use the real deposit prefix."""
+    None if writable; else an error kind. Access is scoped by strand - and
+    possibly deeper (sensitivity/state-scoped policies) - so the probe must
+    use the FULL deposit prefix, the same key shape a real deposit writes.
+    A truncated prefix gives false denials under scoped policies."""
     probe = "%s:%s/%s/%s" % (remote, bucket, prefix, PROBE_NAME)
     code, out, err = _run(rclone, ["touch", probe])
     if code != 0:
@@ -148,15 +150,21 @@ def key_exists(rclone: str, remote: str, bucket: str, key: str) -> bool:
     return stat_key(rclone, remote, bucket, key) is not None
 
 
-def list_projects(rclone: str, remote: str, bucket: str, strand: str) -> List[str]:
-    """Existing project prefixes under a strand. Best-effort: any failure
-    returns [] and the caller simply can't offer suggestions."""
+def list_projects(rclone: str, remote: str, bucket: str,
+                  strand: str) -> Optional[List[str]]:
+    """Existing project prefixes under a strand.
+
+    Returns a sorted list (possibly empty) when the strand was listable,
+    [] when the prefix simply doesn't exist yet (an empty strand has no
+    prefix in S3 - the bucket itself was already preflighted), and None
+    when the listing failed for any other reason (permissions, network).
+    Callers must not present None as "no existing projects"."""
     code, out, err = _run(
         rclone, ["lsjson", "--dirs-only", "%s:%s/%s" % (remote, bucket, strand)])
     if code != 0:
-        return []
+        return [] if classify_error(err) == "not_found" else None
     try:
         return sorted(entry["Name"] for entry in json.loads(out)
                       if entry.get("IsDir"))
     except (ValueError, KeyError):
-        return []
+        return None
