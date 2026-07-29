@@ -1,0 +1,98 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import export_dcat
+import record
+from tests.test_schema import worked_example
+
+
+class TestMappingCompleteness(unittest.TestCase):
+    def test_worked_example_fully_mapped(self):
+        # The r5 §9 gap test: any record field the converter cannot
+        # place is a mapping gap and fails here.
+        self.assertEqual(export_dcat.unmapped_fields(worked_example()), [])
+
+    def test_every_tier_field_is_placed(self):
+        known = set(export_dcat._MAPPED_FIELDS) | set(export_dcat.LOCAL_FIELDS)
+        for field in (record.REQUIRED_FIELDS + record.RECOMMENDED_FIELDS
+                      + record.OPTIONAL_FIELDS):
+            self.assertIn(field, known, field)
+
+    def test_novel_field_reported(self):
+        rec = worked_example()
+        rec["surprise"] = "x"
+        self.assertEqual(export_dcat.unmapped_fields(rec), ["surprise"])
+
+
+class TestDcatShape(unittest.TestCase):
+    def setUp(self):
+        self.rec = worked_example()
+        self.out = export_dcat.dcat_dataset(self.rec)
+
+    def test_core_terms(self):
+        self.assertEqual(self.out["@type"], "dcat:Dataset")
+        self.assertEqual(self.out["dcterms:identifier"],
+                         [self.rec["dataset_uuid"], self.rec["identifier"]])
+        self.assertEqual(self.out["dcterms:accessRights"], "green")
+        self.assertEqual(self.out["dcterms:temporal"]["dcat:startDate"],
+                         "1989")
+
+    def test_licence_identifier_maps_to_license(self):
+        self.assertEqual(self.out["dcterms:license"], "CC-BY-4.0")
+        self.assertNotIn("dcterms:rights", self.out)
+
+    def test_internal_only_maps_to_rights(self):
+        rec = worked_example()
+        rec["licence"] = "internal-only"
+        out = export_dcat.dcat_dataset(rec)
+        self.assertEqual(out["dcterms:rights"], "internal-only")
+        self.assertNotIn("dcterms:license", out)
+
+    def test_provenance_is_not_source(self):
+        # dcterms:source means derivation; acquisition narrative is
+        # provenance (r5 §3) - here both exist and must not blur.
+        self.assertIn("archive", self.out["dcterms:provenance"])
+        self.assertEqual(self.out["dcterms:source"],
+                         "rs2/csac/amber/1_interim")
+
+    def test_locals_stay_in_crsw_namespace(self):
+        self.assertEqual(self.out["crsw:strand"], "rs2")
+        self.assertEqual(self.out["crsw:version"], "3-0")
+        self.assertNotIn("strand", self.out)
+
+    def test_distributions(self):
+        dists = self.out["dcat:distribution"]
+        self.assertEqual(len(dists), 2)
+        self.assertEqual(dists[0]["dcterms:title"], "csac-clean-2025.csv")
+        self.assertEqual(dists[0]["dcat:byteSize"], 48211023)
+        self.assertEqual(len(dists[0]["crsw:checksum_sha256"]), 64)
+        self.assertEqual(dists[1]["crsw:coverage_start"], "1989-01-01")
+
+    def test_output_is_json_serialisable(self):
+        json.dumps(self.out)
+
+
+class TestCli(unittest.TestCase):
+    def test_round_trip_via_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "dataset.meta.json"
+            src.write_text(record.record_json(worked_example()),
+                           encoding="utf-8")
+            dst = Path(d) / "out.json"
+            code = export_dcat.main([str(src), "-o", str(dst)])
+            self.assertEqual(code, 0)
+            out = json.loads(dst.read_text(encoding="utf-8"))
+        self.assertEqual(out["@type"], "dcat:Dataset")
+
+    def test_unusable_record_is_an_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "dataset.meta.json"
+            src.write_text("{not json", encoding="utf-8")
+            code = export_dcat.main([str(src)])
+        self.assertNotEqual(code, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
