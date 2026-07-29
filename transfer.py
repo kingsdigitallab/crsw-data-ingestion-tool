@@ -9,7 +9,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 PROBE_NAME = ".crsw-preflight-probe"
 
@@ -107,9 +107,19 @@ def check_write(rclone: str, remote: str, bucket: str, prefix: str) -> Optional[
     return None
 
 
+def _header_flags(headers: Optional[Dict[str, str]]) -> List[str]:
+    """--header-upload flags for object labels, in stable (sorted) order."""
+    flags = []
+    for name, value in sorted((headers or {}).items()):
+        flags.extend(["--header-upload", "%s: %s" % (name, value)])
+    return flags
+
+
 def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
-           show_progress: bool = False) -> None:
+           show_progress: bool = False,
+           headers: Optional[Dict[str, str]] = None) -> None:
     """Upload with `rclone copyto` so the object lands at exactly `key`.
+    `headers` become object labels (x-amz-meta-*) via --header-upload.
 
     NEVER change this to `rclone copy`: copy treats the destination as a
     directory and nests the original filename inside it (spec §9 — this
@@ -117,13 +127,15 @@ def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
     dest = "%s:%s/%s" % (remote, bucket, key)
     if show_progress:
         # Let rclone draw progress on the user's terminal directly.
-        proc = subprocess.run([rclone, "copyto", "--progress",
-                               str(local_path), dest])
+        proc = subprocess.run([rclone, "copyto", "--progress"]
+                              + _header_flags(headers)
+                              + [str(local_path), dest])
         if proc.returncode != 0:
             raise TransferError("unknown",
                                 "rclone exited %d" % proc.returncode)
         return
-    code, out, err = _run(rclone, ["copyto", str(local_path), dest],
+    code, out, err = _run(rclone, ["copyto"] + _header_flags(headers)
+                          + [str(local_path), dest],
                           timeout=None)
     if code != 0:
         raise TransferError(classify_error(err), err)
@@ -148,6 +160,42 @@ def stat_key(rclone: str, remote: str, bucket: str, key: str) -> Optional[dict]:
 def key_exists(rclone: str, remote: str, bucket: str, key: str) -> bool:
     """True if an object exists at exactly `key`."""
     return stat_key(rclone, remote, bucket, key) is not None
+
+
+def read_key(rclone: str, remote: str, bucket: str,
+             key: str) -> Tuple[Optional[str], Optional[str]]:
+    """The object's text content, distinguishing absence from failure.
+
+    Returns (text, None) on success, (None, "absent") when there is no
+    object at `key`, and (None, <error kind>) for any other failure.
+    Callers must never treat an error as absence — building on a record
+    that exists but could not be read would silently drop its members."""
+    code, out, err = _run(rclone, ["cat", "%s:%s/%s" % (remote, bucket, key)])
+    if code == 0:
+        return out, None
+    kind = classify_error(err)
+    return None, ("absent" if kind == "not_found" else kind)
+
+
+def read_metadata(rclone: str, remote: str, bucket: str,
+                  key: str) -> Optional[dict]:
+    """The object's metadata labels (x-amz-meta-*), or None.
+    Used to confirm the installed rclone passes upload headers through
+    to the store (r5 §6) — a silent no-op here would mean unlabelled
+    objects, so the check must read back, not assume."""
+    code, out, err = _run(
+        rclone, ["lsjson", "--files-only", "--metadata",
+                 "%s:%s/%s" % (remote, bucket, key)])
+    if code != 0:
+        return None
+    try:
+        entries = json.loads(out)
+    except ValueError:
+        return None
+    if not entries:
+        return None
+    metadata = entries[0].get("Metadata")
+    return metadata if isinstance(metadata, dict) else None
 
 
 def list_projects(rclone: str, remote: str, bucket: str,

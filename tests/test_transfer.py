@@ -112,6 +112,85 @@ class TestCopyto(unittest.TestCase):
             self.assertEqual(ctx.exception.kind, "permission")
 
 
+class TestCopytoHeaders(unittest.TestCase):
+    HEADERS = {"x-amz-meta-dataset-uuid": "8f14e45f",
+               "x-amz-meta-sensitivity": "green"}
+
+    def test_headers_become_upload_flags(self):
+        with mock.patch("transfer._run", return_value=(0, "", "")) as run:
+            transfer.copyto("rclone", "a.csv", "ceph", "crsw",
+                            "rs2/csac/green/2_final/a.csv",
+                            headers=self.HEADERS)
+        args = run.call_args[0][1]
+        self.assertEqual(args[:5], [
+            "copyto",
+            "--header-upload", "x-amz-meta-dataset-uuid: 8f14e45f",
+            "--header-upload", "x-amz-meta-sensitivity: green"])
+        self.assertEqual(args[-1], "ceph:crsw/rs2/csac/green/2_final/a.csv")
+
+    def test_no_headers_no_flags(self):
+        with mock.patch("transfer._run", return_value=(0, "", "")) as run:
+            transfer.copyto("rclone", "a.csv", "ceph", "crsw", "k/a.csv")
+        self.assertNotIn("--header-upload", run.call_args[0][1])
+
+    def test_progress_path_carries_headers_too(self):
+        with mock.patch("transfer.subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            transfer.copyto("rclone", "a.csv", "ceph", "crsw", "k/a.csv",
+                            show_progress=True, headers=self.HEADERS)
+        argv = run.call_args[0][0]
+        self.assertIn("--header-upload", argv)
+        self.assertIn("x-amz-meta-dataset-uuid: 8f14e45f", argv)
+        self.assertEqual(argv[-1], "ceph:crsw/k/a.csv")
+
+
+class TestReadKey(unittest.TestCase):
+    KEY = "rs2/csac/green/2_final/dataset.meta.json"
+
+    def test_success_returns_text(self):
+        with mock.patch("transfer._run", return_value=(0, '{"a": 1}', "")) as run:
+            text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
+        self.assertEqual((text, err), ('{"a": 1}', None))
+        self.assertEqual(run.call_args[0][1][0], "cat")
+
+    def test_missing_object_is_absent(self):
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "error: object not found")):
+            text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
+        self.assertEqual((text, err), (None, "absent"))
+
+    def test_permission_failure_is_not_absence(self):
+        # Building on an unread record would silently drop its members.
+        with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
+            text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
+        self.assertEqual((text, err), (None, "permission"))
+
+    def test_network_failure_is_not_absence(self):
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "dial tcp: i/o timeout")):
+            self.assertEqual(
+                transfer.read_key("rclone", "ceph", "crsw", self.KEY),
+                (None, "unreachable"))
+
+
+class TestReadMetadata(unittest.TestCase):
+    def test_returns_label_dict(self):
+        listing = ('[{"Name":"a.csv","Size":10,"Metadata":'
+                   '{"dataset-uuid":"8f14e45f","sensitivity":"green"}}]')
+        with mock.patch("transfer._run", return_value=(0, listing, "")) as run:
+            metadata = transfer.read_metadata("rclone", "ceph", "crsw", "k/a.csv")
+        self.assertEqual(metadata["sensitivity"], "green")
+        self.assertIn("--metadata", run.call_args[0][1])
+
+    def test_missing_or_failed_is_none(self):
+        for result in ((1, "", "not found"), (0, "[]", ""),
+                       (0, "not json", ""), (0, '[{"Name":"a.csv"}]', "")):
+            with mock.patch("transfer._run", return_value=result):
+                self.assertIsNone(
+                    transfer.read_metadata("rclone", "ceph", "crsw", "k"),
+                    repr(result))
+
+
 class TestKeyExists(unittest.TestCase):
     def test_existing_key(self):
         listing = '[{"Path":"a.csv","Name":"a.csv","Size":10}]'
