@@ -169,12 +169,28 @@ def read_key(rclone: str, remote: str, bucket: str,
     Returns (text, None) on success, (None, "absent") when there is no
     object at `key`, and (None, <error kind>) for any other failure.
     Callers must never treat an error as absence — building on a record
-    that exists but could not be read would silently drop its members."""
-    code, out, err = _run(rclone, ["cat", "%s:%s/%s" % (remote, bucket, key)])
-    if code == 0:
-        return out, None
-    kind = classify_error(err)
-    return None, ("absent" if kind == "not_found" else kind)
+    that exists but could not be read would silently drop its members.
+
+    Existence is established with lsjson FIRST: `rclone cat` on a
+    missing object exits 0 with empty output (directory semantics), so
+    an empty cat alone cannot distinguish "no record" from "empty
+    record" - this bit a real first-deposit run."""
+    target = "%s:%s/%s" % (remote, bucket, key)
+    code, out, err = _run(rclone, ["lsjson", "--files-only", target])
+    if code != 0:
+        kind = classify_error(err)
+        return None, ("absent" if kind == "not_found" else kind)
+    try:
+        entries = json.loads(out)
+    except ValueError:
+        return None, "unknown"
+    if not entries:
+        return None, "absent"
+    code, out, err = _run(rclone, ["cat", target])
+    if code != 0:
+        kind = classify_error(err)
+        return None, ("absent" if kind == "not_found" else kind)
+    return out, None
 
 
 def read_metadata(rclone: str, remote: str, bucket: str,

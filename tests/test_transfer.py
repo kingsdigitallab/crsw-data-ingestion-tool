@@ -146,24 +146,55 @@ class TestCopytoHeaders(unittest.TestCase):
 
 class TestReadKey(unittest.TestCase):
     KEY = "rs2/csac/green/2_final/dataset.meta.json"
+    LISTED = '[{"Name":"dataset.meta.json","Size":8}]'
 
     def test_success_returns_text(self):
-        with mock.patch("transfer._run", return_value=(0, '{"a": 1}', "")) as run:
+        with mock.patch("transfer._run",
+                        side_effect=[(0, self.LISTED, ""),
+                                     (0, '{"a": 1}', "")]) as run:
             text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
         self.assertEqual((text, err), ('{"a": 1}', None))
-        self.assertEqual(run.call_args[0][1][0], "cat")
+        self.assertEqual(run.call_args_list[0][0][1][0], "lsjson")
+        self.assertEqual(run.call_args_list[1][0][1][0], "cat")
 
-    def test_missing_object_is_absent(self):
-        with mock.patch("transfer._run",
-                        return_value=(1, "", "error: object not found")):
+    def test_missing_object_is_absent_never_catted(self):
+        # Regression (2026-07-29 live run): rclone cat on a MISSING object
+        # exits 0 with empty output, which read as an unusable empty
+        # record. lsjson establishes existence first; no entry, no cat.
+        with mock.patch("transfer._run", return_value=(0, "[]", "")) as run:
             text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
         self.assertEqual((text, err), (None, "absent"))
+        self.assertEqual(run.call_count, 1)
+
+    def test_missing_prefix_is_absent(self):
+        with mock.patch("transfer._run",
+                        return_value=(1, "", "error: directory not found")):
+            text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
+        self.assertEqual((text, err), (None, "absent"))
+
+    def test_genuinely_empty_record_is_returned_not_absent(self):
+        # A 0-byte dataset.meta.json exists and must surface as
+        # unusable, not vanish as a first deposit.
+        listed = '[{"Name":"dataset.meta.json","Size":0}]'
+        with mock.patch("transfer._run",
+                        side_effect=[(0, listed, ""), (0, "", "")]):
+            self.assertEqual(
+                transfer.read_key("rclone", "ceph", "crsw", self.KEY),
+                ("", None))
 
     def test_permission_failure_is_not_absence(self):
         # Building on an unread record would silently drop its members.
         with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
             text, err = transfer.read_key("rclone", "ceph", "crsw", self.KEY)
         self.assertEqual((text, err), (None, "permission"))
+
+    def test_cat_failure_after_listing_is_not_absence(self):
+        with mock.patch("transfer._run",
+                        side_effect=[(0, self.LISTED, ""),
+                                     (1, "", "AccessDenied")]):
+            self.assertEqual(
+                transfer.read_key("rclone", "ceph", "crsw", self.KEY),
+                (None, "permission"))
 
     def test_network_failure_is_not_absence(self):
         with mock.patch("transfer._run",
