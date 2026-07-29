@@ -1,0 +1,156 @@
+"""dataset.schema.json is the contract artefact for CI and the future
+gateway; runtime validation is hand-rolled in record.py (stdlib
+constraint, r5 §7). These tests keep the two in step mechanically.
+
+The jsonschema-backed tests are dev-only: they skip cleanly when the
+package is absent, so a plain `python -m unittest` on a clean machine
+stays green and stdlib-only.
+"""
+import json
+import unittest
+from pathlib import Path
+
+import deposit
+import keys
+import record
+
+try:
+    import jsonschema
+    HAVE_JSONSCHEMA = True
+except ImportError:
+    HAVE_JSONSCHEMA = False
+
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "dataset.schema.json"
+SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def worked_example() -> dict:
+    """The spec §2 worked example, assembled through the real builder."""
+    return record.build_record(
+        dataset_uuid="8f14e45f-ceea-467f-a34e-9db1c153f0a1",
+        identifier="rs2/csac/green/2_final",
+        strand="rs2", domain="quant", project="csac", state="2_final",
+        sensitivity="green",
+        coverage_start="1989", coverage_end="2025-12-31",
+        version="3-0",
+        abstract=" ".join(["word"] * 150),
+        subjects=["armed-conflict", "forced-labour"],
+        vocabulary_version="2026-07-23",
+        creator="CSAC coding team",
+        source_type="archive",
+        source_detail="CSAC coding project, University of Nottingham",
+        licence="CC-BY-4.0", steward="Kevin Fahey",
+        depositors=["njakeman"],
+        created="2026-07-29T10:15:00Z", modified="2026-07-29T10:15:00Z",
+        derived_from="rs2/csac/amber/1_interim",
+        files=[
+            record.manifest_entry("csac-clean-2025.csv", "e3" * 32,
+                                  48211023, fmt="text/csv"),
+            record.manifest_entry("csac-annual-1989.csv", "ab" * 32, 220144,
+                                  coverage_start="1989-01-01",
+                                  coverage_end="1989-12-31", fmt="text/csv"),
+        ])
+
+
+class TestSchemaInStepWithCode(unittest.TestCase):
+    """Stdlib-only: constants in the schema must equal the code's."""
+
+    def test_enums_match_keys_constants(self):
+        props = SCHEMA["properties"]
+        self.assertEqual(tuple(props["strand"]["enum"]), keys.STRANDS)
+        self.assertEqual(tuple(props["state"]["enum"]), keys.STATES)
+        self.assertEqual(tuple(props["sensitivity"]["enum"]),
+                         keys.SENSITIVITIES)
+
+    def test_identifier_pattern_generated_from_keys_constants(self):
+        expected = "^(%s)/[a-z0-9-]+/(%s)/(%s)$" % (
+            "|".join(keys.STRANDS), "|".join(keys.SENSITIVITIES),
+            "|".join(keys.STATES))
+        self.assertEqual(SCHEMA["properties"]["identifier"]["pattern"],
+                         expected)
+
+    def test_source_type_enum_matches_cli(self):
+        cli_codes = [code for _, code, _ in deposit.SOURCE_TYPE_ENTRIES]
+        self.assertEqual(SCHEMA["properties"]["source_type"]["enum"],
+                         cli_codes)
+
+    def test_schema_version_const_matches_record(self):
+        self.assertEqual(SCHEMA["properties"]["schema_version"]["const"],
+                         record.SCHEMA_VERSION)
+
+    def test_required_matches_record_tiers(self):
+        self.assertEqual(set(SCHEMA["required"]), set(record.REQUIRED_FIELDS))
+
+    def test_every_field_tier_present_in_schema(self):
+        props = set(SCHEMA["properties"])
+        for field in (record.REQUIRED_FIELDS + record.RECOMMENDED_FIELDS
+                      + record.OPTIONAL_FIELDS):
+            self.assertIn(field, props)
+
+    def test_manifest_entry_fields_present_in_schema(self):
+        entry_props = set(SCHEMA["properties"]["files"]["items"]["properties"])
+        for field in record.MANIFEST_REQUIRED + record.MANIFEST_OPTIONAL:
+            self.assertIn(field, entry_props)
+        self.assertEqual(
+            SCHEMA["properties"]["files"]["items"]["required"],
+            list(record.MANIFEST_REQUIRED))
+
+    def test_reserved_path_refused_by_schema_text(self):
+        self.assertEqual(
+            SCHEMA["properties"]["files"]["items"]["properties"]["path"]
+            ["not"]["const"], keys.RECORD_FILENAME)
+
+
+@unittest.skipUnless(HAVE_JSONSCHEMA,
+                     "jsonschema not installed (dev-only test)")
+class TestEmittedRecordAgainstSchema(unittest.TestCase):
+    def test_worked_example_validates(self):
+        jsonschema.validate(worked_example(), SCHEMA)
+
+    def test_runtime_validator_accepts_the_same(self):
+        vocab_terms = {"armed-conflict", "forced-labour"}
+        errors, _ = record.validate_record(worked_example(), vocab_terms)
+        self.assertEqual(errors, [])
+
+
+@unittest.skipUnless(HAVE_JSONSCHEMA,
+                     "jsonschema not installed (dev-only test)")
+class TestRuntimeAtLeastAsStrict(unittest.TestCase):
+    """Anything the schema rejects, validate_record must reject too - the
+    runtime check may be stricter than the contract, never looser."""
+
+    VOCAB_TERMS = {"armed-conflict", "forced-labour"}
+
+    MUTATIONS = (
+        ("bad uuid", {"dataset_uuid": "not-a-uuid"}),
+        ("bad version", {"version": "v3"}),
+        ("empty subjects", {"subjects": []}),
+        ("empty files", {"files": []}),
+        ("bad checksum", {"files": [{"path": "a.csv",
+                                     "checksum_sha256": "zz", "bytes": 1}]}),
+        ("negative bytes", {"files": [{"path": "a.csv",
+                                       "checksum_sha256": "ab" * 32,
+                                       "bytes": -1}]}),
+        ("reserved path", {"files": [{"path": "dataset.meta.json",
+                                      "checksum_sha256": "ab" * 32,
+                                      "bytes": 1}]}),
+        ("bad strand", {"strand": "rs9"}),
+        ("missing created", {"created": None}),
+    )
+
+    def test_schema_invalid_is_runtime_invalid(self):
+        for label, overrides in self.MUTATIONS:
+            rec = worked_example()
+            for field, value in overrides.items():
+                if value is None:
+                    del rec[field]
+                else:
+                    rec[field] = value
+            with self.assertRaises(jsonschema.ValidationError, msg=label):
+                jsonschema.validate(rec, SCHEMA)
+            errors, _ = record.validate_record(rec, self.VOCAB_TERMS)
+            self.assertTrue(errors, "runtime accepted: %s" % label)
+
+
+if __name__ == "__main__":
+    unittest.main()
