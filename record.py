@@ -113,9 +113,16 @@ def mint_uuid() -> str:
     return str(uuid.uuid4())
 
 
+# A private MimeTypes instance uses only the built-in table. The module
+# default consults the Windows registry, which maps .csv to
+# application/vnd.ms-excel - the manifest would then differ by the
+# depositor's platform.
+_MIME_TYPES = mimetypes.MimeTypes()
+
+
 def guess_format(filename: str) -> Optional[str]:
     """MIME type from the filename, or None — omitted, never guessed (r5 §2)."""
-    return mimetypes.guess_type(filename)[0]
+    return _MIME_TYPES.guess_type(filename)[0]
 
 
 # --- coverage envelope -------------------------------------------------
