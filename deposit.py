@@ -3,7 +3,7 @@
 
 ALL user interaction lives in this file: argparse, prompting, preview,
 confirmation, progress, and translation of structured errors into
-human-readable messages. The logic modules (keys, sidecar, vocab,
+human-readable messages. The logic modules (keys, record, vocab,
 transfer) have no interactive I/O so the future web gateway can import
 them unchanged."""
 import argparse
@@ -90,11 +90,14 @@ MESSAGES = {
         "catalogue). To propose an addition, open an issue on the vocabulary\n"
         "repository or ask your domain steward. The numbered listing above\n"
         "shows every valid term."),
-    "collision": (
-        "An object already exists at {key}.\n"
-        "Depositing will create a NEW VERSION of that object (the old version\n"
-        "stays recoverable via bucket versioning). It will not create a\n"
-        "second file."),
+    "reserved_name": (
+        "{name} is a reserved name: the tool writes each dataset's record\n"
+        "there. Rename the file and re-run."),
+    "record_invalid": (
+        "The assembled dataset record failed its own validation, so it was\n"
+        "NOT written. Files that already uploaded are fine and a re-run is\n"
+        "safe. This is a tool problem, not yours: re-run with --verbose and\n"
+        "send the output to eResearch."),
 }
 
 
@@ -328,53 +331,97 @@ def resolve_files(patterns: List[str]) -> Tuple[List[Path], List[str]]:
 
 
 def plan_deposits(files: List[Path], meta: Dict, per_file: Dict) -> List[Dict]:
-    """Pure planning: one dict per file with its key, sidecar key and fields.
-    per_file maps filename -> {field: value} overrides (coverage/abstract)."""
+    """Pure planning: one dict per file with its object key and manifest
+    overrides. per_file maps filename -> coverage overrides (r5 Q5).
+    Raises ValueError when two files would land at the same key - that
+    would be a silent overwrite inside one batch."""
     plans = []
+    seen = {}
     for path in files:
-        fields = dict(
-            strand=meta["strand"], domain=meta["domain"],
-            project=meta["project"], state=meta["state"],
-            sensitivity=meta["sensitivity"],
-            coverage_start=meta["coverage_start"],
-            coverage_end=meta["coverage_end"],
-            version=meta["version"], abstract=meta["abstract"],
-            subjects=list(meta["subjects"]),
-            vocabulary_version=meta.get("vocabulary_version"),
-            source_type=meta.get("source_type"),
-            source_detail=meta.get("source_detail"),
-            derived_from=meta.get("derived_from"),
-            licence=meta.get("licence"), steward=meta.get("steward"),
-        )
-        fields.update(per_file.get(path.name, {}))
-        key = keys.build_key(fields["strand"], fields["project"],
-                             fields["sensitivity"], fields["state"], path.name)
-        fields["object_key"] = key
+        key = keys.build_key(meta["strand"], meta["project"],
+                             meta["sensitivity"], meta["state"], path.name)
+        if key in seen:
+            raise ValueError(
+                "%s and %s would land at the same key (%s) - rename one "
+                "and re-run" % (seen[key], path, key))
+        seen[key] = path
         plans.append({"path": path, "key": key,
-                      "sidecar_key": keys.sidecar_key(key), "fields": fields})
+                      "entry_overrides": dict(per_file.get(path.name, {}))})
     return plans
 
 
-def preview_lines(plans: List[Dict], limit: int = 3) -> List[str]:
-    lines = []
+def object_name(plan: Dict) -> str:
+    """The deposited filename: the key's last segment (renames included)."""
+    return plan["key"].rsplit("/", 1)[-1]
+
+
+def prepare_entries(plans: List[Dict]) -> List[Dict]:
+    """Checksum and stat every file into its manifest entry (r5 §2),
+    aligned with `plans` by index. Reads local files; never uploads."""
+    entries = []
+    for plan in plans:
+        name = object_name(plan)
+        overrides = plan.get("entry_overrides", {})
+        entries.append(record.manifest_entry(
+            name,
+            record.sha256_file(plan["path"]),
+            plan["path"].stat().st_size,
+            coverage_start=overrides.get("coverage_start"),
+            coverage_end=overrides.get("coverage_end"),
+            fmt=record.guess_format(name)))
+    return entries
+
+
+def classify_members(entries: List[Dict], existing: Optional[Dict]):
+    """(added, updated, unchanged) paths for the batch against the
+    existing record, if any (r5 Q4). Drives the preview and the report."""
+    existing_files = existing.get("files") if existing else None
+    _, added, updated = record.merge_manifest(existing_files, entries)
+    unchanged = sorted(record.unchanged_paths(existing_files, entries))
+    return added, updated, unchanged
+
+
+def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
+                  classification, limit: int = 3) -> List[str]:
+    """Dataset-first preview: the record, the member classification, then
+    up to `limit` member keys. Overwrites are stated here - there is no
+    separate collision prompt; the point-of-no-return confirmation covers
+    the whole plan (r5 Q4)."""
+    added, updated, unchanged = classification
+    prefix = keys.dataset_prefix(meta["strand"], meta["project"],
+                                 meta["sensitivity"], meta["state"])
+    lines = ["  dataset %s (version %s)"
+             % (style(prefix, "cyan"), meta.get("version"))]
+    record_key = prefix + "/" + keys.RECORD_FILENAME
+    if existing:
+        before = len(existing.get("files", []))
+        lines.append("    record: %s  (updates existing, %d -> %d files)"
+                     % (record_key, before, before + len(added)))
+    else:
+        lines.append("    record: %s  (first deposit)" % record_key)
+    lines.append("    members: %d added, %d updated, %d unchanged"
+                 % (len(added), len(updated), len(unchanged)))
     for plan in plans[:limit]:
-        f = plan["fields"]
-        lines.append("  %s" % style(plan["key"], "cyan"))
-        lines.append("    sidecar: %s" % plan["sidecar_key"])
-        if f:
-            lines.append("    coverage %s to %s | %s | subjects: %s" % (
-                f.get("coverage_start"), f.get("coverage_end"),
-                f.get("version"), ", ".join(f.get("subjects", []))))
+        name = object_name(plan)
+        note = ""
+        if name in updated:
+            note = "  (new version; previous kept by bucket versioning)"
+        elif name in unchanged:
+            note = "  (unchanged - upload will be skipped)"
+        lines.append("      %s%s" % (plan["key"], note))
     if len(plans) > limit:
-        lines.append("  ... and %d more" % (len(plans) - limit))
+        lines.append("      ... and %d more" % (len(plans) - limit))
+    lines.append("    coverage %s to %s | subjects: %s" % (
+        meta.get("coverage_start"), meta.get("coverage_end"),
+        ", ".join(meta.get("subjects", []))))
     return lines
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="deposit.py",
-        description="Deposit research files into CRSW shared storage with "
-                    "sidecar metadata.")
+        description="Deposit research files into CRSW shared storage, "
+                    "described by one dataset record per prefix.")
     p.add_argument("files", nargs="+", metavar="FILE_OR_GLOB")
     p.add_argument("--strand", choices=keys.STRANDS)
     p.add_argument("--project")
@@ -382,7 +429,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--state", choices=keys.STATES)
     p.add_argument("--sensitivity")  # validated by hand so 'red' gets OUR message
     p.add_argument("--dry-run", action="store_true",
-                   help="preview keys and sidecars, upload nothing")
+                   help="preview keys and the dataset record, upload nothing")
     p.add_argument("--remote", default=None,
                    help="rclone remote name (default: ceph, or your saved config)")
     p.add_argument("--bucket", default=None,
@@ -671,7 +718,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
     abstract = input("> ").strip()
     w = record.abstract_warning(abstract)
     if w:
-        warn(w + " - recorded anyway; you can revise the sidecar later.")
+        warn(w + " - recorded anyway; you can revise the record later.")
     meta["abstract"] = abstract
 
     default_licence = "internal-only" if meta["sensitivity"] == "amber" else "CC-BY-4.0"
@@ -702,11 +749,14 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
 
 
 def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
-    """Ask once whether shared abstract/dates apply to all; per-file prompts
-    if not. Coverage dates are the most likely to differ (spec §7)."""
+    """Ask once whether the shared coverage dates apply to all; per-file
+    prompts if not. Overrides land in the manifest entries; the dataset
+    envelope is then computed, not asked for (r5 Q5). The per-file
+    abstract retired with the per-file sidecar - one dataset, one
+    abstract."""
     if len(files) <= 1:
         return {}
-    if ask_yes_no("Apply the same abstract and coverage dates to all %d files?"
+    if ask_yes_no("Apply the same coverage dates to all %d files?"
                   % len(files), default_no=False):
         return {}
     overrides = {}
@@ -724,10 +774,6 @@ def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
                 if value != meta[field]:
                     o[field] = value
                 break
-        new_abstract = input(
-            "  Abstract (Enter to keep the shared one): ").strip()
-        if new_abstract:
-            o["abstract"] = new_abstract
         if o:
             overrides[path.name] = o
     return overrides
@@ -796,87 +842,178 @@ def append_log(line: str) -> None:
         pass
 
 
-def perform_deposits(rclone, args, plans, depositor) -> int:
-    """Upload each plan: checksum -> sidecar to temp -> data -> sidecar ->
-    verify. Not atomic (spec §7): stop on first failure and report exactly
-    what landed. Temp files always cleaned up (TemporaryDirectory)."""
+def _verify_stored_size(rclone, args, key: str, expected: int) -> None:
+    """Size comparison, never checksum-vs-ETag (r2 §0)."""
+    entry = transfer.stat_key(rclone, args.remote, args.bucket, key)
+    if entry is None:
+        raise transfer.TransferError("verify_failed", "no object at %s" % key)
+    if entry.get("Size") != expected:
+        raise transfer.TransferError(
+            "verify_failed",
+            "size mismatch at %s: expected %d, stored %s"
+            % (key, expected, entry.get("Size")))
+
+
+def perform_deposits(rclone, args, plans, meta, entries, existing,
+                     depositor, vocab_dict) -> int:
+    """Members first, the record last (r5 Q4): the record's presence marks
+    a complete deposit, so an interrupted batch leaves the prefix visibly
+    incomplete instead of describing files that never landed. Not atomic
+    (spec §7): stop on first failure and report exactly what landed.
+    `entries` are the precomputed manifest entries, aligned with `plans`;
+    `existing` is the parsed current record or None (first deposit)."""
+    dataset_uuid = (existing["dataset_uuid"] if existing
+                    else record.mint_uuid())
+    existing_files = existing.get("files") if existing else None
+    skip = record.unchanged_paths(existing_files, entries)
+    base_labels = {
+        "x-amz-meta-dataset-uuid": dataset_uuid,
+        "x-amz-meta-sensitivity": meta["sensitivity"],
+        "x-amz-meta-depositor": depositor,
+    }
+    prefix = keys.dataset_prefix(meta["strand"], meta["project"],
+                                 meta["sensitivity"], meta["state"])
+
     done = []
-    failed = None      # (plan, message)
+    skipped = []
+    failed = None      # (stage name, message)
     interrupted = False
+    record_written = False
+    current = "planning"
 
     with tempfile.TemporaryDirectory(prefix="crsw-deposit-") as tmp:
         try:
-            for i, plan in enumerate(plans, 1):
+            for i, (plan, entry) in enumerate(zip(plans, entries), 1):
+                current = plan["path"].name
                 say("\n[%d/%d] %s" % (i, len(plans), plan["path"].name))
-
-                say("  computing checksum...")
-                checksum = record.sha256_file(plan["path"])
-
-                fields = dict(plan["fields"])
-                fields["checksum_sha256"] = checksum
-                fields["depositor"] = depositor
-                fields["deposited"] = record.utc_now_iso()
-                sc = record.build_sidecar(**fields)
-
-                sidecar_path = Path(tmp) / (plan["path"].name + ".meta.json")
-                sidecar_path.write_text(record.sidecar_json(sc), encoding="utf-8")
-
+                if entry["path"] in skip:
+                    say("  skipped (unchanged): %s" % plan["key"])
+                    skipped.append(plan)
+                    continue
                 size = plan["path"].stat().st_size
                 show = size >= PROGRESS_THRESHOLD and sys.stdout.isatty()
-                say("  uploading data (%s)..." % human_size(size))
+                labels = dict(base_labels)
+                labels["x-amz-meta-checksum-sha256"] = entry["checksum_sha256"]
+                say("  uploading (%s)..." % human_size(size))
                 transfer.copyto(rclone, plan["path"], args.remote, args.bucket,
-                                plan["key"], show_progress=show)
-                say("  uploading record...")
-                transfer.copyto(rclone, sidecar_path, args.remote, args.bucket,
-                                plan["sidecar_key"])
-
+                                plan["key"], show_progress=show,
+                                headers=labels)
                 say("  verifying...")
-                for key, local in ((plan["key"], plan["path"]),
-                                   (plan["sidecar_key"], sidecar_path)):
-                    entry = transfer.stat_key(rclone, args.remote,
-                                              args.bucket, key)
-                    if entry is None:
-                        raise transfer.TransferError(
-                            "verify_failed", "no object at %s" % key)
-                    expected = local.stat().st_size
-                    if entry.get("Size") != expected:
-                        raise transfer.TransferError(
-                            "verify_failed",
-                            "size mismatch at %s: local %d, stored %s"
-                            % (key, expected, entry.get("Size")))
-
+                _verify_stored_size(rclone, args, plan["key"], size)
                 append_log("%s\t%s\t%s\t%s" % (
-                    record.utc_now_iso(), plan["key"], checksum, depositor))
+                    record.utc_now_iso(), plan["key"],
+                    entry["checksum_sha256"], depositor))
                 done.append(plan)
                 say(style("  done: %s" % plan["key"], "green"))
+
+            # All members are in place - assemble and write the record.
+            union, added, updated = record.merge_manifest(existing_files,
+                                                          entries)
+            now = record.utc_now_iso()
+            pairs = [(e.get("coverage_start"), e.get("coverage_end"))
+                     for e in union]
+            if existing:
+                # The old envelope keeps containment for legacy members
+                # whose per-file coverage was never recorded.
+                pairs.append((existing.get("coverage_start"),
+                              existing.get("coverage_end")))
+            cov_start, cov_end = record.widen(
+                (meta["coverage_start"], meta["coverage_end"]), pairs)
+            rec = record.build_record(
+                dataset_uuid=dataset_uuid,
+                identifier=prefix,
+                strand=meta["strand"], domain=meta["domain"],
+                project=meta["project"], state=meta["state"],
+                sensitivity=meta["sensitivity"],
+                coverage_start=cov_start, coverage_end=cov_end,
+                version=meta["version"], abstract=meta["abstract"],
+                subjects=list(meta["subjects"]), files=union,
+                created=(existing or {}).get("created") or now,
+                modified=now,
+                vocabulary_version=meta.get("vocabulary_version"),
+                creator=meta.get("creator"),
+                source_type=meta.get("source_type"),
+                source_detail=meta.get("source_detail"),
+                licence=meta.get("licence"), steward=meta.get("steward"),
+                depositors=record.append_depositor(
+                    (existing or {}).get("depositors"), depositor),
+                derived_from=meta.get("derived_from"))
+            errors, _ = record.validate_record(
+                rec, vocab.all_terms(vocab_dict),
+                vocab.domain_codes(vocab_dict))
+            if errors:
+                raise transfer.TransferError("record_invalid",
+                                             "; ".join(errors))
+
+            current = keys.RECORD_FILENAME
+            say("\nwriting dataset record...")
+            record_path = Path(tmp) / keys.RECORD_FILENAME
+            record_path.write_text(record.record_json(rec), encoding="utf-8")
+            record_key = prefix + "/" + keys.RECORD_FILENAME
+            labels = dict(base_labels)
+            labels["x-amz-meta-checksum-sha256"] = record.sha256_file(record_path)
+            transfer.copyto(rclone, record_path, args.remote, args.bucket,
+                            record_key, headers=labels)
+            text, err = transfer.read_key(rclone, args.remote, args.bucket,
+                                          record_key)
+            if text is None:
+                raise transfer.TransferError(
+                    "verify_failed", "record re-read failed: %s" % err)
+            try:
+                record.parse_record(text)
+            except record.RecordParseError as e:
+                raise transfer.TransferError(
+                    "verify_failed", "record round-trip: %s" % e)
+            append_log("%s\t%s\t%s\t%s" % (
+                record.utc_now_iso(), record_key,
+                labels["x-amz-meta-checksum-sha256"], depositor))
+            record_written = True
+
+            # Completion check (r5 Q4): every manifest entry - including
+            # skipped and legacy members - exists at its key at size.
+            current = "manifest verification"
+            say("verifying the manifest against the store...")
+            for entry in union:
+                _verify_stored_size(rclone, args,
+                                    prefix + "/" + entry["path"],
+                                    entry["bytes"])
         except transfer.TransferError as e:
-            failed = (plan, MESSAGES.get(e.kind, MESSAGES["unknown"])
+            failed = (current, MESSAGES.get(e.kind, MESSAGES["unknown"])
                       + _detail(args, e))
         except OSError as e:
-            failed = (plan, "Could not read %s: %s" % (plan["path"], e))
+            failed = (current, "Could not read %s: %s" % (current, e))
         except KeyboardInterrupt:
             interrupted = True
 
     # ------- report (spec §7 step 10): what landed, what didn't, what next.
     say("\n" + "=" * 60)
     if done:
-        say("Deposited %d of %d file(s):" % (len(done), len(plans)))
+        say("Uploaded %d file(s):" % len(done))
         for plan in done:
             say("  %s" % plan["key"])
-    remaining = [p for p in plans if p not in done]
+    if skipped:
+        say("Skipped %d unchanged file(s)." % len(skipped))
+    remaining = [p for p in plans
+                 if p not in done and p not in skipped]
     if failed is not None:
-        bad_plan, message = failed
-        say("\nFAILED on %s:" % bad_plan["path"].name)
+        name, message = failed
+        say("\nFAILED on %s:" % name)
         say(message)
     if interrupted:
         say("\nInterrupted.")
-    if remaining and (failed is not None or interrupted):
-        say("\nNot deposited: %s" % ", ".join(p["path"].name for p in remaining))
-        say("Re-running the same command is safe: object keys are "
-            "deterministic, so completed files are simply overwritten as a "
-            "new version - nothing is duplicated.")
+    if (failed is not None or interrupted) and not record_written:
+        if remaining:
+            say("\nNot deposited: %s"
+                % ", ".join(p["path"].name for p in remaining))
+        say("No record was written - the dataset record still describes "
+            "the last complete deposit. Re-running the same command is "
+            "safe: finished files are skipped and the record is written "
+            "once everything is in place.")
     if failed is None and not interrupted:
-        say(style("\nAll %d file(s) deposited successfully." % len(done), "green"))
+        say(style("\ndataset %s %s: %d file(s), %d added, %d updated, "
+                  "%d unchanged."
+                  % (meta["project"], meta["version"], len(union),
+                     len(added), len(updated), len(skipped)), "green"))
         return 0
     return 130 if interrupted else 1
 
@@ -910,12 +1047,14 @@ def main(argv=None) -> int:
     say("Target: %s  (%s)"
         % (style("%s:%s" % (args.remote, args.bucket), "bold"), detail))
 
-    # Local checks first: files readable?
+    # Local checks first: files readable? No reserved names?
     files, problems = resolve_files(args.files)
     for p in problems:
         warn(p)
     if not files:
         return fail("No files to deposit.")
+    if any(f.name == keys.RECORD_FILENAME for f in files):
+        return fail(MESSAGES["reserved_name"].format(name=keys.RECORD_FILENAME))
     total = sum(f.stat().st_size for f in files)
     say("%d file(s), %s total." % (len(files), human_size(total)))
 
@@ -964,32 +1103,46 @@ def main(argv=None) -> int:
         return 0
 
     # Apply accepted object-name corrections to planning only (local files
-    # are never touched).
-    plans = plan_deposits(files, meta, per_file)
-    for plan in plans:
-        if plan["path"].name in renames:
+    # are never touched). A rename into the reserved record name, or into
+    # a key another batch file already claims, is refused, not crashed.
+    try:
+        plans = plan_deposits(files, meta, per_file)
+        seen = {plan["key"]: plan["path"] for plan in plans}
+        for plan in plans:
+            if plan["path"].name not in renames:
+                continue
             new_name = renames[plan["path"].name]
-            plan["key"] = keys.build_key(
+            del seen[plan["key"]]
+            new_key = keys.build_key(
                 meta["strand"], meta["project"], meta["sensitivity"],
                 meta["state"], new_name)
-            plan["sidecar_key"] = keys.sidecar_key(plan["key"])
-            plan["fields"]["object_key"] = plan["key"]
+            if new_key in seen:
+                raise ValueError(
+                    "%s and %s would land at the same key (%s) - rename "
+                    "one and re-run" % (seen[new_key], plan["path"], new_key))
+            seen[new_key] = plan["path"]
+            plan["key"] = new_key
+    except ValueError as e:
+        return fail(str(e))
 
     # (Write permission was already probed on the full deposit prefix
-    # during prompt_metadata - spec §8: fail early.)
+    # during prompt_metadata - spec §8: fail early. Overwrites need no
+    # separate prompt: re-runs are idempotent by design (r5 Q4) and the
+    # preview labels updated members before the final confirmation.)
 
-    # Collision check (§4): overwriting creates a new version, say so.
-    if remote_ok:
-        for plan in plans:
-            if transfer.key_exists(rclone, args.remote, args.bucket, plan["key"]):
-                say("\n" + MESSAGES["collision"].format(key=plan["key"]))
-                if not args.dry_run and not ask_yes_no(
-                        "Deposit a new version of %s?" % plan["path"].name):
-                    say("Nothing deposited.")
-                    return 0
+    # existing dataset record: loaded during prompt_metadata from r5 step 5;
+    # None until then means every deposit previews as a first deposit.
+    existing = None
 
-    say("\nPlanned deposits:")
-    for line in preview_lines(plans):
+    say("\nComputing checksums for the manifest...")
+    try:
+        entries = prepare_entries(plans)
+    except OSError as e:
+        return fail("Could not read a file while checksumming: %s" % e)
+    classification = classify_members(entries, existing)
+
+    say("\nPlanned deposit:")
+    for line in preview_lines(plans, meta, existing, classification):
         say(line)
 
     if args.dry_run:
@@ -1001,7 +1154,8 @@ def main(argv=None) -> int:
         say("Nothing deposited.")
         return 0
 
-    return perform_deposits(rclone, args, plans, record.default_depositor())
+    return perform_deposits(rclone, args, plans, meta, entries, existing,
+                            record.default_depositor(), vocab_dict)
 
 
 if __name__ == "__main__":

@@ -125,9 +125,3 @@ def build_key(strand: str, project: str, sensitivity: str, state: str,
         raise ValueError(
             "%r is a reserved name - the dataset record lives there" % filename)
     return "/".join((strand, project, sensitivity, state, filename))
-
-
-def sidecar_key(data_key: str) -> str:
-    """The sidecar key is always the data key + '.meta.json'.
-    Legacy (r5 retires per-file sidecars); deleted with the v0.3 code."""
-    return data_key + ".meta.json"

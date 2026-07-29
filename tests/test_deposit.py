@@ -27,52 +27,121 @@ class TestHumanSize(unittest.TestCase):
         self.assertEqual(deposit.human_size(5 * 1024 ** 3), "5.0 GB")
 
 
-class TestPlanDeposits(unittest.TestCase):
-    def test_builds_keys_and_sidecar_fields(self):
-        meta = dict(strand="rs2", project="csac", state="2_final",
-                    sensitivity="green", domain="quant", version="v1-0",
-                    subjects=["armed-conflict"], abstract="a " * 120,
-                    coverage_start="1989", coverage_end="2025",
-                    vocabulary_version="2026-07-23")
-        plans = deposit.plan_deposits([Path("data/x.csv")], meta, {})
-        self.assertEqual(plans[0]["key"], "rs2/csac/green/2_final/x.csv")
-        self.assertEqual(plans[0]["sidecar_key"],
-                         "rs2/csac/green/2_final/x.csv.meta.json")
-        self.assertEqual(plans[0]["fields"]["object_key"], plans[0]["key"])
+_META = dict(strand="rs2", project="csac", state="2_final",
+             sensitivity="green", domain="quant", version="1-0",
+             subjects=["armed-conflict"], abstract="a " * 120,
+             coverage_start="1989", coverage_end="2025",
+             source_type="archive", source_detail="test fixture",
+             licence="CC-BY-4.0", vocabulary_version="2026-07-23")
 
-    def test_per_file_overrides_take_precedence(self):
-        meta = dict(strand="rs2", project="csac", state="2_final",
-                    sensitivity="green", domain="quant", version="v1-0",
-                    subjects=["armed-conflict"], abstract="a " * 120,
-                    coverage_start="1989", coverage_end="2025",
-                    vocabulary_version="2026-07-23")
+_VOCAB = {"vocabulary_version": "2026-07-23",
+          "domains": [{"code": "quant", "label": "Quantitative",
+                       "steward": "Tester"}],
+          "facets": {"themes": ["armed-conflict"]}}
+
+
+class TestPlanDeposits(unittest.TestCase):
+    def test_builds_keys_and_overrides(self):
         per_file = {"x.csv": {"coverage_start": "2001"}}
-        plans = deposit.plan_deposits([Path("x.csv")], meta, per_file)
-        self.assertEqual(plans[0]["fields"]["coverage_start"], "2001")
+        plans = deposit.plan_deposits([Path("data/x.csv")], dict(_META),
+                                      per_file)
+        self.assertEqual(plans[0]["key"], "rs2/csac/green/2_final/x.csv")
+        self.assertEqual(plans[0]["entry_overrides"],
+                         {"coverage_start": "2001"})
+
+    def test_duplicate_keys_refused(self):
+        # Same filename from two directories would silently overwrite.
+        with self.assertRaises(ValueError):
+            deposit.plan_deposits([Path("a/x.csv"), Path("b/x.csv")],
+                                  dict(_META), {})
+
+
+class TestPrepareEntries(unittest.TestCase):
+    def test_checksums_and_formats(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"
+            p.write_text("1,2,3")
+            plans = deposit.plan_deposits([p], dict(_META), {})
+            entries = deposit.prepare_entries(plans)
+        self.assertEqual(entries[0]["path"], "x.csv")
+        self.assertEqual(entries[0]["bytes"], 5)
+        self.assertEqual(len(entries[0]["checksum_sha256"]), 64)
+        self.assertEqual(entries[0]["format"], "text/csv")
+
+    def test_entry_uses_renamed_object_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "bad name.csv"
+            p.write_text("x")
+            plan = {"path": p, "key": "rs2/csac/green/2_final/bad-name.csv",
+                    "entry_overrides": {"coverage_start": "1990"}}
+            entries = deposit.prepare_entries([plan])
+        self.assertEqual(entries[0]["path"], "bad-name.csv")
+        self.assertEqual(entries[0]["coverage_start"], "1990")
+
+
+class TestClassifyMembers(unittest.TestCase):
+    ENTRY = {"path": "a.csv", "checksum_sha256": "ab" * 32, "bytes": 1}
+
+    def test_first_deposit_all_added(self):
+        added, updated, unchanged = deposit.classify_members([self.ENTRY], None)
+        self.assertEqual((added, updated, unchanged), (["a.csv"], [], []))
+
+    def test_against_existing_record(self):
+        existing = {"files": [dict(self.ENTRY),
+                              {"path": "b.csv", "checksum_sha256": "cd" * 32,
+                               "bytes": 2}]}
+        batch = [dict(self.ENTRY),
+                 {"path": "b.csv", "checksum_sha256": "ee" * 32, "bytes": 2},
+                 {"path": "c.csv", "checksum_sha256": "ab" * 32, "bytes": 3}]
+        added, updated, unchanged = deposit.classify_members(batch, existing)
+        self.assertEqual(added, ["c.csv"])
+        self.assertEqual(updated, ["b.csv"])
+        self.assertEqual(unchanged, ["a.csv"])
 
 
 class TestPreview(unittest.TestCase):
-    def test_truncates_after_three(self):
-        plans = [{"path": Path("f%d.csv" % i),
-                  "key": "rs2/p/green/0_raw/f%d.csv" % i,
-                  "sidecar_key": "rs2/p/green/0_raw/f%d.csv.meta.json" % i,
-                  "fields": {}} for i in range(5)]
-        lines = deposit.preview_lines(plans)
-        text = "\n".join(lines)
+    def _plans(self, n):
+        return [{"path": Path("f%d.csv" % i),
+                 "key": "rs2/csac/green/2_final/f%d.csv" % i,
+                 "entry_overrides": {}} for i in range(n)]
+
+    def test_first_deposit_shape_and_truncation(self):
+        plans = self._plans(5)
+        classification = (["f%d.csv" % i for i in range(5)], [], [])
+        text = "\n".join(deposit.preview_lines(plans, dict(_META), None,
+                                               classification))
+        self.assertIn("rs2/csac/green/2_final/dataset.meta.json", text)
+        self.assertIn("first deposit", text)
+        self.assertIn("5 added, 0 updated, 0 unchanged", text)
         self.assertIn("f0.csv", text)
         self.assertIn("2 more", text)
         self.assertNotIn("f4.csv", text)
 
     def test_preview_shows_sensitivity_before_state(self):
         # r3: the preview must show the reordered key the upload will use.
-        meta = dict(strand="rs2", project="csac", state="2_final",
-                    sensitivity="green", domain="quant", version="v1-0",
-                    subjects=["armed-conflict"], abstract="a " * 120,
-                    coverage_start="1989", coverage_end="2025",
-                    vocabulary_version="2026-07-23")
-        plans = deposit.plan_deposits([Path("x.csv")], meta, {})
-        text = "\n".join(deposit.preview_lines(plans))
-        self.assertIn("rs2/csac/green/2_final/x.csv", text)
+        plans = self._plans(1)
+        text = "\n".join(deposit.preview_lines(plans, dict(_META), None,
+                                               (["f0.csv"], [], [])))
+        self.assertIn("rs2/csac/green/2_final/f0.csv", text)
+
+    def test_existing_record_counts_and_overwrite_note(self):
+        plans = self._plans(2)
+        existing = {"files": [{"path": "old.csv",
+                               "checksum_sha256": "ab" * 32, "bytes": 1}]}
+        classification = (["f1.csv"], ["f0.csv"], [])
+        text = "\n".join(deposit.preview_lines(plans, dict(_META), existing,
+                                               classification))
+        self.assertIn("updates existing, 1 -> 2 files", text)
+        self.assertIn("1 added, 1 updated, 0 unchanged", text)
+        self.assertIn("new version; previous kept by bucket versioning", text)
+
+    def test_unchanged_members_labelled_skipped(self):
+        plans = self._plans(1)
+        existing = {"files": [{"path": "f0.csv",
+                               "checksum_sha256": "ab" * 32, "bytes": 1}]}
+        text = "\n".join(deposit.preview_lines(plans, dict(_META), existing,
+                                               ([], [], ["f0.csv"])))
+        self.assertIn("unchanged - upload will be skipped", text)
 
 
 class TestParser(unittest.TestCase):
@@ -91,15 +160,8 @@ class TestParser(unittest.TestCase):
 
 
 def _plan_for(path: Path):
-    key = "rs2/csac/green/2_final/" + path.name
-    return {"path": path, "key": key, "sidecar_key": key + ".meta.json",
-            "fields": dict(object_key=key, strand="rs2", domain="quant",
-                           project="csac", state="2_final", sensitivity="green",
-                           coverage_start="1989", coverage_end="2025",
-                           version="1-0", abstract="a " * 120,
-                           subjects=["armed-conflict"],
-                           source_type="archive", source_detail="test fixture",
-                           vocabulary_version="2026-07-23")}
+    return {"path": path, "key": "rs2/csac/green/2_final/" + path.name,
+            "entry_overrides": {}}
 
 
 class _Args:
@@ -109,22 +171,51 @@ class _Args:
     dry_run = False
 
 
-def _recording_copyto(uploaded, fail_on=None, exc=None):
-    """copyto mock that records the true size of each 'uploaded' file."""
-    def copyto(rclone, lp, rem, b, key, **kw):
-        if fail_on and fail_on in key:
-            raise exc
-        uploaded[key] = Path(lp).stat().st_size
-    return copyto
+RECORD_KEY = "rs2/csac/green/2_final/dataset.meta.json"
 
 
-def _stat_matching(uploaded):
-    """stat_key mock returning the true size of whatever copyto uploaded."""
-    def stat(rclone, remote, bucket, key):
-        if key in uploaded:
-            return {"Name": key.rsplit("/", 1)[-1], "Size": uploaded[key]}
+class _Store:
+    """Fake bucket: copyto records sizes/labels/order, stat_key answers
+    from what was 'uploaded' (or seeded), read_key returns the record."""
+
+    def __init__(self, seed_sizes=None):
+        self.sizes = dict(seed_sizes or {})
+        self.order = []
+        self.labels = {}
+        self.texts = {}
+        self.fail_on = None
+        self.exc = None
+
+    def copyto(self, rclone, lp, remote, bucket, key, show_progress=False,
+               headers=None):
+        if self.fail_on and self.fail_on in key:
+            raise self.exc
+        self.order.append(key)
+        self.sizes[key] = Path(lp).stat().st_size
+        self.labels[key] = dict(headers or {})
+        if key.endswith("dataset.meta.json"):
+            self.texts[key] = Path(lp).read_text(encoding="utf-8")
+
+    def stat_key(self, rclone, remote, bucket, key):
+        if key in self.sizes:
+            return {"Name": key.rsplit("/", 1)[-1], "Size": self.sizes[key]}
         return None
-    return stat
+
+    def read_key(self, rclone, remote, bucket, key):
+        if key in self.texts:
+            return self.texts[key], None
+        return None, "absent"
+
+    def patches(self):
+        return (mock.patch("deposit.transfer.copyto", side_effect=self.copyto),
+                mock.patch("deposit.transfer.stat_key",
+                           side_effect=self.stat_key),
+                mock.patch("deposit.transfer.read_key",
+                           side_effect=self.read_key))
+
+    def record(self):
+        import json
+        return json.loads(self.texts[RECORD_KEY])
 
 
 class TestPerformDeposits(unittest.TestCase):
@@ -138,89 +229,158 @@ class TestPerformDeposits(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_data_uploaded_before_sidecar(self):
-        uploaded = {}
-        order = []
-
-        def copyto(rclone, lp, rem, b, key, **kw):
-            order.append(key)
-            uploaded[key] = Path(lp).stat().st_size
-
-        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.stat_key",
-                        side_effect=_stat_matching(uploaded)), \
-             mock.patch("deposit.append_log"):
-            code = deposit.perform_deposits("rclone", _Args(),
-                                            [_plan_for(self.f1)], "tester")
-        self.assertEqual(code, 0)
-        self.assertEqual(len(order), 2)
-        self.assertTrue(order[0].endswith("one.csv"))
-        self.assertTrue(order[1].endswith("one.csv.meta.json"))
-
-    def test_failure_stops_batch_and_reports(self):
-        uploaded = {}
-        copyto = _recording_copyto(
-            uploaded, fail_on="two.csv",
-            exc=deposit.transfer.TransferError("unreachable", "boom"))
-        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.stat_key",
-                        side_effect=_stat_matching(uploaded)), \
-             mock.patch("deposit.append_log"):
+    def _perform(self, store, files, existing=None, depositor="tester"):
+        plans = [_plan_for(f) for f in files]
+        entries = deposit.prepare_entries(plans)
+        p1, p2, p3 = store.patches()
+        with p1, p2, p3, mock.patch("deposit.append_log") as log:
             code = deposit.perform_deposits(
-                "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")
+                "rclone", _Args(), plans, dict(_META), entries, existing,
+                depositor, _VOCAB)
+        return code, log
+
+    def test_members_uploaded_before_record_with_labels(self):
+        store = _Store()
+        code, log = self._perform(store, [self.f1, self.f2],
+                                  depositor="njakeman")
+        self.assertEqual(code, 0)
+        self.assertEqual(store.order[-1], RECORD_KEY)
+        self.assertEqual(len(store.order), 3)
+        member_labels = store.labels["rs2/csac/green/2_final/one.csv"]
+        for label in ("x-amz-meta-dataset-uuid", "x-amz-meta-checksum-sha256",
+                      "x-amz-meta-sensitivity", "x-amz-meta-depositor"):
+            self.assertIn(label, member_labels)
+        self.assertEqual(member_labels["x-amz-meta-sensitivity"], "green")
+        self.assertEqual(member_labels["x-amz-meta-depositor"], "njakeman")
+        self.assertEqual(log.call_count, 3)  # two members + the record
+
+    def test_record_content_first_deposit(self):
+        store = _Store()
+        code, _ = self._perform(store, [self.f1, self.f2],
+                                depositor="njakeman")
+        self.assertEqual(code, 0)
+        rec = store.record()
+        self.assertEqual(rec["schema_version"], "0.4")
+        self.assertEqual(rec["identifier"], "rs2/csac/green/2_final")
+        self.assertEqual(len(rec["files"]), 2)
+        self.assertEqual(rec["depositors"], ["njakeman"])
+        self.assertEqual(rec["created"], rec["modified"])
+        self.assertRegex(rec["dataset_uuid"], r"^[0-9a-f-]{36}$")
+        self.assertEqual(
+            store.labels[RECORD_KEY]["x-amz-meta-dataset-uuid"],
+            rec["dataset_uuid"])
+
+    def test_failure_stops_batch_no_record(self):
+        store = _Store()
+        store.fail_on = "two.csv"
+        store.exc = deposit.transfer.TransferError("unreachable", "boom")
+        code, _ = self._perform(store, [self.f1, self.f2])
         self.assertNotEqual(code, 0)
+        self.assertNotIn(RECORD_KEY, store.texts)
+
+    def test_interrupt_no_record_and_exits_130(self):
+        store = _Store()
+        store.fail_on = "two.csv"
+        store.exc = KeyboardInterrupt()
+        code, _ = self._perform(store, [self.f1, self.f2])
+        self.assertEqual(code, 130)
+        self.assertNotIn(RECORD_KEY, store.texts)
 
     def test_verification_missing_object_is_error(self):
-        with mock.patch("deposit.transfer.copyto"), \
-             mock.patch("deposit.transfer.stat_key", return_value=None), \
+        store = _Store()
+        real = store.copyto
+
+        def copyto_but_lose_members(rclone, lp, remote, bucket, key, **kw):
+            real(rclone, lp, remote, bucket, key, **kw)
+            if not key.endswith("dataset.meta.json"):
+                del store.sizes[key]  # stored object vanished
+
+        store_patches = store.patches()
+        plans = [_plan_for(self.f1)]
+        entries = deposit.prepare_entries(plans)
+        with mock.patch("deposit.transfer.copyto",
+                        side_effect=copyto_but_lose_members), \
+             store_patches[1], store_patches[2], \
              mock.patch("deposit.append_log"):
-            code = deposit.perform_deposits("rclone", _Args(),
-                                            [_plan_for(self.f1)], "t")
+            code = deposit.perform_deposits(
+                "rclone", _Args(), plans, dict(_META), entries, None,
+                "t", _VOCAB)
         self.assertNotEqual(code, 0)
 
     def test_size_mismatch_is_error_not_success(self):
-        with mock.patch("deposit.transfer.copyto"), \
-             mock.patch("deposit.transfer.stat_key",
-                        return_value={"Name": "one.csv", "Size": 999999}), \
-             mock.patch("deposit.append_log"):
-            code = deposit.perform_deposits("rclone", _Args(),
-                                            [_plan_for(self.f1)], "t")
-        self.assertNotEqual(code, 0)
+        store = _Store()
+        real = store.copyto
 
-    def test_sidecar_written_with_checksum_and_depositor(self):
-        uploaded = {}
-        captured = {}
+        def copyto_but_truncate(rclone, lp, remote, bucket, key, **kw):
+            real(rclone, lp, remote, bucket, key, **kw)
+            if not key.endswith("dataset.meta.json"):
+                store.sizes[key] = 999999
 
-        def copyto(rclone, lp, rem, b, key, **kw):
-            uploaded[key] = Path(lp).stat().st_size
-            if key.endswith(".meta.json"):
-                import json
-                captured.update(json.loads(Path(lp).read_text(encoding="utf-8")))
-
-        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.stat_key",
-                        side_effect=_stat_matching(uploaded)), \
-             mock.patch("deposit.append_log"):
-            deposit.perform_deposits("rclone", _Args(), [_plan_for(self.f1)],
-                                     "njakeman")
-        self.assertEqual(captured["depositor"], "njakeman")
-        self.assertEqual(len(captured["checksum_sha256"]), 64)
-        self.assertRegex(captured["deposited"], r"Z$")
-        self.assertEqual(captured["schema_version"], "0.3")
-        self.assertEqual(captured["source_type"], "archive")
-
-
-    def test_interrupt_reports_completed_and_exits_130(self):
-        uploaded = {}
-        copyto = _recording_copyto(uploaded, fail_on="two.csv",
-                                   exc=KeyboardInterrupt())
-        with mock.patch("deposit.transfer.copyto", side_effect=copyto), \
-             mock.patch("deposit.transfer.stat_key",
-                        side_effect=_stat_matching(uploaded)), \
+        store_patches = store.patches()
+        plans = [_plan_for(self.f1)]
+        entries = deposit.prepare_entries(plans)
+        with mock.patch("deposit.transfer.copyto",
+                        side_effect=copyto_but_truncate), \
+             store_patches[1], store_patches[2], \
              mock.patch("deposit.append_log"):
             code = deposit.perform_deposits(
-                "rclone", _Args(), [_plan_for(self.f1), _plan_for(self.f2)], "t")
-        self.assertEqual(code, 130)
+                "rclone", _Args(), plans, dict(_META), entries, None,
+                "t", _VOCAB)
+        self.assertNotEqual(code, 0)
+
+    def _existing_for(self, files, depositors=("earlier",)):
+        entries = deposit.prepare_entries([_plan_for(f) for f in files])
+        return {"schema_version": "0.4",
+                "dataset_uuid": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
+                "identifier": "rs2/csac/green/2_final",
+                "created": "2026-07-01T00:00:00Z",
+                "modified": "2026-07-01T00:00:00Z",
+                "coverage_start": "1989", "coverage_end": "2025",
+                "depositors": list(depositors),
+                "files": entries}
+
+    def test_add_to_existing_unions_and_appends_depositor(self):
+        existing = self._existing_for([self.f1])
+        store = _Store(seed_sizes={
+            "rs2/csac/green/2_final/one.csv": self.f1.stat().st_size})
+        code, _ = self._perform(store, [self.f2], existing=existing,
+                                depositor="njakeman")
+        self.assertEqual(code, 0)
+        rec = store.record()
+        self.assertEqual([e["path"] for e in rec["files"]],
+                         ["one.csv", "two.csv"])
+        self.assertEqual(rec["dataset_uuid"], existing["dataset_uuid"])
+        self.assertEqual(rec["created"], "2026-07-01T00:00:00Z")
+        self.assertNotEqual(rec["modified"], rec["created"])
+        self.assertEqual(rec["depositors"], ["earlier", "njakeman"])
+
+    def test_rerun_skips_unchanged_and_rewrites_record(self):
+        existing = self._existing_for([self.f1, self.f2])
+        store = _Store(seed_sizes={
+            "rs2/csac/green/2_final/one.csv": self.f1.stat().st_size,
+            "rs2/csac/green/2_final/two.csv": self.f2.stat().st_size})
+        code, log = self._perform(store, [self.f1, self.f2],
+                                  existing=existing)
+        self.assertEqual(code, 0)
+        # Metadata-only: exactly one object touched - the record (r5 Q6).
+        self.assertEqual(store.order, [RECORD_KEY])
+        self.assertEqual(log.call_count, 1)
+
+    def test_per_file_coverage_widens_envelope(self):
+        store = _Store()
+        plans = [_plan_for(self.f1)]
+        plans[0]["entry_overrides"] = {"coverage_start": "1960",
+                                       "coverage_end": "2026-01-01"}
+        entries = deposit.prepare_entries(plans)
+        p1, p2, p3 = store.patches()
+        with p1, p2, p3, mock.patch("deposit.append_log"):
+            code = deposit.perform_deposits(
+                "rclone", _Args(), plans, dict(_META), entries, None,
+                "t", _VOCAB)
+        self.assertEqual(code, 0)
+        rec = store.record()
+        self.assertEqual(rec["coverage_start"], "1960")
+        self.assertEqual(rec["coverage_end"], "2026-01-01")
 
 
 class TestMessageQuality(unittest.TestCase):
@@ -267,6 +427,30 @@ class TestMessageQuality(unittest.TestCase):
             lowered = deposit.MESSAGES[key].lower()
             for strand in ("rs1", "rs2", "rs3", "rs4"):
                 self.assertNotIn(strand, lowered, key)
+
+    def test_reserved_name_formats(self):
+        msg = deposit.MESSAGES["reserved_name"].format(name="dataset.meta.json")
+        self.assertIn("dataset.meta.json", msg)
+
+    def test_record_invalid_says_nothing_was_written(self):
+        self.assertIn("NOT written", deposit.MESSAGES["record_invalid"])
+
+
+class TestReservedNameRefusal(unittest.TestCase):
+    def test_depositing_the_record_name_fails_before_preflight(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "dataset.meta.json"
+            p.write_text("{}")
+            said = []
+            with mock.patch("deposit.say", side_effect=said.append), \
+                 mock.patch("deposit.warn"), \
+                 mock.patch("deposit.fail", side_effect=lambda m, c=1: c) as f, \
+                 mock.patch("deposit.load_config",
+                            return_value={"remote": "ceph", "bucket": "crsw"}):
+                code = deposit.main([str(p), "--remote", "ceph",
+                                     "--bucket", "crsw"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("reserved", f.call_args[0][0])
 
 
 class TestResolveProjectChoice(unittest.TestCase):

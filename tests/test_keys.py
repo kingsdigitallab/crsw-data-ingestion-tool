@@ -47,12 +47,6 @@ class TestBuildKey(unittest.TestCase):
             keys.build_key("rs2", "csac", "green", "2_final",
                            "dataset.meta.json")
 
-    def test_sidecar_key(self):
-        self.assertEqual(
-            keys.sidecar_key("rs2/csac/green/2_final/csac-clean-2025.csv"),
-            "rs2/csac/green/2_final/csac-clean-2025.csv.meta.json",
-        )
-
 
 class TestRecordKey(unittest.TestCase):
     def test_dataset_prefix(self):
