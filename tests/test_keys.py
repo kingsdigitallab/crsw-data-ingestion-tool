@@ -42,11 +42,38 @@ class TestBuildKey(unittest.TestCase):
         with self.assertRaises(ValueError):
             keys.build_key("rs2", "csac", "green", "2_final", "")
 
+    def test_reserved_record_filename_rejected(self):
+        with self.assertRaises(ValueError):
+            keys.build_key("rs2", "csac", "green", "2_final",
+                           "dataset.meta.json")
+
     def test_sidecar_key(self):
         self.assertEqual(
             keys.sidecar_key("rs2/csac/green/2_final/csac-clean-2025.csv"),
             "rs2/csac/green/2_final/csac-clean-2025.csv.meta.json",
         )
+
+
+class TestRecordKey(unittest.TestCase):
+    def test_dataset_prefix(self):
+        self.assertEqual(keys.dataset_prefix("rs2", "csac", "green", "2_final"),
+                         "rs2/csac/green/2_final")
+
+    def test_prefix_is_the_identifier_shape(self):
+        # r5 Q1: the prefix string IS the record's identifier.
+        prefix = keys.dataset_prefix("rs1", "treaty-texts", "amber", "0_raw")
+        self.assertEqual(tuple(prefix.split("/")),
+                         ("rs1", "treaty-texts", "amber", "0_raw"))
+
+    def test_record_key(self):
+        self.assertEqual(keys.record_key("rs2", "csac", "green", "2_final"),
+                         "rs2/csac/green/2_final/dataset.meta.json")
+
+    def test_prefix_validates_parts(self):
+        with self.assertRaises(ValueError):
+            keys.dataset_prefix("rs9", "csac", "green", "2_final")
+        with self.assertRaises(keys.RedDataError):
+            keys.dataset_prefix("rs2", "csac", "red", "2_final")
 
 
 class TestProjectValidation(unittest.TestCase):

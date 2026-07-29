@@ -78,12 +78,10 @@ def similar_projects(name: str, existing: List[str]) -> List[str]:
     return matches
 
 
-def build_key(strand: str, project: str, sensitivity: str, state: str,
-              filename: str) -> str:
-    """Build the object key {strand}/{project}/{sensitivity}/{state}/{filename}.
-
-    Raises RedDataError for sensitivity 'red', ValueError for any other
-    invalid part. This is a backstop — deposit.py refuses red earlier."""
+def _validate_parts(strand: str, project: str, sensitivity: str,
+                    state: str) -> None:
+    """Raise RedDataError for sensitivity 'red', ValueError for any other
+    invalid path part. Backstop — deposit.py refuses red earlier."""
     if sensitivity == "red":
         raise RedDataError(
             "red data must not enter shared storage; it belongs in the TRE")
@@ -96,11 +94,40 @@ def build_key(strand: str, project: str, sensitivity: str, state: str,
     if not validate_project(project):
         raise ValueError(
             "project must be lowercase letters/digits with hyphens, got %r" % project)
+
+
+def dataset_prefix(strand: str, project: str, sensitivity: str,
+                   state: str) -> str:
+    """The dataset prefix {strand}/{project}/{sensitivity}/{state} — one
+    dataset per prefix (r5 Q1). This string is also the record's
+    `identifier` field."""
+    _validate_parts(strand, project, sensitivity, state)
+    return "/".join((strand, project, sensitivity, state))
+
+
+def record_key(strand: str, project: str, sensitivity: str,
+               state: str) -> str:
+    """The dataset record's object key: the prefix + dataset.meta.json."""
+    return dataset_prefix(strand, project, sensitivity, state) + "/" + RECORD_FILENAME
+
+
+def build_key(strand: str, project: str, sensitivity: str, state: str,
+              filename: str) -> str:
+    """Build the object key {strand}/{project}/{sensitivity}/{state}/{filename}.
+
+    Raises RedDataError for sensitivity 'red', ValueError for any other
+    invalid part or for the reserved record filename. Backstops —
+    deposit.py refuses both earlier."""
+    _validate_parts(strand, project, sensitivity, state)
     if not filename:
         raise ValueError("filename must not be empty")
+    if filename == RECORD_FILENAME:
+        raise ValueError(
+            "%r is a reserved name - the dataset record lives there" % filename)
     return "/".join((strand, project, sensitivity, state, filename))
 
 
 def sidecar_key(data_key: str) -> str:
-    """The sidecar key is always the data key + '.meta.json'."""
+    """The sidecar key is always the data key + '.meta.json'.
+    Legacy (r5 retires per-file sidecars); deleted with the v0.3 code."""
     return data_key + ".meta.json"
