@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import keys
-import sidecar
+import record
 import transfer
 import vocab
 
@@ -630,7 +630,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
         say("Steward: %s (from domain %s)" % (chosen["steward"], meta["domain"]))
 
     while True:
-        version = sidecar.normalise_version(ask("Version", default="1-0"))
+        version = record.normalise_version(ask("Version", default="1-0"))
         if version is not None:
             meta["version"] = version
             break
@@ -641,7 +641,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
                          ("Coverage end (year or YYYY-MM-DD)", "coverage_end")):
         while True:
             value = ask(label)
-            err = sidecar.coverage_error(value)
+            err = record.coverage_error(value)
             if err:
                 say(err)
                 continue
@@ -669,7 +669,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
 
     say("Abstract (100-300 words; single line, or paste and press Enter):")
     abstract = input("> ").strip()
-    w = sidecar.abstract_warning(abstract)
+    w = record.abstract_warning(abstract)
     if w:
         warn(w + " - recorded anyway; you can revise the sidecar later.")
     meta["abstract"] = abstract
@@ -717,7 +717,7 @@ def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
                              ("  Coverage end", "coverage_end")):
             while True:
                 value = ask(label, default=meta[field])
-                err = sidecar.coverage_error(value)
+                err = record.coverage_error(value)
                 if err:
                     say("  " + err)
                     continue
@@ -810,23 +810,23 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
                 say("\n[%d/%d] %s" % (i, len(plans), plan["path"].name))
 
                 say("  computing checksum...")
-                checksum = sidecar.sha256_file(plan["path"])
+                checksum = record.sha256_file(plan["path"])
 
                 fields = dict(plan["fields"])
                 fields["checksum_sha256"] = checksum
                 fields["depositor"] = depositor
-                fields["deposited"] = sidecar.utc_now_iso()
-                sc = sidecar.build_sidecar(**fields)
+                fields["deposited"] = record.utc_now_iso()
+                sc = record.build_sidecar(**fields)
 
                 sidecar_path = Path(tmp) / (plan["path"].name + ".meta.json")
-                sidecar_path.write_text(sidecar.sidecar_json(sc), encoding="utf-8")
+                sidecar_path.write_text(record.sidecar_json(sc), encoding="utf-8")
 
                 size = plan["path"].stat().st_size
                 show = size >= PROGRESS_THRESHOLD and sys.stdout.isatty()
                 say("  uploading data (%s)..." % human_size(size))
                 transfer.copyto(rclone, plan["path"], args.remote, args.bucket,
                                 plan["key"], show_progress=show)
-                say("  uploading sidecar...")
+                say("  uploading record...")
                 transfer.copyto(rclone, sidecar_path, args.remote, args.bucket,
                                 plan["sidecar_key"])
 
@@ -846,7 +846,7 @@ def perform_deposits(rclone, args, plans, depositor) -> int:
                             % (key, expected, entry.get("Size")))
 
                 append_log("%s\t%s\t%s\t%s" % (
-                    sidecar.utc_now_iso(), plan["key"], checksum, depositor))
+                    record.utc_now_iso(), plan["key"], checksum, depositor))
                 done.append(plan)
                 say(style("  done: %s" % plan["key"], "green"))
         except transfer.TransferError as e:
@@ -1001,7 +1001,7 @@ def main(argv=None) -> int:
         say("Nothing deposited.")
         return 0
 
-    return perform_deposits(rclone, args, plans, sidecar.default_depositor())
+    return perform_deposits(rclone, args, plans, record.default_depositor())
 
 
 if __name__ == "__main__":

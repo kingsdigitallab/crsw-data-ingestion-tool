@@ -8,6 +8,7 @@ import re
 from typing import List
 
 STRANDS = ("rs1", "rs2", "rs3", "rs4")
+RECORD_FILENAME = "dataset.meta.json"
 DOMAINS = ("quant", "geo", "pol", "narr", "parti")
 STATES = ("0_raw", "1_interim", "2_final")
 SENSITIVITIES = ("green", "amber")
