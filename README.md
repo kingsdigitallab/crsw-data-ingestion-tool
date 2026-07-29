@@ -1,9 +1,10 @@
 # crsw-data-ingestion-tool
 
 Command-line tool for depositing research files into the CRSW shared object
-storage (Ceph, S3-compatible, hosted by KCL eResearch). It builds the object
-key from the Centre's path convention, writes a sidecar metadata file per
-object, and uploads both via rclone.
+storage (Ceph, S3-compatible, hosted by KCL eResearch). It builds object
+keys from the Centre's path convention, uploads the files via rclone, and
+maintains one `dataset.meta.json` record per dataset describing the whole
+prefix - shared metadata plus a manifest of every member file.
 
 ## Requirements
 
@@ -50,11 +51,21 @@ and need confirmation, with a warning when the name is close to an existing
 project. A fully-flagged `--dry-run` is the way to check a deposit before
 committing to it, and the way to reproduce a problem when asking for support.
 
-Files land at `{strand}/{project}/{sensitivity}/{state}/{filename}`, with a
-`{filename}.meta.json` sidecar next to each. Filenames are preserved exactly
-as deposited; if a name contains awkward characters the tool offers a
-correction but never applies one silently. After upload, both objects are
-verified to exist at the expected size before the deposit is reported done.
+Files land at `{strand}/{project}/{sensitivity}/{state}/{filename}`. That
+prefix is a *dataset*: its `dataset.meta.json` holds the description and a
+`files` manifest (path, SHA-256, size), and every uploaded object carries
+dataset-uuid, checksum, sensitivity and depositor labels. Member files
+upload first and the record is written last, so its presence marks a
+complete deposit - an interrupted batch simply re-runs, skipping files
+that already match the manifest. Depositing again to the same prefix loads
+the existing record as defaults instead of re-asking everything, and adds
+to the manifest (never removes; curation is a deliberate act done
+elsewhere). `dataset.meta.json` is therefore a reserved filename.
+
+Filenames are preserved exactly as deposited; if a name contains awkward
+characters the tool offers a correction but never applies one silently.
+After upload, every manifest entry is verified to exist at the expected
+size before the deposit is reported done.
 
 Red-classified data is refused — it belongs in the TRE, not shared storage.
 
@@ -99,6 +110,13 @@ Run the tests with:
 ```
 python -m unittest discover -s tests -v
 ```
+
+`dataset.schema.json` is the contract for the record format, used by CI
+and the future ingestion gateway; the shipped tool validates by hand
+(standard library only). Tests that need the `jsonschema` package skip
+cleanly when it is not installed. `export_dcat.py` converts a record to
+a DCAT (JSON-LD) dataset description and doubles as the proof that the
+Dublin Core mapping is complete.
 
 The build spec is `DEPOSIT_TOOL_SPEC.md`, revised by `DEPOSIT_TOOL_SPEC_r2.md`
 (r2 supersedes where it speaks). Module boundaries and constraints are
