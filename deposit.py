@@ -93,6 +93,13 @@ MESSAGES = {
     "reserved_name": (
         "{name} is a reserved name: the tool writes each dataset's record\n"
         "there. Rename the file and re-run."),
+    "bad_record": (
+        "The dataset record at {key} exists but could not be used:\n"
+        "{reason}\n"
+        "Nothing was uploaded or overwritten. Inspect it with\n"
+        "  rclone cat {key}\n"
+        "or restore an earlier version (bucket versioning keeps history),\n"
+        "then re-run."),
     "record_invalid": (
         "The assembled dataset record failed its own validation, so it was\n"
         "NOT written. Files that already uploaded are fine and a re-run is\n"
@@ -603,8 +610,10 @@ def check_project_flag(project: str, strand: str,
 
 
 def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
-                    probe_write=None) -> Dict:
-    """Collect batch metadata, honouring flags. Returns the meta dict.
+                    probe_write=None, fetch_record=None):
+    """Collect batch metadata, honouring flags. Returns (meta, existing)
+    where existing is the parsed dataset record already at the target
+    prefix, or None for a first deposit.
 
     list_projects is a callable strand -> Optional[List[str]] (None when
     the remote isn't usable). It is called once - project is a batch-level
@@ -614,7 +623,11 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
     the remote isn't usable or under --dry-run). It runs as soon as the
     full deposit prefix is known, so a write denial surfaces four prompts
     in rather than after the whole interview (spec §8: fail early).
-    Raises transfer.TransferError with the probed prefix in .detail."""
+    Raises transfer.TransferError with the probed prefix in .detail.
+
+    fetch_record is a callable key -> (text, err) per transfer.read_key.
+    An existing record answers most of the interview (r5 §4): repeat
+    deposits stop re-asking what the dataset already knows."""
     meta = {}
 
     meta["strand"] = args.strand or ask_select("Strand", STRAND_ENTRIES)
@@ -653,12 +666,41 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
 
     meta["state"] = args.state or ask_select("State", STATE_ENTRIES)
 
+    prefix = "/".join((meta["strand"], meta["project"],
+                       meta["sensitivity"], meta["state"]))
     if probe_write:
-        prefix = "/".join((meta["strand"], meta["project"],
-                           meta["sensitivity"], meta["state"]))
         kind = probe_write(prefix)
         if kind:
             raise transfer.TransferError(kind, prefix)
+
+    # r5 §4: an existing record answers instead of re-asking. A record
+    # that exists but cannot be read is fatal on a real run - building on
+    # it unread would silently drop members (dry-run warns and previews
+    # as a first deposit; an unparseable record is surfaced either way).
+    existing = None
+    record_key = prefix + "/" + keys.RECORD_FILENAME
+    if fetch_record:
+        text, err = fetch_record(record_key)
+        if text is not None:
+            try:
+                existing = record.parse_record(text)
+            except record.RecordParseError as e:
+                e.key = record_key
+                raise
+        elif err != "absent":
+            if args.dry_run:
+                warn("could not read the existing dataset record (%s) - "
+                     "previewing as a first deposit." % err)
+            else:
+                raise transfer.TransferError(err, record_key)
+    if existing:
+        say("")
+        say("Existing dataset found: %s %s - %d files, modified %s."
+            % (meta["project"], existing.get("version", "?"),
+               len(existing.get("files", [])),
+               (existing.get("modified") or "?")[:10]))
+        say("Adding to it. Current values will be kept unless you "
+            "change them.")
 
     domain_entries = vocab.domains(vocab_dict)
     codes = [d["code"] for d in domain_entries]
@@ -666,18 +708,30 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
         if args.domain not in codes:
             raise ValueError("domain %r is not one of: %s"
                              % (args.domain, ", ".join(codes)))
+        if (existing and existing.get("domain")
+                and existing["domain"] != args.domain):
+            warn("--domain %s differs from the existing record's %s - "
+                 "using %s." % (args.domain, existing["domain"], args.domain))
         meta["domain"] = args.domain
+    elif existing and existing.get("domain") in codes:
+        meta["domain"] = existing["domain"]
     else:
         meta["domain"] = ask_select(
             "Domain", [(str(i), d["code"], d["label"])
                        for i, d in enumerate(domain_entries, 1)])
-    chosen = next(d for d in domain_entries if d["code"] == meta["domain"])
-    if chosen["steward"] and chosen["steward"] != "TBC":
-        meta["steward"] = chosen["steward"]
-        say("Steward: %s (from domain %s)" % (chosen["steward"], meta["domain"]))
+    if existing and existing.get("steward"):
+        meta["steward"] = existing["steward"]
+    else:
+        chosen = next(d for d in domain_entries if d["code"] == meta["domain"])
+        if chosen["steward"] and chosen["steward"] != "TBC":
+            meta["steward"] = chosen["steward"]
+            say("Steward: %s (from domain %s)"
+                % (chosen["steward"], meta["domain"]))
 
+    default_version = (existing.get("version") if existing else None) or "1-0"
     while True:
-        version = record.normalise_version(ask("Version", default="1-0"))
+        version = record.normalise_version(ask("Version",
+                                               default=default_version))
         if version is not None:
             meta["version"] = version
             break
@@ -686,8 +740,9 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
 
     for label, field in (("Coverage start (year or YYYY-MM-DD)", "coverage_start"),
                          ("Coverage end (year or YYYY-MM-DD)", "coverage_end")):
+        default = existing.get(field) if existing else None
         while True:
-            value = ask(label)
+            value = ask(label, default=default)
             err = record.coverage_error(value)
             if err:
                 say(err)
@@ -695,57 +750,84 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
             meta[field] = value
             break
 
-    entries = subject_entries(vocab_dict)
-    width = shutil.get_terminal_size().columns
-    for line in subject_listing_lines(entries, width):
-        say(line)
-    say("")
-    while True:
-        raw = input(style("Subjects - select one or more "
-                          "(comma-separated numbers or terms): ", "bold"))
-        subjects, unknown = resolve_subjects(raw, entries)
-        if unknown:
-            say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))
-            continue
-        if not subjects:
-            say("At least one subject term is required.")
-            continue
-        say("Subjects: %s" % ", ".join(subjects))
-        meta["subjects"] = subjects
-        break
+    existing_subjects = list(existing.get("subjects") or []) if existing else []
+    if existing_subjects and not record.unknown_subjects(
+            existing_subjects, vocab.all_terms(vocab_dict)):
+        meta["subjects"] = existing_subjects
+    else:
+        if existing_subjects:
+            warn("the existing record's subjects are no longer all in the "
+                 "vocabulary - please choose again.")
+        entries = subject_entries(vocab_dict)
+        width = shutil.get_terminal_size().columns
+        for line in subject_listing_lines(entries, width):
+            say(line)
+        say("")
+        while True:
+            raw = input(style("Subjects - select one or more "
+                              "(comma-separated numbers or terms): ", "bold"))
+            subjects, unknown = resolve_subjects(raw, entries)
+            if unknown:
+                say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))
+                continue
+            if not subjects:
+                say("At least one subject term is required.")
+                continue
+            say("Subjects: %s" % ", ".join(subjects))
+            meta["subjects"] = subjects
+            break
 
-    say("Abstract (100-300 words; single line, or paste and press Enter):")
-    abstract = input("> ").strip()
-    w = record.abstract_warning(abstract)
-    if w:
-        warn(w + " - recorded anyway; you can revise the record later.")
-    meta["abstract"] = abstract
+    if existing and existing.get("abstract") and not ask_yes_no(
+            "Update the abstract?", default_no=True):
+        meta["abstract"] = existing["abstract"]
+    else:
+        say("Abstract (100-300 words; single line, or paste and press Enter):")
+        abstract = input("> ").strip()
+        w = record.abstract_warning(abstract)
+        if w:
+            warn(w + " - recorded anyway; you can revise the record later.")
+        meta["abstract"] = abstract
 
-    default_licence = "internal-only" if meta["sensitivity"] == "amber" else "CC-BY-4.0"
-    meta["licence"] = ask("Licence", default=default_licence)
+    if existing:
+        # Recommended fields carry over untouched; a metadata edit is a
+        # deliberate act, not a toll on every deposit.
+        for field in ("licence", "source_type", "source_detail",
+                      "derived_from", "creator"):
+            if existing.get(field):
+                meta[field] = existing[field]
+    else:
+        default_licence = ("internal-only" if meta["sensitivity"] == "amber"
+                           else "CC-BY-4.0")
+        meta["licence"] = ask("Licence", default=default_licence)
 
-    meta["source_type"] = ask_select("Source type", SOURCE_TYPE_ENTRIES)
-    if meta["source_type"] == "other":
-        say("Please be specific - 'other' with a vague detail is "
-            "unfindable later.")
-    detail = ask("Source detail (free text, e.g. name, URL, or "
-                 "collection reference)")
-    if len(detail) < 10:
-        warn("'%s' will not help anyone in five years - consider naming "
-             "the archive, URL, or reference." % detail)
-    meta["source_detail"] = detail
-    if meta["source_type"] == "derived":
-        parent = input("Parent object key, if known (Enter to skip): ").strip()
-        if parent:
-            meta["derived_from"] = parent
+        meta["source_type"] = ask_select("Source type", SOURCE_TYPE_ENTRIES)
+        if meta["source_type"] == "other":
+            say("Please be specific - 'other' with a vague detail is "
+                "unfindable later.")
+        detail = ask("Source detail (free text, e.g. name, URL, or "
+                     "collection reference)")
+        if len(detail) < 10:
+            warn("'%s' will not help anyone in five years - consider naming "
+                 "the archive, URL, or reference." % detail)
+        meta["source_detail"] = detail
+        if meta["source_type"] == "derived":
+            parent = input("Parent object key, if known (Enter to skip): ").strip()
+            if parent:
+                meta["derived_from"] = parent
 
-    if "steward" not in meta:
+    if "creator" not in meta:
+        creator = input("Creator - person or team intellectually "
+                        "responsible for the dataset (Enter to skip): ").strip()
+        if creator:
+            meta["creator"] = creator
+
+    if "steward" not in meta and not existing:
         steward = input("Domain steward (Enter to skip): ").strip()
         if steward:
             meta["steward"] = steward
 
     meta["vocabulary_version"] = vocab_dict.get("vocabulary_version")
-    return meta
+    return meta, existing
 
 
 def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
@@ -1082,11 +1164,20 @@ def main(argv=None) -> int:
     prober = ((lambda prefix: transfer.check_write(
                    rclone, args.remote, args.bucket, prefix))
               if (rclone and remote_ok and not args.dry_run) else None)
+    fetcher = ((lambda key: transfer.read_key(
+                    rclone, args.remote, args.bucket, key))
+               if (rclone and remote_ok) else None)
 
     try:
-        meta = prompt_metadata(args, vocab_dict, lister, prober)
+        meta, existing = prompt_metadata(args, vocab_dict, lister, prober,
+                                         fetcher)
     except keys.RedDataError:
         return fail(MESSAGES["red_refused"], 2)
+    except record.RecordParseError as e:
+        return fail(MESSAGES["bad_record"].format(
+            key="%s:%s/%s" % (args.remote, args.bucket,
+                              getattr(e, "key", keys.RECORD_FILENAME)),
+            reason=e))
     except ValueError as e:
         return fail(str(e))
     except transfer.TransferError as e:
@@ -1129,10 +1220,6 @@ def main(argv=None) -> int:
     # during prompt_metadata - spec §8: fail early. Overwrites need no
     # separate prompt: re-runs are idempotent by design (r5 Q4) and the
     # preview labels updated members before the final confirmation.)
-
-    # existing dataset record: loaded during prompt_metadata from r5 step 5;
-    # None until then means every deposit previews as a first deposit.
-    existing = None
 
     say("\nComputing checksums for the manifest...")
     try:

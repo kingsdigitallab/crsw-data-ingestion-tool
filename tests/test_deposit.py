@@ -558,6 +558,115 @@ class TestEarlyWriteProbe(unittest.TestCase):
                                         None, lambda prefix: None)
 
 
+class TestExistingRecordFlow(unittest.TestCase):
+    VOCAB = {"vocabulary_version": "2026-07-23",
+             "domains": [{"code": "quant", "label": "Quantitative",
+                          "steward": "Tester"}],
+             "facets": {"themes": ["armed-conflict"]}}
+    RECORD_KEY = "rs2/csac/green/2_final/dataset.meta.json"
+
+    def _existing(self, **overrides):
+        rec = {"schema_version": "0.4",
+               "dataset_uuid": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
+               "identifier": "rs2/csac/green/2_final",
+               "strand": "rs2", "project": "csac", "sensitivity": "green",
+               "state": "2_final", "domain": "quant", "version": "3-0",
+               "abstract": "kept " * 120,
+               "subjects": ["armed-conflict"],
+               "coverage_start": "1989", "coverage_end": "2025",
+               "creator": "CSAC team", "licence": "CC-BY-4.0",
+               "source_type": "archive", "source_detail": "CSAC project",
+               "steward": "Kevin Fahey",
+               "created": "2026-07-01T00:00:00Z",
+               "modified": "2026-07-01T00:00:00Z",
+               "files": [{"path": "old.csv", "checksum_sha256": "ab" * 32,
+                          "bytes": 1}]}
+        rec.update(overrides)
+        return rec
+
+    def _fetcher(self, result):
+        fetched = []
+
+        def fetch(key):
+            fetched.append(key)
+            return result
+        fetch.calls = fetched
+        return fetch
+
+    def test_existing_record_answers_the_interview(self):
+        import json
+        fetch = self._fetcher((json.dumps(self._existing()), None))
+        said = []
+        # Remaining prompts only: version (Enter=3-0), coverage x2
+        # (Enter keeps), update-abstract? (n).
+        with mock.patch("builtins.input",
+                        side_effect=["", "", "", "n"]), \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn"):
+            meta, existing = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        self.assertEqual(fetch.calls, [self.RECORD_KEY])
+        self.assertIsNotNone(existing)
+        self.assertEqual(meta["version"], "3-0")
+        self.assertEqual(meta["abstract"], self._existing()["abstract"])
+        self.assertEqual(meta["subjects"], ["armed-conflict"])
+        self.assertEqual(meta["creator"], "CSAC team")
+        self.assertEqual(meta["steward"], "Kevin Fahey")
+        self.assertEqual(meta["source_type"], "archive")
+        self.assertTrue(any("Existing dataset found: csac 3-0" in s
+                            for s in said))
+
+    def test_absent_record_is_a_first_deposit(self):
+        fetch = self._fetcher((None, "absent"))
+
+        class PastFetch(Exception):
+            pass
+
+        with mock.patch("builtins.input", side_effect=PastFetch), \
+             mock.patch("deposit.say"):
+            with self.assertRaises(PastFetch):
+                deposit.prompt_metadata(_flagged_args(), self.VOCAB,
+                                        None, None, fetch)
+        self.assertEqual(fetch.calls, [self.RECORD_KEY])
+
+    def test_unparseable_record_raises_with_key(self):
+        fetch = self._fetcher(("{not json", None))
+        with mock.patch("builtins.input", side_effect=AssertionError), \
+             mock.patch("deposit.say"):
+            with self.assertRaises(deposit.record.RecordParseError) as ctx:
+                deposit.prompt_metadata(_flagged_args(), self.VOCAB,
+                                        None, None, fetch)
+        self.assertEqual(ctx.exception.key, self.RECORD_KEY)
+
+    def test_fetch_error_is_fatal_not_absence(self):
+        fetch = self._fetcher((None, "permission"))
+        with mock.patch("builtins.input", side_effect=AssertionError), \
+             mock.patch("deposit.say"):
+            with self.assertRaises(deposit.transfer.TransferError) as ctx:
+                deposit.prompt_metadata(_flagged_args(), self.VOCAB,
+                                        None, None, fetch)
+        self.assertEqual(ctx.exception.kind, "permission")
+        self.assertEqual(ctx.exception.detail, self.RECORD_KEY)
+
+    def test_fetch_error_downgraded_under_dry_run(self):
+        args = deposit.build_parser().parse_args(
+            ["a.csv", "--strand", "rs2", "--project", "csac",
+             "--state", "2_final", "--sensitivity", "green",
+             "--domain", "quant", "--dry-run"])
+        fetch = self._fetcher((None, "permission"))
+        warned = []
+
+        class PastFetch(Exception):
+            pass
+
+        with mock.patch("builtins.input", side_effect=PastFetch), \
+             mock.patch("deposit.say"), \
+             mock.patch("deposit.warn", side_effect=warned.append):
+            with self.assertRaises(PastFetch):
+                deposit.prompt_metadata(args, self.VOCAB, None, None, fetch)
+        self.assertTrue(any("first deposit" in w for w in warned))
+
+
 class TestSettingSources(unittest.TestCase):
     def test_flags_win(self):
         args = deposit.build_parser().parse_args(
