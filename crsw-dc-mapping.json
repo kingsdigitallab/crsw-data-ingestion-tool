@@ -1,0 +1,48 @@
+{
+  "schema_version": "0.5",
+  "namespaces": {
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcat": "http://www.w3.org/ns/dcat#",
+    "prov": "http://www.w3.org/ns/prov#",
+    "crsw": "urn:x-crsw:terms#"
+  },
+  "dataset_fields": {
+    "abstract":    {"term": "dcterms:description"},
+    "subject":     {"term": "dcterms:subject"},
+    "temporal":    {"term": "dcterms:temporal", "note": "start/end become dcat:startDate/dcat:endDate"},
+    "license":     {"term": "dcterms:license", "note": "identifier values only; internal-only maps to dcterms:rights"},
+    "sensitivity": {"term": "dcterms:accessRights", "values": {"green": "public", "amber": "restricted"}},
+    "creator":     {"term": "dcterms:creator"},
+    "depositors":  {"term": "dcterms:contributor"},
+    "created":     {"term": "dcterms:dateSubmitted"},
+    "modified":    {"term": "dcterms:modified"},
+    "identifier":  {"term": "dcterms:identifier"},
+    "language":    {"term": "dcterms:language"},
+    "spatial":     {"term": "dcterms:spatial"},
+    "source_type": {"term": "dcterms:provenance", "note": "acquisition, not derivation"},
+    "source_detail": {"term": "dcterms:provenance"},
+    "derived_from":  {"term": "dcterms:source", "also": "prov:wasDerivedFrom"},
+    "strand":      {"term": "crsw:strand", "local": true},
+    "project":     {"term": "crsw:project", "local": true},
+    "dataset":     {"term": "crsw:dataset", "local": true},
+    "state":       {"term": "crsw:state", "local": true},
+    "domain":      {"term": "crsw:domain", "local": true},
+    "version":     {"term": "crsw:version", "local": true},
+    "steward":     {"term": "crsw:steward", "local": true},
+    "schema_version":     {"term": "crsw:schemaVersion", "local": true},
+    "vocabulary_version": {"term": "crsw:vocabularyVersion", "local": true},
+    "ethics_ref":  {"term": "crsw:ethicsRef", "local": true},
+    "notes":       {"term": "crsw:notes", "local": true},
+    "dataset_uuid": {"term": "dcterms:identifier", "note": "stable identifier; identifier field is the readable form"},
+    "files":       {"term": "dcat:distribution", "note": "structural - each manifest entry renders as a distribution"}
+  },
+  "file_fields": {
+    "path":            {"term": "dcat:downloadURL", "note": "relative to dataset prefix"},
+    "format":          {"term": "dcterms:format"},
+    "bytes":           {"term": "dcat:byteSize"},
+    "checksum_sha256": {"term": "spdx:checksum", "local": true, "note": "named for kinship; SPDX not imported"},
+    "temporal":        {"term": "dcterms:temporal"},
+    "derived_from":    {"term": "dcterms:source", "also": "prov:wasDerivedFrom"},
+    "notes":           {"term": "crsw:notes", "local": true}
+  }
+}
