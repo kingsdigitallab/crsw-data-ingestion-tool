@@ -3,8 +3,8 @@
 Command-line tool for depositing research files into the CRSW shared object
 storage (Ceph, S3-compatible, hosted by KCL eResearch). It builds object
 keys from the Centre's path convention, uploads the files via rclone, and
-maintains one `dataset.meta.json` record per dataset describing the whole
-prefix - shared metadata plus a manifest of every member file.
+maintains one `dataset.<name>.json` record per dataset describing the
+whole prefix - shared metadata plus a manifest of every member file.
 
 ## Requirements
 
@@ -33,10 +33,13 @@ python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
   --strand rs2            skip strand prompt (rs1/rs2/rs3/rs4)
   --project csac          skip project prompt (a name new to the strand
                           is confirmed once before creating it)
+  --dataset sentinel2-imagery  skip dataset prompt (a project may hold
+                          several; a new name is confirmed once, same
+                          as project)
   --domain quant          skip domain prompt (codes from the vocabulary)
   --state 2_final         skip state prompt (0_raw/1_interim/2_final)
   --sensitivity green     skip sensitivity prompt (green/amber)
-  --dry-run               preview keys and sidecars, upload nothing
+  --dry-run               preview keys and the dataset record, upload nothing
   --remote NAME           rclone remote (default: saved config, else ceph)
   --bucket NAME           target bucket (default: saved config, else crsw)
   --reconfigure           re-run the remote/bucket setup prompts
@@ -45,29 +48,41 @@ python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
 
 Anything not supplied as a flag is prompted for. Prompts with a fixed set of
 answers show a numbered menu — type the number or the value, either works.
-After the strand is chosen, existing projects in it are listed to pick from
-(`n` starts a new one). New project names are normalised (lowercase, hyphens)
-and need confirmation, with a warning when the name is close to an existing
-project. A fully-flagged `--dry-run` is the way to check a deposit before
-committing to it, and the way to reproduce a problem when asking for support.
+After the strand and project are chosen, existing datasets in that project
+are listed to pick from (`n` starts a new one) — the same picker used for
+the project itself, one level down. New project or dataset names are
+normalised (lowercase, hyphens) and need confirmation, with a warning when
+the name is close to an existing one; confirming a genuinely new project or
+dataset also asks whether access will need restricting beyond the strand —
+say yes and the tool stops, because that restriction has to exist before
+the first deposit, not be applied afterwards. A fully-flagged `--dry-run`
+is the way to check a deposit before committing to it, and the way to
+reproduce a problem when asking for support.
 
-Files land at `{strand}/{project}/{sensitivity}/{state}/{filename}`. That
-prefix is a *dataset*: its `dataset.meta.json` holds the description and a
-`files` manifest (path, SHA-256, size), and every uploaded object carries
+Files land at `{strand}/{project}/{sensitivity}/{state}/{dataset}/{filename}`
+— a project can hold several distinct datasets, each in its own prefix, so
+two datasets can each have their own `readme.md` with no collision. That
+prefix's record, `dataset.<name>.json` (named for the dataset, so several
+downloaded together never collide), holds the description and a `files`
+manifest (path, SHA-256, size, format), and every uploaded object carries
 dataset-uuid, checksum, sensitivity and depositor labels. Member files
 upload first and the record is written last, so its presence marks a
 complete deposit - an interrupted batch simply re-runs, skipping files
 that already match the manifest. Depositing again to the same prefix loads
 the existing record as defaults instead of re-asking everything, and adds
 to the manifest (never removes; curation is a deliberate act done
-elsewhere). `dataset.meta.json` is therefore a reserved filename.
+elsewhere). Member filenames matching `dataset.*.json` are therefore
+reserved.
 
 Filenames are preserved exactly as deposited; if a name contains awkward
 characters the tool offers a correction but never applies one silently.
 After upload, every manifest entry is verified to exist at the expected
 size before the deposit is reported done.
 
-Red-classified data is refused — it belongs in the TRE, not shared storage.
+The abstract's guidance is at least 50 words; shorter ones warn but do not
+block, which is deliberate for the testing phase — expect this to tighten
+before real deposits begin. Red-classified data is refused — it belongs
+in the TRE, not shared storage.
 
 ## Configuration
 
@@ -114,9 +129,11 @@ python -m unittest discover -s tests -v
 `dataset.schema.json` is the contract for the record format, used by CI
 and the future ingestion gateway; the shipped tool validates by hand
 (standard library only). Tests that need the `jsonschema` package skip
-cleanly when it is not installed. `export_dcat.py` converts a record to
-a DCAT (JSON-LD) dataset description and doubles as the proof that the
-Dublin Core mapping is complete.
+cleanly when it is not installed. The Dublin Core mapping itself ships as
+`crsw-dc-mapping.json` — the single source of truth, not a table in a
+document — and `export_dcat.py` renders it into a DCAT (JSON-LD) dataset
+description, doubling as the proof that every schema field is mapped or
+explicitly marked local.
 
 The build spec is `DEPOSIT_TOOL_SPEC.md`, revised by `DEPOSIT_TOOL_SPEC_r2.md`
 (r2 supersedes where it speaks). Module boundaries and constraints are
