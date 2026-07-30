@@ -6,68 +6,101 @@ import keys
 class TestBuildKey(unittest.TestCase):
     def test_happy_path(self):
         self.assertEqual(
-            keys.build_key("rs2", "csac", "green", "2_final", "csac-clean-2025.csv"),
-            "rs2/csac/green/2_final/csac-clean-2025.csv",
+            keys.build_key("rs2", "csac", "green", "2_final",
+                          "sentinel2-imagery", "csac-clean-2025.csv"),
+            "rs2/csac/green/2_final/sentinel2-imagery/csac-clean-2025.csv",
         )
 
     def test_key_uses_forward_slashes_only(self):
-        key = keys.build_key("rs1", "treaty-texts", "amber", "0_raw", "a.txt")
+        key = keys.build_key("rs1", "treaty-texts", "amber", "0_raw",
+                             "scans", "a.txt")
         self.assertNotIn("\\", key)
-        self.assertEqual(key.count("/"), 4)
+        self.assertEqual(key.count("/"), 5)
 
     def test_round_trip(self):
         # r3: element positions are part of the contract; a policy prefix
         # like rs2/csac/amber/* depends on them.
-        meta = ("rs2", "csac", "amber", "1_interim", "b.csv")
+        meta = ("rs2", "csac", "amber", "1_interim", "labels", "b.csv")
         parts = keys.build_key(*meta).split("/")
         self.assertEqual(tuple(parts), meta)
 
     def test_invalid_strand_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs9", "csac", "green", "2_final", "a.csv")
+            keys.build_key("rs9", "csac", "green", "2_final", "ds", "a.csv")
 
     def test_invalid_state_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "csac", "green", "final", "a.csv")
+            keys.build_key("rs2", "csac", "green", "final", "ds", "a.csv")
 
     def test_red_raises_red_data_error(self):
         with self.assertRaises(keys.RedDataError):
-            keys.build_key("rs2", "csac", "red", "2_final", "a.csv")
+            keys.build_key("rs2", "csac", "red", "2_final", "ds", "a.csv")
 
     def test_uppercase_project_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "CSAC", "green", "2_final", "a.csv")
+            keys.build_key("rs2", "CSAC", "green", "2_final", "ds", "a.csv")
+
+    def test_invalid_dataset_rejected(self):
+        with self.assertRaises(ValueError):
+            keys.build_key("rs2", "csac", "green", "2_final", "Bad Slug",
+                          "a.csv")
 
     def test_empty_filename_rejected(self):
         with self.assertRaises(ValueError):
-            keys.build_key("rs2", "csac", "green", "2_final", "")
+            keys.build_key("rs2", "csac", "green", "2_final", "ds", "")
 
-    def test_reserved_record_filename_rejected(self):
-        with self.assertRaises(ValueError):
-            keys.build_key("rs2", "csac", "green", "2_final",
-                           "dataset.meta.json")
+    def test_reserved_record_pattern_rejected(self):
+        for name in ("dataset.meta.json", "dataset.foo.json",
+                    "dataset..json"):
+            with self.assertRaises(ValueError, msg=name):
+                keys.build_key("rs2", "csac", "green", "2_final", "ds", name)
+
+    def test_non_matching_names_allowed(self):
+        for name in ("dataset.json", "mydataset.foo.json", "dataset.csv"):
+            keys.build_key("rs2", "csac", "green", "2_final", "ds", name)
+
+
+class TestReservedName(unittest.TestCase):
+    def test_matches(self):
+        for name in ("dataset.meta.json", "dataset.foo.json", "dataset..json"):
+            self.assertTrue(keys.is_reserved_name(name), name)
+
+    def test_non_matches(self):
+        for name in ("dataset.json", "mydataset.foo.json", "", None):
+            self.assertFalse(keys.is_reserved_name(name), repr(name))
+
+    def test_record_filename(self):
+        self.assertEqual(keys.record_filename("sentinel2-imagery"),
+                         "dataset.sentinel2-imagery.json")
 
 
 class TestRecordKey(unittest.TestCase):
     def test_dataset_prefix(self):
-        self.assertEqual(keys.dataset_prefix("rs2", "csac", "green", "2_final"),
-                         "rs2/csac/green/2_final")
+        self.assertEqual(
+            keys.dataset_prefix("rs2", "csac", "green", "2_final", "ds"),
+            "rs2/csac/green/2_final/ds")
 
     def test_prefix_is_the_identifier_shape(self):
         # r5 Q1: the prefix string IS the record's identifier.
-        prefix = keys.dataset_prefix("rs1", "treaty-texts", "amber", "0_raw")
+        prefix = keys.dataset_prefix("rs1", "treaty-texts", "amber",
+                                     "0_raw", "scans")
         self.assertEqual(tuple(prefix.split("/")),
-                         ("rs1", "treaty-texts", "amber", "0_raw"))
+                         ("rs1", "treaty-texts", "amber", "0_raw", "scans"))
 
     def test_record_key(self):
-        self.assertEqual(keys.record_key("rs2", "csac", "green", "2_final"),
-                         "rs2/csac/green/2_final/dataset.meta.json")
+        self.assertEqual(
+            keys.record_key("rs2", "csac", "green", "2_final",
+                           "sentinel2-imagery"),
+            "rs2/csac/green/2_final/sentinel2-imagery/"
+            "dataset.sentinel2-imagery.json")
 
     def test_prefix_validates_parts(self):
         with self.assertRaises(ValueError):
-            keys.dataset_prefix("rs9", "csac", "green", "2_final")
+            keys.dataset_prefix("rs9", "csac", "green", "2_final", "ds")
         with self.assertRaises(keys.RedDataError):
-            keys.dataset_prefix("rs2", "csac", "red", "2_final")
+            keys.dataset_prefix("rs2", "csac", "red", "2_final", "ds")
+        with self.assertRaises(ValueError):
+            keys.dataset_prefix("rs2", "csac", "green", "2_final", "Bad Ds")
 
 
 class TestProjectValidation(unittest.TestCase):
