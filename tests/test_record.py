@@ -75,13 +75,13 @@ class TestAutoFields(unittest.TestCase):
 
 RECORD_FIELDS = dict(
     dataset_uuid="8f14e45f-ceea-467f-a34e-9db1c153f0a1",
-    identifier="rs2/csac/green/2_final",
-    strand="rs2", domain="quant", project="csac",
+    identifier="rs2/csac/green/2_final/sentinel2-imagery",
+    strand="rs2", domain="quant", project="csac", dataset="sentinel2-imagery",
     state="2_final", sensitivity="green",
-    coverage_start="1989", coverage_end="2025-12-31",
+    temporal={"start": "1989", "end": "2025-12-31"},
     version="3-0",
     abstract=" ".join(["word"] * 150),
-    subjects=["armed-conflict", "forced-labour"],
+    subject=["armed-conflict", "forced-labour"],
     created="2026-07-29T10:15:00Z",
     modified="2026-07-29T10:15:00Z",
     files=[{"path": "csac-clean-2025.csv",
@@ -97,8 +97,8 @@ def _record(**overrides):
 
 
 class TestBuildRecord(unittest.TestCase):
-    def test_schema_version_is_04(self):
-        self.assertEqual(_record()["schema_version"], "0.4")
+    def test_schema_version_is_05(self):
+        self.assertEqual(_record()["schema_version"], "0.5")
 
     def test_field_order_record_shape(self):
         rec = _record(vocabulary_version="2026-07-23", creator="CSAC team")
@@ -106,8 +106,9 @@ class TestBuildRecord(unittest.TestCase):
         self.assertEqual(order[0], "schema_version")
         self.assertEqual(order[-1], "files")
         self.assertLess(order.index("dataset_uuid"), order.index("strand"))
+        self.assertLess(order.index("project"), order.index("dataset"))
         self.assertLess(order.index("vocabulary_version"),
-                        order.index("coverage_start"))
+                        order.index("temporal"))
         self.assertLess(order.index("created"), order.index("modified"))
 
     def test_omits_absent_recommended_and_optional(self):
@@ -135,17 +136,30 @@ class TestValidateRecord(unittest.TestCase):
         self.assertTrue(any("created" in e for e in self._errors(rec)))
 
     def test_identifier_must_match_parts(self):
-        rec = _record(identifier="rs2/csac/2_final/green")
+        rec = _record(identifier="rs2/csac/2_final/green/sentinel2-imagery")
+        self.assertTrue(any("identifier" in e for e in self._errors(rec)))
+
+    def test_identifier_dataset_mismatch_is_error(self):
+        # r6 §2: the identifier's final element must equal the dataset
+        # field - a mismatch means the record was moved or hand-edited.
+        rec = _record(dataset="training-labels")
         self.assertTrue(any("identifier" in e for e in self._errors(rec)))
 
     def test_bad_uuid_is_error(self):
         rec = _record(dataset_uuid="not-a-uuid")
         self.assertTrue(any("dataset_uuid" in e for e in self._errors(rec)))
 
+    def test_invalid_dataset_slug_is_error(self):
+        rec = _record(dataset="Bad Slug",
+                      identifier="rs2/csac/green/2_final/Bad Slug")
+        self.assertTrue(any("dataset" in e for e in self._errors(rec)))
+
     def test_reserved_manifest_path_is_error(self):
-        rec = _record(files=[{"path": "dataset.meta.json",
-                              "checksum_sha256": "ab" * 32, "bytes": 1}])
-        self.assertTrue(any("reserved" in e for e in self._errors(rec)))
+        for name in ("dataset.meta.json", "dataset.foo.json"):
+            rec = _record(files=[{"path": name,
+                                  "checksum_sha256": "ab" * 32, "bytes": 1}])
+            self.assertTrue(any("reserved" in e for e in self._errors(rec)),
+                            name)
 
     def test_duplicate_manifest_paths_is_error(self):
         entry = {"path": "a.csv", "checksum_sha256": "ab" * 32, "bytes": 1}
@@ -164,25 +178,45 @@ class TestValidateRecord(unittest.TestCase):
             self.assertTrue(any("bytes" in e for e in self._errors(rec)),
                             repr(bad))
 
-    def test_entry_coverage_outside_envelope_is_error(self):
+    def test_entry_temporal_outside_envelope_is_error(self):
         rec = _record(files=[{"path": "a.csv", "checksum_sha256": "ab" * 32,
-                              "bytes": 1, "coverage_start": "1970-01-01",
-                              "coverage_end": "1990"}])
+                              "bytes": 1,
+                              "temporal": {"start": "1970-01-01",
+                                          "end": "1990"}}])
         self.assertTrue(any("envelope" in e for e in self._errors(rec)))
 
-    def test_entry_coverage_inside_envelope_ok(self):
+    def test_entry_temporal_inside_envelope_ok(self):
         rec = _record(files=[{"path": "a.csv", "checksum_sha256": "ab" * 32,
-                              "bytes": 1, "coverage_start": "1989-01-01",
-                              "coverage_end": "1989-12-31"}])
+                              "bytes": 1,
+                              "temporal": {"start": "1989-01-01",
+                                          "end": "1989-12-31"}}])
         self.assertEqual(self._errors(rec), [])
+
+    def test_entry_temporal_must_be_object(self):
+        # Malformed input bypasses build_record's dict() cast - a hand-
+        # edited or pre-r6 record could still arrive shaped like this.
+        rec = _record()
+        rec["files"] = [{"path": "a.csv", "checksum_sha256": "ab" * 32,
+                         "bytes": 1, "temporal": "1989"}]
+        self.assertTrue(any("temporal" in e for e in self._errors(rec)))
 
     def test_depositors_must_be_list(self):
         rec = _record(depositors="njakeman")
         self.assertTrue(any("depositors" in e for e in self._errors(rec)))
 
     def test_unknown_subject_is_error(self):
-        rec = _record(subjects=["dragons"])
+        rec = _record(subject=["dragons"])
         self.assertTrue(any("dragons" in e for e in self._errors(rec)))
+
+    def test_temporal_must_be_object(self):
+        rec = _record()
+        rec["temporal"] = "1989"
+        self.assertTrue(any("temporal" in e for e in self._errors(rec)))
+
+    def test_licence_old_spelling_flagged(self):
+        rec = _record()
+        rec["licence"] = "CC-BY-4.0"
+        self.assertTrue(any("license" in e for e in self._errors(rec)))
 
     def test_fetched_domain_codes_used(self):
         rec = _record(domain="newdomain")
@@ -197,10 +231,11 @@ class TestManifest(unittest.TestCase):
                                  "bytes": 123})
 
     def test_entry_keeps_optionals(self):
-        entry = record.manifest_entry("a.csv", "ab" * 32, 123,
-                                      coverage_start="1989",
-                                      coverage_end="1990", fmt="text/csv")
+        entry = record.manifest_entry(
+            "a.csv", "ab" * 32, 123,
+            temporal=record.temporal_object("1989", "1990"), fmt="text/csv")
         self.assertEqual(entry["format"], "text/csv")
+        self.assertEqual(entry["temporal"], {"start": "1989", "end": "1990"})
         self.assertEqual(list(entry)[:3], ["path", "checksum_sha256", "bytes"])
 
     def test_guess_format(self):
@@ -264,16 +299,29 @@ class TestEnvelope(unittest.TestCase):
                          ("1995", "2000"))
 
     def test_single_file_dataset_envelope_is_the_files(self):
-        rec = _record(coverage_start="1989-01-01", coverage_end="1989-12-31",
-                      files=[{"path": "a.csv", "checksum_sha256": "ab" * 32,
-                              "bytes": 1, "coverage_start": "1989-01-01",
-                              "coverage_end": "1989-12-31"}])
+        rec = _record(
+            temporal={"start": "1989-01-01", "end": "1989-12-31"},
+            files=[{"path": "a.csv", "checksum_sha256": "ab" * 32,
+                    "bytes": 1,
+                    "temporal": {"start": "1989-01-01",
+                                "end": "1989-12-31"}}])
         self.assertEqual(record.envelope_errors(rec), [])
 
     def test_containment_violation_reported(self):
         rec = _record(files=[{"path": "a.csv", "checksum_sha256": "ab" * 32,
-                              "bytes": 1, "coverage_end": "2026-01-01"}])
+                              "bytes": 1,
+                              "temporal": {"start": "1989",
+                                          "end": "2026-01-01"}}])
         self.assertTrue(record.envelope_errors(rec))
+
+    def test_temporal_pair_extracts_start_end(self):
+        self.assertEqual(record.temporal_pair({"start": "1989", "end": "1999"}),
+                         ("1989", "1999"))
+        self.assertEqual(record.temporal_pair(None), (None, None))
+
+    def test_temporal_object_shape(self):
+        self.assertEqual(record.temporal_object("1989", "1999"),
+                         {"start": "1989", "end": "1999"})
 
 
 class TestParseRecord(unittest.TestCase):
@@ -290,7 +338,7 @@ class TestParseRecord(unittest.TestCase):
             record.parse_record("[1, 2]")
 
     def test_unknown_schema_version_raises(self):
-        for version in ("0.3", "0.5", None):
+        for version in ("0.3", "0.4", None):
             rec = _record()
             rec["schema_version"] = version
             with self.assertRaises(record.RecordParseError):

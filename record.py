@@ -15,22 +15,21 @@ from typing import List, Optional, Set, Tuple
 
 import keys
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 
 REQUIRED_FIELDS = (
     "schema_version", "dataset_uuid", "identifier", "strand", "domain",
-    "project", "state", "sensitivity", "coverage_start", "coverage_end",
-    "version", "abstract", "subjects", "created", "modified", "files",
+    "project", "dataset", "state", "sensitivity", "temporal",
+    "version", "abstract", "subject", "created", "modified", "files",
 )
 RECOMMENDED_FIELDS = (
     "vocabulary_version", "creator", "source_type", "source_detail",
-    "licence", "steward", "depositors",
+    "license", "steward", "depositors",
 )
 OPTIONAL_FIELDS = ("derived_from", "language", "ethics_ref", "spatial", "notes")
 
 MANIFEST_REQUIRED = ("path", "checksum_sha256", "bytes")
-MANIFEST_OPTIONAL = ("coverage_start", "coverage_end", "format",
-                     "derived_from", "notes")
+MANIFEST_OPTIONAL = ("temporal", "format", "derived_from", "notes")
 
 _VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -128,10 +127,26 @@ def guess_format(filename: str) -> Optional[str]:
 
 
 # --- coverage envelope -------------------------------------------------
-# Values are years ('1989') or ISO dates ('2025-12-31'), already checked
-# by coverage_error. Comparison expands a year to its first/last day so
+# Temporal coverage is a nested {"start": ..., "end": ...} object
+# (r6 §3.1, the DCAT-shaped form of dcterms:temporal). Values are years
+# ('1989') or ISO dates ('2025-12-31'), already checked by
+# coverage_error. Comparison expands a year to its first/last day so
 # ISO strings compare lexicographically; returned values keep whichever
 # form the depositor gave.
+
+def temporal_object(start, end) -> dict:
+    """The nested temporal shape used at record and manifest level."""
+    return {"start": start, "end": end}
+
+
+def temporal_pair(temporal):
+    """(start, end) out of a temporal object; (None, None) when absent or
+    malformed - callers that need to enforce the shape (validate_record)
+    do so explicitly; this one just needs to not crash on bad input."""
+    if not isinstance(temporal, dict):
+        return None, None
+    return temporal.get("start"), temporal.get("end")
+
 
 def _as_start(value: str) -> str:
     return value + "-01-01" if _YEAR_RE.match(value or "") else (value or "")
@@ -154,19 +169,17 @@ def widen(envelope, pairs):
 
 
 def envelope_errors(rec: dict) -> List[str]:
-    """Containment check (r5 Q5): every per-file coverage range must sit
+    """Containment check (r5 Q5): every per-file temporal range must sit
     inside the record's envelope."""
     errors = []
-    start = rec.get("coverage_start")
-    end = rec.get("coverage_end")
+    start, end = temporal_pair(rec.get("temporal"))
     if not start or not end:
         return errors
     for entry in rec.get("files") or []:
         if not isinstance(entry, dict):
             continue
         name = entry.get("path") or "?"
-        file_start = entry.get("coverage_start")
-        file_end = entry.get("coverage_end")
+        file_start, file_end = temporal_pair(entry.get("temporal"))
         if file_start and _as_start(file_start) < _as_start(start):
             errors.append("file %r coverage starts %s, outside the dataset "
                           "envelope (%s to %s)" % (name, file_start, start, end))
@@ -179,16 +192,17 @@ def envelope_errors(rec: dict) -> List[str]:
 # --- manifest ----------------------------------------------------------
 
 def manifest_entry(path_name: str, checksum_sha256: str, size_bytes: int,
-                   coverage_start=None, coverage_end=None, fmt=None,
+                   temporal=None, fmt=None,
                    derived_from=None, notes=None) -> dict:
-    """A files[] entry in spec §2 order; empty optionals are omitted."""
+    """A files[] entry; empty optionals are omitted. `temporal` is the
+    nested {"start", "end"} object (r6 §3.1)."""
     entry = {
         "path": path_name,
         "checksum_sha256": checksum_sha256,
         "bytes": size_bytes,
     }
     extras = (
-        ("coverage_start", coverage_start), ("coverage_end", coverage_end),
+        ("temporal", temporal),
         ("format", fmt), ("derived_from", derived_from), ("notes", notes),
     )
     for name, value in extras:
@@ -242,35 +256,37 @@ def append_depositor(depositors: Optional[List[str]], name: str) -> List[str]:
 
 # --- record assembly and validation ------------------------------------
 
-def build_record(dataset_uuid, identifier, strand, domain, project, state,
-                 sensitivity, coverage_start, coverage_end, version, abstract,
-                 subjects, files, created, modified, vocabulary_version=None,
+def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
+                 state, sensitivity, temporal, version, abstract,
+                 subject, files, created, modified, vocabulary_version=None,
                  creator=None, source_type=None, source_detail=None,
-                 licence=None, steward=None, depositors=None,
+                 license=None, steward=None, depositors=None,
                  derived_from=None, language=None, ethics_ref=None,
                  spatial=None, notes=None) -> dict:
-    """Assemble the dataset record in spec §2 field order.
-    Recommended/optional fields that are None or empty are omitted."""
+    """Assemble the v0.5 dataset record in field order.
+    Recommended/optional fields that are None or empty are omitted.
+    `temporal` is the nested {"start", "end"} object; `subject` and
+    `license` carry the Dublin Core spellings (r6 §3.1)."""
     rec = {
         "schema_version": SCHEMA_VERSION,
         "dataset_uuid": dataset_uuid,
         "identifier": identifier,
         "strand": strand,
         "project": project,
+        "dataset": dataset,
         "sensitivity": sensitivity,
         "state": state,
         "domain": domain,
         "version": version,
         "abstract": abstract,
-        "subjects": list(subjects),
+        "subject": list(subject),
     }
     if vocabulary_version:
         rec["vocabulary_version"] = vocabulary_version
-    rec["coverage_start"] = coverage_start
-    rec["coverage_end"] = coverage_end
+    rec["temporal"] = dict(temporal)
     for name, value in (
             ("creator", creator), ("source_type", source_type),
-            ("source_detail", source_detail), ("licence", licence),
+            ("source_detail", source_detail), ("license", license),
             ("steward", steward), ("depositors", depositors)):
         if value:
             rec[name] = value
@@ -298,7 +314,7 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     errors = []
     warnings = []
     for field in REQUIRED_FIELDS:
-        if field not in rec or rec[field] in (None, "", []):
+        if field not in rec or rec[field] in (None, "", [], {}):
             errors.append("required field '%s' is missing or empty" % field)
     if errors:
         return errors, warnings
@@ -315,24 +331,34 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                       % (rec["state"], "/".join(keys.STATES)))
     if rec["sensitivity"] not in keys.SENSITIVITIES:
         errors.append("sensitivity %r is not green or amber" % rec["sensitivity"])
+    if not keys.validate_project(str(rec["dataset"])):
+        errors.append("dataset %r is not a valid slug (lowercase "
+                      "letters/digits and hyphens)" % (rec["dataset"],))
 
+    # r6 §2: the identifier is the five-part prefix and its final
+    # element must equal the dataset field - a mismatch means the record
+    # was moved or hand-edited, and is an error, not a warning.
     expected_id = "/".join((rec["strand"], rec["project"],
-                            rec["sensitivity"], rec["state"]))
+                            rec["sensitivity"], rec["state"],
+                            rec["dataset"]))
     if rec["identifier"] != expected_id:
         errors.append("identifier %r does not match the path parts (%r)"
                       % (rec["identifier"], expected_id))
     if not _UUID4_RE.match(str(rec["dataset_uuid"])):
         errors.append("dataset_uuid %r is not a UUID4" % (rec["dataset_uuid"],))
 
-    for field in ("coverage_start", "coverage_end"):
-        err = coverage_error(rec[field])
-        if err:
-            errors.append(err)
+    if not isinstance(rec["temporal"], dict):
+        errors.append("'temporal' must be an object with start and end")
+    else:
+        for part in ("start", "end"):
+            err = coverage_error(rec["temporal"].get(part))
+            if err:
+                errors.append("temporal %s: %s" % (part, err))
 
-    if not isinstance(rec["subjects"], list) or not rec["subjects"]:
+    if not isinstance(rec["subject"], list) or not rec["subject"]:
         errors.append("at least one subject term is required")
     else:
-        for term in unknown_subjects(rec["subjects"], vocab_terms):
+        for term in unknown_subjects(rec["subject"], vocab_terms):
             errors.append(
                 "subject %r is not in the vocabulary; to propose an addition, "
                 "open a pull request or issue on the vocabulary repo" % term)
@@ -351,6 +377,10 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         if field in rec and not isinstance(rec[field], list):
             errors.append("'%s' must be a list" % field)
 
+    if "license" not in rec and "licence" in rec:
+        errors.append("'licence' was renamed 'license' in v0.5 (the "
+                      "Dublin Core spelling)")
+
     if not isinstance(rec["files"], list):
         errors.append("'files' must be a list of manifest entries")
         return errors, warnings
@@ -365,9 +395,9 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                 errors.append("file %s: required field '%s' is missing or "
                               "empty" % (name, field))
         path = entry.get("path")
-        if path == keys.RECORD_FILENAME:
-            errors.append("a manifest entry uses the reserved name %r"
-                          % keys.RECORD_FILENAME)
+        if path and keys.is_reserved_name(path):
+            errors.append("manifest path %r matches the reserved "
+                          "dataset.*.json pattern" % path)
         if path:
             if path in seen_paths:
                 errors.append("duplicate manifest path %r" % path)
@@ -380,11 +410,17 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         if size is not None and size != "" and (
                 not isinstance(size, int) or isinstance(size, bool) or size < 0):
             errors.append("file %s: bytes must be a non-negative integer" % name)
-        for field in ("coverage_start", "coverage_end"):
-            if entry.get(field):
-                err = coverage_error(entry[field])
-                if err:
-                    errors.append("file %s: %s" % (name, err))
+        file_temporal = entry.get("temporal")
+        if file_temporal is not None:
+            if not isinstance(file_temporal, dict):
+                errors.append("file %s: temporal must be an object with "
+                              "start and end" % name)
+            else:
+                for part in ("start", "end"):
+                    err = coverage_error(file_temporal.get(part))
+                    if err:
+                        errors.append("file %s temporal %s: %s"
+                                      % (name, part, err))
     errors.extend(envelope_errors(rec))
     return errors, warnings
 
