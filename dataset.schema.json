@@ -3,28 +3,35 @@
   "title": "CRSW dataset record",
   "type": "object",
   "required": ["schema_version", "dataset_uuid", "identifier", "strand",
-               "domain", "project", "state", "sensitivity",
-               "coverage_start", "coverage_end", "version", "abstract",
-               "subjects", "created", "modified", "files"],
+               "domain", "project", "dataset", "state", "sensitivity",
+               "temporal", "version", "abstract", "subject",
+               "created", "modified", "files"],
   "properties": {
-    "schema_version": {"const": "0.4"},
+    "schema_version": {"const": "0.5"},
     "dataset_uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
-    "identifier": {"type": "string", "pattern": "^(rs1|rs2|rs3|rs4)/[a-z0-9-]+/(green|amber)/(0_raw|1_interim|2_final)$"},
+    "identifier": {"type": "string", "pattern": "^(rs1|rs2|rs3|rs4)/[a-z0-9-]+/(green|amber)/(0_raw|1_interim|2_final)/[a-z0-9-]+$"},
     "strand": {"enum": ["rs1", "rs2", "rs3", "rs4"]},
     "domain": {"type": "string"},
     "project": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "dataset": {"type": "string", "pattern": "^[a-z0-9-]+$"},
     "state": {"enum": ["0_raw", "1_interim", "2_final"]},
     "sensitivity": {"enum": ["green", "amber"]},
-    "coverage_start": {"type": "string"},
-    "coverage_end": {"type": "string"},
+    "temporal": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string"},
+        "end": {"type": "string"}
+      }
+    },
     "version": {"type": "string", "pattern": "^[0-9]+-[0-9]+$"},
     "abstract": {"type": "string"},
-    "subjects": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "subject": {"type": "array", "items": {"type": "string"}, "minItems": 1},
     "vocabulary_version": {"type": "string"},
     "creator": {"type": "string"},
     "source_type": {"enum": ["archive", "survey", "scrape", "instrument", "partner", "derived", "other"]},
     "source_detail": {"type": "string"},
-    "licence": {"type": "string"},
+    "license": {"type": "string"},
     "steward": {"type": "string"},
     "depositors": {"type": "array", "items": {"type": "string"}},
     "created": {"type": "string"},
@@ -40,11 +47,17 @@
         "type": "object",
         "required": ["path", "checksum_sha256", "bytes"],
         "properties": {
-          "path": {"type": "string", "not": {"const": "dataset.meta.json"}},
+          "path": {"type": "string", "not": {"pattern": "^dataset\\..*\\.json$"}},
           "checksum_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "bytes": {"type": "integer", "minimum": 0},
-          "coverage_start": {"type": "string"},
-          "coverage_end": {"type": "string"},
+          "temporal": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "string"},
+              "end": {"type": "string"}
+            }
+          },
           "format": {"type": "string"},
           "derived_from": {"type": "string"},
           "notes": {"type": "string"}

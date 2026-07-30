@@ -25,30 +25,31 @@ SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def worked_example() -> dict:
-    """The spec §2 worked example, assembled through the real builder."""
+    """The r6 worked example, assembled through the real builder."""
     return record.build_record(
         dataset_uuid="8f14e45f-ceea-467f-a34e-9db1c153f0a1",
-        identifier="rs2/csac/green/2_final",
-        strand="rs2", domain="quant", project="csac", state="2_final",
-        sensitivity="green",
-        coverage_start="1989", coverage_end="2025-12-31",
+        identifier="rs2/csac/green/2_final/csac-clean",
+        strand="rs2", domain="quant", project="csac", dataset="csac-clean",
+        state="2_final", sensitivity="green",
+        temporal=record.temporal_object("1989", "2025-12-31"),
         version="3-0",
         abstract=" ".join(["word"] * 150),
-        subjects=["armed-conflict", "forced-labour"],
+        subject=["armed-conflict", "forced-labour"],
         vocabulary_version="2026-07-23",
         creator="CSAC coding team",
         source_type="archive",
         source_detail="CSAC coding project, University of Nottingham",
-        licence="CC-BY-4.0", steward="Kevin Fahey",
+        license="CC-BY-4.0", steward="Kevin Fahey",
         depositors=["njakeman"],
         created="2026-07-29T10:15:00Z", modified="2026-07-29T10:15:00Z",
-        derived_from="rs2/csac/amber/1_interim",
+        derived_from="rs2/csac/amber/1_interim/csac-clean",
         files=[
             record.manifest_entry("csac-clean-2025.csv", "e3" * 32,
                                   48211023, fmt="text/csv"),
-            record.manifest_entry("csac-annual-1989.csv", "ab" * 32, 220144,
-                                  coverage_start="1989-01-01",
-                                  coverage_end="1989-12-31", fmt="text/csv"),
+            record.manifest_entry(
+                "csac-annual-1989.csv", "ab" * 32, 220144,
+                temporal=record.temporal_object("1989-01-01", "1989-12-31"),
+                fmt="text/csv"),
         ])
 
 
@@ -63,11 +64,16 @@ class TestSchemaInStepWithCode(unittest.TestCase):
                          keys.SENSITIVITIES)
 
     def test_identifier_pattern_generated_from_keys_constants(self):
-        expected = "^(%s)/[a-z0-9-]+/(%s)/(%s)$" % (
+        # r6 §1: the dataset is a fifth path element.
+        expected = "^(%s)/[a-z0-9-]+/(%s)/(%s)/[a-z0-9-]+$" % (
             "|".join(keys.STRANDS), "|".join(keys.SENSITIVITIES),
             "|".join(keys.STATES))
         self.assertEqual(SCHEMA["properties"]["identifier"]["pattern"],
                          expected)
+
+    def test_dataset_property_matches_slug_rule(self):
+        self.assertEqual(SCHEMA["properties"]["dataset"]["pattern"],
+                         "^[a-z0-9-]+$")
 
     def test_source_type_enum_matches_cli(self):
         cli_codes = [code for _, code, _ in deposit.SOURCE_TYPE_ENTRIES]
@@ -96,9 +102,24 @@ class TestSchemaInStepWithCode(unittest.TestCase):
             list(record.MANIFEST_REQUIRED))
 
     def test_reserved_path_refused_by_schema_text(self):
-        self.assertEqual(
-            SCHEMA["properties"]["files"]["items"]["properties"]["path"]
-            ["not"]["const"], keys.RECORD_FILENAME)
+        # r6 §2: reservation is the dataset.*.json pattern, not one name.
+        pattern = (SCHEMA["properties"]["files"]["items"]["properties"]
+                  ["path"]["not"]["pattern"])
+        self.assertTrue(keys.RESERVED_RECORD_RE.match("dataset.meta.json"))
+        import re
+        self.assertTrue(re.match(pattern, "dataset.meta.json"))
+        self.assertTrue(re.match(pattern, "dataset.foo.json"))
+        self.assertFalse(re.match(pattern, "dataset.json"))
+
+    def test_temporal_shape_at_record_and_entry_level(self):
+        for location in (SCHEMA["properties"]["temporal"],
+                         SCHEMA["properties"]["files"]["items"]
+                         ["properties"]["temporal"]):
+            self.assertEqual(set(location["required"]), {"start", "end"})
+
+    def test_abstract_has_no_length_constraint(self):
+        # r6 §0: length guidance lives in the tool, not the contract.
+        self.assertNotIn("minLength", SCHEMA["properties"]["abstract"])
 
 
 @unittest.skipUnless(HAVE_JSONSCHEMA,
@@ -135,7 +156,7 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
     MUTATIONS = (
         ("bad uuid", {"dataset_uuid": "not-a-uuid"}),
         ("bad version", {"version": "v3"}),
-        ("empty subjects", {"subjects": []}),
+        ("empty subject", {"subject": []}),
         ("empty files", {"files": []}),
         ("bad checksum", {"files": [{"path": "a.csv",
                                      "checksum_sha256": "zz", "bytes": 1}]}),
@@ -147,6 +168,8 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
                                       "bytes": 1}]}),
         ("bad strand", {"strand": "rs9"}),
         ("missing created", {"created": None}),
+        ("bad dataset slug", {"dataset": "Bad Slug"}),
+        ("temporal missing end", {"temporal": {"start": "1989"}}),
     )
 
     def test_schema_invalid_is_runtime_invalid(self):
