@@ -105,6 +105,12 @@ MESSAGES = {
         "NOT written. Files that already uploaded are fine and a re-run is\n"
         "safe. This is a tool problem, not yours: re-run with --verbose and\n"
         "send the output to eResearch."),
+    "restricted_first": (
+        "Nothing deposited: access restrictions must be in place BEFORE the\n"
+        "first deposit, not applied afterwards. Depositing first and\n"
+        "restricting later leaves a window where the data is readable by\n"
+        "everyone with strand access. Contact eResearch or your data\n"
+        "steward to set up the restriction, then re-run."),
 }
 
 
@@ -529,6 +535,19 @@ def resolve_project_choice(raw, entries):
     return resolve_choice(raw, entries)
 
 
+def check_restricted_access(kind: str) -> None:
+    """Matrix-first (permissions discussion, r6 §8): if a newly created
+    project or dataset will need access restricted beyond the strand,
+    that restriction must be set up before the first deposit - never
+    deposit then restrict, which leaves a window where the data is
+    readable by everyone with strand access. Raises ValueError to abort
+    if the answer is yes. Only asked on a genuine creation confirmation,
+    never on the honest "use this, listing failed" fallback."""
+    if ask_yes_no("Will access to this %s need restricting beyond the "
+                  "strand?" % kind, default_no=True):
+        raise ValueError(MESSAGES["restricted_first"])
+
+
 def prompt_new_project(container: str, existing: List[str],
                        confirm_create: bool = True, kind: str = "project") -> str:
     """Ask for a project or dataset name, normalise it, warn on
@@ -563,6 +582,8 @@ def prompt_new_project(container: str, existing: List[str],
             confirmed = ask_yes_no("Use %s '%s' in %s?"
                                    % (kind, name, container))
         if confirmed:
+            if confirm_create:
+                check_restricted_access(kind)
             return name
 
 
@@ -627,6 +648,7 @@ def check_project_flag(project: str, container: str,
         raise ValueError(
             "nothing deposited: %s '%s' was not confirmed - pick an "
             "existing %s or re-run and confirm" % (kind, project, kind))
+    check_restricted_access(kind)
 
 
 def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,

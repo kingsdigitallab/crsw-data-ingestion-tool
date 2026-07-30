@@ -462,6 +462,9 @@ class TestMessageQuality(unittest.TestCase):
     def test_record_invalid_says_nothing_was_written(self):
         self.assertIn("NOT written", deposit.MESSAGES["record_invalid"])
 
+    def test_restricted_first_says_before_not_after(self):
+        self.assertIn("BEFORE the", deposit.MESSAGES["restricted_first"])
+
 
 class TestReservedNameRefusal(unittest.TestCase):
     def test_depositing_the_record_name_fails_before_preflight(self):
@@ -517,12 +520,14 @@ class TestPromptProject(unittest.TestCase):
         self.assertEqual(result, "csac")
 
     def test_new_path_normalises_and_confirms(self):
-        result, said, _, _ = self._run(["csac", "x"], ["n", "CSAC Data", "y"])
+        # Trailing "n": declines the restricted-access guard's question.
+        result, said, _, _ = self._run(["csac", "x"],
+                                       ["n", "CSAC Data", "y", "n"])
         self.assertEqual(result, "csac-data")
         self.assertIn("  -> normalised to: csac-data", said)
 
     def test_empty_listing_notes_and_creates_first(self):
-        result, said, _, _ = self._run([], ["first-project", "y"])
+        result, said, _, _ = self._run([], ["first-project", "y", "n"])
         self.assertEqual(result, "first-project")
         self.assertTrue(any("No projects in rs2 yet" in s for s in said))
 
@@ -537,9 +542,19 @@ class TestPromptProject(unittest.TestCase):
 
     def test_near_match_warns_and_decline_reprompts(self):
         result, _, warned, _ = self._run(
-            ["csac"], ["n", "csacs", "n", "peacekeeping", "y"])
+            ["csac"], ["n", "csacs", "n", "peacekeeping", "y", "n"])
         self.assertEqual(result, "peacekeeping")
         self.assertTrue(any("csac" in w for w in warned))
+
+    def test_restricted_access_declined_aborts(self):
+        # Creation confirmed, but access needs restricting beyond the
+        # strand -> matrix-first, nothing deposited (r6 §8).
+        with mock.patch("builtins.input",
+                        side_effect=["n", "new-project", "y", "y"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            with self.assertRaises(ValueError) as ctx:
+                deposit.prompt_project("rs2", ["csac"])
+        self.assertIn("restrictions must be in place", str(ctx.exception))
 
     def test_legacy_invalid_name_reprompts(self):
         result, said, _, _ = self._run(["CSAC", "csac-data"], ["1", "2"])
@@ -572,7 +587,7 @@ class TestPromptDataset(unittest.TestCase):
         self.assertTrue(any("[n] new dataset" in s for s in said))
 
     def test_empty_listing_notes_and_creates_first(self):
-        result, said, _ = self._run([], ["first-dataset", "y"])
+        result, said, _ = self._run([], ["first-dataset", "y", "n"])
         self.assertEqual(result, "first-dataset")
         self.assertTrue(any(
             "No datasets in %s yet" % self.CONTAINER in s for s in said))
@@ -586,16 +601,26 @@ class TestPromptDataset(unittest.TestCase):
     def test_near_match_warns(self):
         # r6 §6: near-match dataset name (sentinel2 vs sentinel2-imagery).
         result, _, warned = self._run(
-            ["sentinel2-imagery"], ["n", "sentinel2", "y"])
+            ["sentinel2-imagery"], ["n", "sentinel2", "y", "n"])
         self.assertEqual(result, "sentinel2")
         self.assertTrue(any("sentinel2-imagery" in w for w in warned))
 
     def test_new_dataset_confirmation_wording(self):
-        with mock.patch("builtins.input", side_effect=["n", "labels", "y"]) as inp, \
+        with mock.patch("builtins.input",
+                        side_effect=["n", "labels", "y", "n"]) as inp, \
              mock.patch("deposit.say"), mock.patch("deposit.warn"):
             deposit.prompt_project(self.CONTAINER, ["existing"], kind="dataset")
         prompts = [str(c.args[0]) for c in inp.call_args_list]
         self.assertTrue(any("Create new dataset" in p for p in prompts))
+
+    def test_restricted_access_confirmed_aborts_with_no_deposit(self):
+        with mock.patch("builtins.input",
+                        side_effect=["n", "restricted-set", "y", "y"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            with self.assertRaises(ValueError) as ctx:
+                deposit.prompt_project(self.CONTAINER, ["existing"],
+                                       kind="dataset")
+        self.assertIn("BEFORE the", str(ctx.exception))
 
 
 def _flagged_args():
@@ -807,15 +832,24 @@ class TestCheckProjectFlag(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=AssertionError):
             deposit.check_project_flag("newproj", "rs2", None, False)
 
-    def test_new_project_confirms_exactly_once(self):
-        with mock.patch("builtins.input", side_effect=["y"]) as inp:
+    def test_new_project_confirms_then_asks_about_restriction(self):
+        # Creation confirmed ("y"), then the matrix-first restricted-
+        # access question ("n" = no restriction needed) - two prompts,
+        # not one (r6 §8).
+        with mock.patch("builtins.input", side_effect=["y", "n"]) as inp:
             deposit.check_project_flag("newproj", "rs2", ["csac"], False)
-        self.assertEqual(inp.call_count, 1)
+        self.assertEqual(inp.call_count, 2)
 
     def test_decline_raises_valueerror(self):
         with mock.patch("builtins.input", side_effect=["n"]):
             with self.assertRaises(ValueError):
                 deposit.check_project_flag("newproj", "rs2", ["csac"], False)
+
+    def test_restricted_access_yes_aborts(self):
+        with mock.patch("builtins.input", side_effect=["y", "y"]):
+            with self.assertRaises(ValueError) as ctx:
+                deposit.check_project_flag("newproj", "rs2", ["csac"], False)
+        self.assertIn("restrictions must be in place", str(ctx.exception))
 
     def test_dry_run_never_prompts_prints_note(self):
         said = []
