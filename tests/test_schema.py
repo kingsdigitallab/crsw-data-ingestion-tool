@@ -112,6 +112,17 @@ class TestEmittedRecordAgainstSchema(unittest.TestCase):
         errors, _ = record.validate_record(worked_example(), vocab_terms)
         self.assertEqual(errors, [])
 
+    def test_short_abstract_passes_both_tool_and_contract(self):
+        # r6 §0: the schema carries no length constraint, so the tool's
+        # lenience (warn, never block) cannot contradict the contract.
+        rec = worked_example()
+        rec["abstract"] = "2"
+        jsonschema.validate(rec, SCHEMA)
+        vocab_terms = {"armed-conflict", "forced-labour"}
+        errors, warnings = record.validate_record(rec, vocab_terms)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("words" in w for w in warnings))
+
 
 @unittest.skipUnless(HAVE_JSONSCHEMA,
                      "jsonschema not installed (dev-only test)")

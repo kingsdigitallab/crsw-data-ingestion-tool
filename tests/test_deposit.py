@@ -648,6 +648,33 @@ class TestExistingRecordFlow(unittest.TestCase):
         self.assertEqual(ctx.exception.kind, "permission")
         self.assertEqual(ctx.exception.detail, self.RECORD_KEY)
 
+    def test_short_abstract_gated_then_reprompted(self):
+        import json
+        fetch = self._fetcher((json.dumps(self._existing()), None))
+        good = " ".join(["word"] * 60)
+        # version, cov x2, update-abstract=y, short abstract,
+        # continue-anyway=n -> re-prompt, good abstract.
+        with mock.patch("builtins.input",
+                        side_effect=["", "", "", "y", "tiny", "n", good]), \
+             mock.patch("deposit.say"), \
+             mock.patch("deposit.warn") as warned:
+            meta, _ = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        self.assertEqual(meta["abstract"], good)
+        self.assertIn("1 words", warned.call_args[0][0])
+
+    def test_short_abstract_accepted_on_continue(self):
+        # r6 §0: lenience is deliberate for the testing phase - warned,
+        # gated behind y/N, never refused.
+        import json
+        fetch = self._fetcher((json.dumps(self._existing()), None))
+        with mock.patch("builtins.input",
+                        side_effect=["", "", "", "y", "2", "y"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            meta, _ = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        self.assertEqual(meta["abstract"], "2")
+
     def test_fetch_error_downgraded_under_dry_run(self):
         args = deposit.build_parser().parse_args(
             ["a.csv", "--strand", "rs2", "--project", "csac",

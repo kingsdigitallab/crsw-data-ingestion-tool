@@ -781,12 +781,19 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
             "Update the abstract?", default_no=True):
         meta["abstract"] = existing["abstract"]
     else:
-        say("Abstract (100-300 words; single line, or paste and press Enter):")
-        abstract = input("> ").strip()
-        w = record.abstract_warning(abstract)
-        if w:
-            warn(w + " - recorded anyway; you can revise the record later.")
-        meta["abstract"] = abstract
+        while True:
+            say("Abstract (at least 50 words; single line, or paste and "
+                "press Enter):")
+            abstract = input("> ").strip()
+            w = record.abstract_warning(abstract)
+            # Soft gate, deliberate for the testing phase (r6 §0) -
+            # revisit before the pilot whether it becomes a block.
+            if w:
+                warn(w)
+                if not ask_yes_no("Continue anyway?", default_no=True):
+                    continue
+            meta["abstract"] = abstract
+            break
 
     if existing:
         # Recommended fields carry over untouched; a metadata edit is a

@@ -7,6 +7,63 @@ import record
 
 VOCAB_TERMS = {"armed-conflict", "forced-labour", "human-trafficking"}
 
+
+class TestChecksum(unittest.TestCase):
+    def test_empty_file_matches_known_sha256(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "empty.bin"
+            p.write_bytes(b"")
+            self.assertEqual(
+                record.sha256_file(p),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+    def test_chunked_reading_matches_whole_file(self):
+        import hashlib
+        data = b"x" * (3 * 1024 * 1024 + 17)  # crosses chunk boundaries
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "big.bin"
+            p.write_bytes(data)
+            self.assertEqual(record.sha256_file(p, chunk_size=65536),
+                             hashlib.sha256(data).hexdigest())
+
+
+class TestFieldChecks(unittest.TestCase):
+    def test_coverage_year_only_ok(self):
+        self.assertIsNone(record.coverage_error("1989"))
+
+    def test_coverage_iso_date_ok(self):
+        self.assertIsNone(record.coverage_error("2025-12-31"))
+
+    def test_coverage_garbage_rejected(self):
+        for bad in ("31/12/2025", "2025-13-01", "89", "next year", ""):
+            self.assertIsNotNone(record.coverage_error(bad), bad)
+
+    def test_abstract_at_or_over_guidance_no_warning(self):
+        self.assertIsNone(record.abstract_warning(" ".join(["w"] * 50)))
+
+    def test_abstract_too_short_warns_with_word_count(self):
+        w = record.abstract_warning("too short")
+        self.assertIn("2 words", w)
+        self.assertIn("at least 50", w)
+
+    def test_long_abstract_is_fine(self):
+        # r6 §0 dropped the upper guidance; only the floor warns.
+        self.assertIsNone(record.abstract_warning(" ".join(["w"] * 500)))
+
+    def test_normalise_version_accepts_documented_forms(self):
+        for raw in ("3-0", "v3-0", "3.0", "v3.0", "V3-0"):
+            self.assertEqual(record.normalise_version(raw), "3-0", raw)
+
+    def test_normalise_version_rejects_bare_major(self):
+        for raw in ("3", "v3", "", "3-0-1", "three-oh", "3_0"):
+            self.assertIsNone(record.normalise_version(raw), raw)
+
+    def test_unknown_subjects_listed(self):
+        self.assertEqual(
+            record.unknown_subjects(["armed-conflict", "dragons"], VOCAB_TERMS),
+            ["dragons"])
+
+
 class TestAutoFields(unittest.TestCase):
     def test_utc_now_iso_shape(self):
         self.assertRegex(record.utc_now_iso(),

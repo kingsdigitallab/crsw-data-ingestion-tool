@@ -38,8 +38,7 @@ _UUID4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
-ABSTRACT_MIN_WORDS = 100
-ABSTRACT_MAX_WORDS = 300
+ABSTRACT_MIN_WORDS = 50
 
 
 class RecordParseError(ValueError):
@@ -73,11 +72,14 @@ def coverage_error(value: str) -> Optional[str]:
 
 
 def abstract_warning(text: str) -> Optional[str]:
-    """Warn outside 100-300 words; never block (spec §5)."""
+    """Warn below 50 words; never block (r6 §0). Length guidance lives
+    here in the tool, not in the schema - a contract constraint the tool
+    doesn't enforce just breeds a permanently red CI test."""
     n = len((text or "").split())
-    if n < ABSTRACT_MIN_WORDS or n > ABSTRACT_MAX_WORDS:
-        return "abstract is %d words; aim for %d-%d" % (
-            n, ABSTRACT_MIN_WORDS, ABSTRACT_MAX_WORDS)
+    if n < ABSTRACT_MIN_WORDS:
+        return ("Abstract is %d words. Guidance is at least %d - enough "
+                "for someone deciding whether this dataset is worth "
+                "requesting." % (n, ABSTRACT_MIN_WORDS))
     return None
 
 

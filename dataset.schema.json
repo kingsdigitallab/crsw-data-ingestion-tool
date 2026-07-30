@@ -18,7 +18,7 @@
     "coverage_start": {"type": "string"},
     "coverage_end": {"type": "string"},
     "version": {"type": "string", "pattern": "^[0-9]+-[0-9]+$"},
-    "abstract": {"type": "string", "minLength": 50},
+    "abstract": {"type": "string"},
     "subjects": {"type": "array", "items": {"type": "string"}, "minItems": 1},
     "vocabulary_version": {"type": "string"},
     "creator": {"type": "string"},
