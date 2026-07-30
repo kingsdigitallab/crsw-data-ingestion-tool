@@ -122,10 +122,10 @@ class TestCopytoHeaders(unittest.TestCase):
                             "rs2/csac/green/2_final/a.csv",
                             headers=self.HEADERS)
         args = run.call_args[0][1]
-        self.assertEqual(args[:5], [
-            "copyto",
-            "--header-upload", "x-amz-meta-dataset-uuid: 8f14e45f",
-            "--header-upload", "x-amz-meta-sensitivity: green"])
+        self.assertIn("--header-upload", args)
+        self.assertIn("x-amz-meta-dataset-uuid: 8f14e45f", args)
+        self.assertIn("x-amz-meta-sensitivity: green", args)
+        self.assertEqual(args[0], "copyto")
         self.assertEqual(args[-1], "ceph:crsw/rs2/csac/green/2_final/a.csv")
 
     def test_no_headers_no_flags(self):
@@ -142,6 +142,24 @@ class TestCopytoHeaders(unittest.TestCase):
         self.assertIn("--header-upload", argv)
         self.assertIn("x-amz-meta-dataset-uuid: 8f14e45f", argv)
         self.assertEqual(argv[-1], "ceph:crsw/k/a.csv")
+
+
+class TestCopytoIgnoreTimes(unittest.TestCase):
+    """A same-size/same-modtime re-upload must still transfer (and thus
+    still label) - rclone's own skip check would otherwise silently
+    leave stale or absent labels on an intended re-upload."""
+
+    def test_ignore_times_always_present(self):
+        with mock.patch("transfer._run", return_value=(0, "", "")) as run:
+            transfer.copyto("rclone", "a.csv", "ceph", "crsw", "k/a.csv")
+        self.assertIn("--ignore-times", run.call_args[0][1])
+
+    def test_ignore_times_present_on_progress_path(self):
+        with mock.patch("transfer.subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            transfer.copyto("rclone", "a.csv", "ceph", "crsw", "k/a.csv",
+                            show_progress=True)
+        self.assertIn("--ignore-times", run.call_args[0][0])
 
 
 class TestReadKey(unittest.TestCase):
@@ -248,39 +266,49 @@ class TestStatKey(unittest.TestCase):
             self.assertIsNone(transfer.stat_key("rclone", "ceph", "crsw", "k"))
 
 
-class TestListProjects(unittest.TestCase):
+class TestListDirs(unittest.TestCase):
     def test_lists_and_sorts_dirs(self):
         listing = ('[{"Path":"csac","Name":"csac","IsDir":true},'
                    '{"Path":"aid-flows","Name":"aid-flows","IsDir":true}]')
         with mock.patch("transfer._run", return_value=(0, listing, "")):
-            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"),
+            self.assertEqual(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"),
                              ["aid-flows", "csac"])
+
+    def test_works_at_any_depth(self):
+        # r6 §1: the dataset picker keys on the full state prefix, not
+        # just the strand - same function, no second implementation.
+        listing = '[{"Path":"sentinel2-imagery","Name":"sentinel2-imagery","IsDir":true}]'
+        with mock.patch("transfer._run", return_value=(0, listing, "")) as run:
+            result = transfer.list_dirs("rclone", "ceph", "crsw",
+                                        "rs3/kilns/green/2_final")
+        self.assertEqual(result, ["sentinel2-imagery"])
+        self.assertIn("ceph:crsw/rs3/kilns/green/2_final", run.call_args[0][1])
 
     def test_empty_json_is_empty_list(self):
         with mock.patch("transfer._run", return_value=(0, "[]", "")):
-            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"), [])
+            self.assertEqual(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"), [])
 
     def test_missing_prefix_is_empty_list(self):
-        # An empty strand has no prefix in S3 - "directory not found" means
-        # genuinely nothing there, not a failure (r4 §2).
+        # An empty prefix has no directory in S3 - "directory not found"
+        # means genuinely nothing there, not a failure (r4 §2).
         with mock.patch("transfer._run",
                         return_value=(1, "", "error: directory not found")):
-            self.assertEqual(transfer.list_projects("rclone", "ceph", "crsw", "rs2"), [])
+            self.assertEqual(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"), [])
 
     def test_permission_failure_is_none(self):
         # A scoped credential may write but not list; None must never be
-        # presented as "no existing projects" (r4 §2).
+        # presented as "nothing here" (r4 §2).
         with mock.patch("transfer._run", return_value=(1, "", "AccessDenied")):
-            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
+            self.assertIsNone(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"))
 
     def test_network_failure_is_none(self):
         with mock.patch("transfer._run",
                         return_value=(1, "", "dial tcp: i/o timeout")):
-            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
+            self.assertIsNone(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"))
 
     def test_bad_json_is_none(self):
         with mock.patch("transfer._run", return_value=(0, "not json", "")):
-            self.assertIsNone(transfer.list_projects("rclone", "ceph", "crsw", "rs2"))
+            self.assertIsNone(transfer.list_dirs("rclone", "ceph", "crsw", "rs2"))
 
 
 if __name__ == "__main__":

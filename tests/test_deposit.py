@@ -27,12 +27,13 @@ class TestHumanSize(unittest.TestCase):
         self.assertEqual(deposit.human_size(5 * 1024 ** 3), "5.0 GB")
 
 
-_META = dict(strand="rs2", project="csac", state="2_final",
+_META = dict(strand="rs2", project="csac", dataset="sentinel2-imagery",
+             state="2_final",
              sensitivity="green", domain="quant", version="1-0",
-             subjects=["armed-conflict"], abstract="a " * 120,
+             subject=["armed-conflict"], abstract="a " * 120,
              coverage_start="1989", coverage_end="2025",
              source_type="archive", source_detail="test fixture",
-             licence="CC-BY-4.0", vocabulary_version="2026-07-23")
+             license="CC-BY-4.0", vocabulary_version="2026-07-23")
 
 _VOCAB = {"vocabulary_version": "2026-07-23",
           "domains": [{"code": "quant", "label": "Quantitative",
@@ -45,7 +46,8 @@ class TestPlanDeposits(unittest.TestCase):
         per_file = {"x.csv": {"coverage_start": "2001"}}
         plans = deposit.plan_deposits([Path("data/x.csv")], dict(_META),
                                       per_file)
-        self.assertEqual(plans[0]["key"], "rs2/csac/green/2_final/x.csv")
+        self.assertEqual(plans[0]["key"],
+                         "rs2/csac/green/2_final/sentinel2-imagery/x.csv")
         self.assertEqual(plans[0]["entry_overrides"],
                          {"coverage_start": "2001"})
 
@@ -54,6 +56,19 @@ class TestPlanDeposits(unittest.TestCase):
         with self.assertRaises(ValueError):
             deposit.plan_deposits([Path("a/x.csv"), Path("b/x.csv")],
                                   dict(_META), {})
+
+    def test_same_filename_in_two_datasets_no_collision(self):
+        # r6 §1: the dataset element removes the filename-collision
+        # hazard entirely - two datasets can each have a readme.md.
+        meta_a = dict(_META, dataset="sentinel2-imagery")
+        meta_b = dict(_META, dataset="training-labels")
+        plan_a = deposit.plan_deposits([Path("readme.md")], meta_a, {})
+        plan_b = deposit.plan_deposits([Path("readme.md")], meta_b, {})
+        self.assertNotEqual(plan_a[0]["key"], plan_b[0]["key"])
+        self.assertEqual(plan_a[0]["key"],
+                         "rs2/csac/green/2_final/sentinel2-imagery/readme.md")
+        self.assertEqual(plan_b[0]["key"],
+                         "rs2/csac/green/2_final/training-labels/readme.md")
 
 
 class TestPrepareEntries(unittest.TestCase):
@@ -72,11 +87,12 @@ class TestPrepareEntries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "bad name.csv"
             p.write_text("x")
-            plan = {"path": p, "key": "rs2/csac/green/2_final/bad-name.csv",
+            plan = {"path": p,
+                    "key": "rs2/csac/green/2_final/sentinel2-imagery/bad-name.csv",
                     "entry_overrides": {"coverage_start": "1990"}}
             entries = deposit.prepare_entries([plan])
         self.assertEqual(entries[0]["path"], "bad-name.csv")
-        self.assertEqual(entries[0]["coverage_start"], "1990")
+        self.assertEqual(entries[0]["temporal"], {"start": "1990", "end": None})
 
 
 class TestClassifyMembers(unittest.TestCase):
@@ -102,7 +118,7 @@ class TestClassifyMembers(unittest.TestCase):
 class TestPreview(unittest.TestCase):
     def _plans(self, n):
         return [{"path": Path("f%d.csv" % i),
-                 "key": "rs2/csac/green/2_final/f%d.csv" % i,
+                 "key": "rs2/csac/green/2_final/sentinel2-imagery/f%d.csv" % i,
                  "entry_overrides": {}} for i in range(n)]
 
     def test_first_deposit_shape_and_truncation(self):
@@ -110,7 +126,9 @@ class TestPreview(unittest.TestCase):
         classification = (["f%d.csv" % i for i in range(5)], [], [])
         text = "\n".join(deposit.preview_lines(plans, dict(_META), None,
                                                classification))
-        self.assertIn("rs2/csac/green/2_final/dataset.meta.json", text)
+        self.assertIn(
+            "rs2/csac/green/2_final/sentinel2-imagery/"
+            "dataset.sentinel2-imagery.json", text)
         self.assertIn("first deposit", text)
         self.assertIn("5 added, 0 updated, 0 unchanged", text)
         self.assertIn("f0.csv", text)
@@ -122,7 +140,7 @@ class TestPreview(unittest.TestCase):
         plans = self._plans(1)
         text = "\n".join(deposit.preview_lines(plans, dict(_META), None,
                                                (["f0.csv"], [], [])))
-        self.assertIn("rs2/csac/green/2_final/f0.csv", text)
+        self.assertIn("rs2/csac/green/2_final/sentinel2-imagery/f0.csv", text)
 
     def test_existing_record_counts_and_overwrite_note(self):
         plans = self._plans(2)
@@ -160,7 +178,8 @@ class TestParser(unittest.TestCase):
 
 
 def _plan_for(path: Path):
-    return {"path": path, "key": "rs2/csac/green/2_final/" + path.name,
+    return {"path": path,
+            "key": "rs2/csac/green/2_final/sentinel2-imagery/" + path.name,
             "entry_overrides": {}}
 
 
@@ -171,7 +190,8 @@ class _Args:
     dry_run = False
 
 
-RECORD_KEY = "rs2/csac/green/2_final/dataset.meta.json"
+RECORD_KEY = ("rs2/csac/green/2_final/sentinel2-imagery/"
+             "dataset.sentinel2-imagery.json")
 
 
 class _Store:
@@ -193,7 +213,7 @@ class _Store:
         self.order.append(key)
         self.sizes[key] = Path(lp).stat().st_size
         self.labels[key] = dict(headers or {})
-        if key.endswith("dataset.meta.json"):
+        if deposit.keys.is_reserved_name(key.rsplit("/", 1)[-1]):
             self.texts[key] = Path(lp).read_text(encoding="utf-8")
 
     def stat_key(self, rclone, remote, bucket, key):
@@ -246,7 +266,8 @@ class TestPerformDeposits(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(store.order[-1], RECORD_KEY)
         self.assertEqual(len(store.order), 3)
-        member_labels = store.labels["rs2/csac/green/2_final/one.csv"]
+        member_labels = store.labels[
+            "rs2/csac/green/2_final/sentinel2-imagery/one.csv"]
         for label in ("x-amz-meta-dataset-uuid", "x-amz-meta-checksum-sha256",
                       "x-amz-meta-sensitivity", "x-amz-meta-depositor"):
             self.assertIn(label, member_labels)
@@ -260,8 +281,10 @@ class TestPerformDeposits(unittest.TestCase):
                                 depositor="njakeman")
         self.assertEqual(code, 0)
         rec = store.record()
-        self.assertEqual(rec["schema_version"], "0.4")
-        self.assertEqual(rec["identifier"], "rs2/csac/green/2_final")
+        self.assertEqual(rec["schema_version"], "0.5")
+        self.assertEqual(rec["identifier"],
+                         "rs2/csac/green/2_final/sentinel2-imagery")
+        self.assertEqual(rec["dataset"], "sentinel2-imagery")
         self.assertEqual(len(rec["files"]), 2)
         self.assertEqual(rec["depositors"], ["njakeman"])
         self.assertEqual(rec["created"], rec["modified"])
@@ -292,7 +315,7 @@ class TestPerformDeposits(unittest.TestCase):
 
         def copyto_but_lose_members(rclone, lp, remote, bucket, key, **kw):
             real(rclone, lp, remote, bucket, key, **kw)
-            if not key.endswith("dataset.meta.json"):
+            if not deposit.keys.is_reserved_name(key.rsplit("/", 1)[-1]):
                 del store.sizes[key]  # stored object vanished
 
         store_patches = store.patches()
@@ -313,7 +336,7 @@ class TestPerformDeposits(unittest.TestCase):
 
         def copyto_but_truncate(rclone, lp, remote, bucket, key, **kw):
             real(rclone, lp, remote, bucket, key, **kw)
-            if not key.endswith("dataset.meta.json"):
+            if not deposit.keys.is_reserved_name(key.rsplit("/", 1)[-1]):
                 store.sizes[key] = 999999
 
         store_patches = store.patches()
@@ -330,19 +353,21 @@ class TestPerformDeposits(unittest.TestCase):
 
     def _existing_for(self, files, depositors=("earlier",)):
         entries = deposit.prepare_entries([_plan_for(f) for f in files])
-        return {"schema_version": "0.4",
+        return {"schema_version": "0.5",
                 "dataset_uuid": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
-                "identifier": "rs2/csac/green/2_final",
+                "identifier": "rs2/csac/green/2_final/sentinel2-imagery",
+                "dataset": "sentinel2-imagery",
                 "created": "2026-07-01T00:00:00Z",
                 "modified": "2026-07-01T00:00:00Z",
-                "coverage_start": "1989", "coverage_end": "2025",
+                "temporal": {"start": "1989", "end": "2025"},
                 "depositors": list(depositors),
                 "files": entries}
 
     def test_add_to_existing_unions_and_appends_depositor(self):
         existing = self._existing_for([self.f1])
         store = _Store(seed_sizes={
-            "rs2/csac/green/2_final/one.csv": self.f1.stat().st_size})
+            "rs2/csac/green/2_final/sentinel2-imagery/one.csv":
+                self.f1.stat().st_size})
         code, _ = self._perform(store, [self.f2], existing=existing,
                                 depositor="njakeman")
         self.assertEqual(code, 0)
@@ -357,8 +382,10 @@ class TestPerformDeposits(unittest.TestCase):
     def test_rerun_skips_unchanged_and_rewrites_record(self):
         existing = self._existing_for([self.f1, self.f2])
         store = _Store(seed_sizes={
-            "rs2/csac/green/2_final/one.csv": self.f1.stat().st_size,
-            "rs2/csac/green/2_final/two.csv": self.f2.stat().st_size})
+            "rs2/csac/green/2_final/sentinel2-imagery/one.csv":
+                self.f1.stat().st_size,
+            "rs2/csac/green/2_final/sentinel2-imagery/two.csv":
+                self.f2.stat().st_size})
         code, log = self._perform(store, [self.f1, self.f2],
                                   existing=existing)
         self.assertEqual(code, 0)
@@ -379,8 +406,8 @@ class TestPerformDeposits(unittest.TestCase):
                 "t", _VOCAB)
         self.assertEqual(code, 0)
         rec = store.record()
-        self.assertEqual(rec["coverage_start"], "1960")
-        self.assertEqual(rec["coverage_end"], "2026-01-01")
+        self.assertEqual(rec["temporal"]["start"], "1960")
+        self.assertEqual(rec["temporal"]["end"], "2026-01-01")
 
 
 class TestMessageQuality(unittest.TestCase):
@@ -520,9 +547,61 @@ class TestPromptProject(unittest.TestCase):
         self.assertTrue(any("predates the naming rule" in s for s in said))
 
 
+class TestPromptDataset(unittest.TestCase):
+    """r6 §1: the dataset picker mirrors the project picker exactly, one
+    level down - same functions, kind="dataset", not a second
+    implementation. Container is the full state prefix, not a strand."""
+
+    CONTAINER = "rs3/kilns/green/2_final"
+
+    def _run(self, listing, inputs):
+        said, warned = [], []
+        with mock.patch("builtins.input", side_effect=inputs), \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn", side_effect=warned.append):
+            result = deposit.prompt_project(self.CONTAINER, listing,
+                                            kind="dataset")
+        return result, said, warned
+
+    def test_select_existing_by_number(self):
+        result, said, _ = self._run(
+            ["sentinel2-imagery", "training-labels"], ["1"])
+        self.assertEqual(result, "sentinel2-imagery")
+        self.assertTrue(any(
+            "Datasets in %s" % self.CONTAINER in s for s in said))
+        self.assertTrue(any("[n] new dataset" in s for s in said))
+
+    def test_empty_listing_notes_and_creates_first(self):
+        result, said, _ = self._run([], ["first-dataset", "y"])
+        self.assertEqual(result, "first-dataset")
+        self.assertTrue(any(
+            "No datasets in %s yet" % self.CONTAINER in s for s in said))
+
+    def test_none_listing_falls_back_honestly(self):
+        result, said, _ = self._run(None, ["solo-dataset", "y"])
+        self.assertEqual(result, "solo-dataset")
+        self.assertTrue(any("Couldn't list existing datasets" in s
+                            for s in said))
+
+    def test_near_match_warns(self):
+        # r6 §6: near-match dataset name (sentinel2 vs sentinel2-imagery).
+        result, _, warned = self._run(
+            ["sentinel2-imagery"], ["n", "sentinel2", "y"])
+        self.assertEqual(result, "sentinel2")
+        self.assertTrue(any("sentinel2-imagery" in w for w in warned))
+
+    def test_new_dataset_confirmation_wording(self):
+        with mock.patch("builtins.input", side_effect=["n", "labels", "y"]) as inp, \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            deposit.prompt_project(self.CONTAINER, ["existing"], kind="dataset")
+        prompts = [str(c.args[0]) for c in inp.call_args_list]
+        self.assertTrue(any("Create new dataset" in p for p in prompts))
+
+
 def _flagged_args():
     return deposit.build_parser().parse_args(
-        ["a.csv", "--strand", "rs2", "--project", "csac", "--state", "2_final",
+        ["a.csv", "--strand", "rs2", "--project", "csac",
+         "--dataset", "sentinel2-imagery", "--state", "2_final",
          "--sensitivity", "green", "--domain", "quant"])
 
 
@@ -541,9 +620,11 @@ class TestEarlyWriteProbe(unittest.TestCase):
             with self.assertRaises(deposit.transfer.TransferError) as ctx:
                 deposit.prompt_metadata(_flagged_args(), self.VOCAB,
                                         None, prober)
-        self.assertEqual(probed, ["rs2/csac/green/2_final"])
+        self.assertEqual(probed,
+                         ["rs2/csac/green/2_final/sentinel2-imagery"])
         self.assertEqual(ctx.exception.kind, "permission")
-        self.assertEqual(ctx.exception.detail, "rs2/csac/green/2_final")
+        self.assertEqual(ctx.exception.detail,
+                         "rs2/csac/green/2_final/sentinel2-imagery")
 
     def test_passing_probe_continues_interview(self):
         # Sentinel raised by the NEXT prompt (version) proves the probe
@@ -563,18 +644,20 @@ class TestExistingRecordFlow(unittest.TestCase):
              "domains": [{"code": "quant", "label": "Quantitative",
                           "steward": "Tester"}],
              "facets": {"themes": ["armed-conflict"]}}
-    RECORD_KEY = "rs2/csac/green/2_final/dataset.meta.json"
+    RECORD_KEY = ("rs2/csac/green/2_final/sentinel2-imagery/"
+                 "dataset.sentinel2-imagery.json")
 
     def _existing(self, **overrides):
-        rec = {"schema_version": "0.4",
+        rec = {"schema_version": "0.5",
                "dataset_uuid": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
-               "identifier": "rs2/csac/green/2_final",
-               "strand": "rs2", "project": "csac", "sensitivity": "green",
+               "identifier": "rs2/csac/green/2_final/sentinel2-imagery",
+               "strand": "rs2", "project": "csac",
+               "dataset": "sentinel2-imagery", "sensitivity": "green",
                "state": "2_final", "domain": "quant", "version": "3-0",
                "abstract": "kept " * 120,
-               "subjects": ["armed-conflict"],
-               "coverage_start": "1989", "coverage_end": "2025",
-               "creator": "CSAC team", "licence": "CC-BY-4.0",
+               "subject": ["armed-conflict"],
+               "temporal": {"start": "1989", "end": "2025"},
+               "creator": "CSAC team", "license": "CC-BY-4.0",
                "source_type": "archive", "source_detail": "CSAC project",
                "steward": "Kevin Fahey",
                "created": "2026-07-01T00:00:00Z",
@@ -609,12 +692,13 @@ class TestExistingRecordFlow(unittest.TestCase):
         self.assertIsNotNone(existing)
         self.assertEqual(meta["version"], "3-0")
         self.assertEqual(meta["abstract"], self._existing()["abstract"])
-        self.assertEqual(meta["subjects"], ["armed-conflict"])
+        self.assertEqual(meta["subject"], ["armed-conflict"])
         self.assertEqual(meta["creator"], "CSAC team")
         self.assertEqual(meta["steward"], "Kevin Fahey")
         self.assertEqual(meta["source_type"], "archive")
-        self.assertTrue(any("Existing dataset found: csac 3-0" in s
-                            for s in said))
+        self.assertTrue(any(
+            "Existing dataset found: sentinel2-imagery 3-0" in s
+            for s in said))
 
     def test_absent_record_is_a_first_deposit(self):
         fetch = self._fetcher((None, "absent"))
@@ -678,6 +762,7 @@ class TestExistingRecordFlow(unittest.TestCase):
     def test_fetch_error_downgraded_under_dry_run(self):
         args = deposit.build_parser().parse_args(
             ["a.csv", "--strand", "rs2", "--project", "csac",
+             "--dataset", "sentinel2-imagery",
              "--state", "2_final", "--sensitivity", "green",
              "--domain", "quant", "--dry-run"])
         fetch = self._fetcher((None, "permission"))

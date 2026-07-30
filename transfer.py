@@ -107,6 +107,22 @@ def check_write(rclone: str, remote: str, bucket: str, prefix: str) -> Optional[
     return None
 
 
+# Confirmed 2026-07-29 against a live Ceph bucket: rclone v1.74.1 passes
+# --header-upload labels through and lsjson --metadata reads them back
+# (r5 §6 open item, closed). The confirmation surfaced a second bug,
+# fixed by _FORCE_TRANSFER_FLAGS below.
+RCLONE_LABELS_CONFIRMED = "1.74.1"
+
+# rclone skips a transfer whose size and modtime already match the
+# destination - and the labels are set AS PART OF the transfer, so a
+# skipped upload silently leaves an unlabelled (or stale-labelled)
+# object. The manifest-level unchanged-skip already decides which
+# members to upload at all (record.unchanged_paths); every copyto call
+# that survives that decision is an upload the caller means to happen,
+# so it must not be second-guessed by rclone's own comparison.
+_FORCE_TRANSFER_FLAGS = ["--ignore-times"]
+
+
 def _header_flags(headers: Optional[Dict[str, str]]) -> List[str]:
     """--header-upload flags for object labels, in stable (sorted) order."""
     flags = []
@@ -120,6 +136,8 @@ def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
            headers: Optional[Dict[str, str]] = None) -> None:
     """Upload with `rclone copyto` so the object lands at exactly `key`.
     `headers` become object labels (x-amz-meta-*) via --header-upload.
+    Always forces the transfer (--ignore-times) - see
+    _FORCE_TRANSFER_FLAGS above.
 
     NEVER change this to `rclone copy`: copy treats the destination as a
     directory and nests the original filename inside it (spec §9 — this
@@ -128,13 +146,15 @@ def copyto(rclone: str, local_path, remote: str, bucket: str, key: str,
     if show_progress:
         # Let rclone draw progress on the user's terminal directly.
         proc = subprocess.run([rclone, "copyto", "--progress"]
+                              + _FORCE_TRANSFER_FLAGS
                               + _header_flags(headers)
                               + [str(local_path), dest])
         if proc.returncode != 0:
             raise TransferError("unknown",
                                 "rclone exited %d" % proc.returncode)
         return
-    code, out, err = _run(rclone, ["copyto"] + _header_flags(headers)
+    code, out, err = _run(rclone, ["copyto"] + _FORCE_TRANSFER_FLAGS
+                          + _header_flags(headers)
                           + [str(local_path), dest],
                           timeout=None)
     if code != 0:
@@ -214,17 +234,20 @@ def read_metadata(rclone: str, remote: str, bucket: str,
     return metadata if isinstance(metadata, dict) else None
 
 
-def list_projects(rclone: str, remote: str, bucket: str,
-                  strand: str) -> Optional[List[str]]:
-    """Existing project prefixes under a strand.
+def list_dirs(rclone: str, remote: str, bucket: str,
+              prefix: str) -> Optional[List[str]]:
+    """Existing subdirectory names directly under `prefix`. Generalised
+    (r6 §1) from the r4 project picker to any depth: project names under
+    a strand, or dataset names under a full state prefix - one
+    implementation, both pickers.
 
-    Returns a sorted list (possibly empty) when the strand was listable,
-    [] when the prefix simply doesn't exist yet (an empty strand has no
-    prefix in S3 - the bucket itself was already preflighted), and None
-    when the listing failed for any other reason (permissions, network).
-    Callers must not present None as "no existing projects"."""
+    Returns a sorted list (possibly empty) when the prefix was listable,
+    [] when the prefix simply doesn't exist yet (nothing has been
+    deposited there - the bucket itself was already preflighted), and
+    None when the listing failed for any other reason (permissions,
+    network). Callers must not present None as "nothing here"."""
     code, out, err = _run(
-        rclone, ["lsjson", "--dirs-only", "%s:%s/%s" % (remote, bucket, strand)])
+        rclone, ["lsjson", "--dirs-only", "%s:%s/%s" % (remote, bucket, prefix)])
     if code != 0:
         return [] if classify_error(err) == "not_found" else None
     try:

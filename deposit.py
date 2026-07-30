@@ -91,8 +91,8 @@ MESSAGES = {
         "repository or ask your domain steward. The numbered listing above\n"
         "shows every valid term."),
     "reserved_name": (
-        "{name} is a reserved name: the tool writes each dataset's record\n"
-        "there. Rename the file and re-run."),
+        "{name} matches dataset.<name>.json, which is reserved for\n"
+        "dataset records. Rename the file and re-run."),
     "bad_record": (
         "The dataset record at {key} exists but could not be used:\n"
         "{reason}\n"
@@ -346,7 +346,8 @@ def plan_deposits(files: List[Path], meta: Dict, per_file: Dict) -> List[Dict]:
     seen = {}
     for path in files:
         key = keys.build_key(meta["strand"], meta["project"],
-                             meta["sensitivity"], meta["state"], path.name)
+                             meta["sensitivity"], meta["state"],
+                             meta["dataset"], path.name)
         if key in seen:
             raise ValueError(
                 "%s and %s would land at the same key (%s) - rename one "
@@ -373,8 +374,10 @@ def prepare_entries(plans: List[Dict]) -> List[Dict]:
             name,
             record.sha256_file(plan["path"]),
             plan["path"].stat().st_size,
-            coverage_start=overrides.get("coverage_start"),
-            coverage_end=overrides.get("coverage_end"),
+            temporal=(record.temporal_object(overrides.get("coverage_start"),
+                                             overrides.get("coverage_end"))
+                      if overrides.get("coverage_start")
+                      or overrides.get("coverage_end") else None),
             fmt=record.guess_format(name)))
     return entries
 
@@ -396,10 +399,11 @@ def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
     the whole plan (r5 Q4)."""
     added, updated, unchanged = classification
     prefix = keys.dataset_prefix(meta["strand"], meta["project"],
-                                 meta["sensitivity"], meta["state"])
+                                 meta["sensitivity"], meta["state"],
+                                 meta["dataset"])
     lines = ["  dataset %s (version %s)"
              % (style(prefix, "cyan"), meta.get("version"))]
-    record_key = prefix + "/" + keys.RECORD_FILENAME
+    record_key = prefix + "/" + keys.record_filename(meta["dataset"])
     if existing:
         before = len(existing.get("files", []))
         lines.append("    record: %s  (updates existing, %d -> %d files)"
@@ -420,7 +424,7 @@ def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
         lines.append("      ... and %d more" % (len(plans) - limit))
     lines.append("    coverage %s to %s | subjects: %s" % (
         meta.get("coverage_start"), meta.get("coverage_end"),
-        ", ".join(meta.get("subjects", []))))
+        ", ".join(meta.get("subject", []))))
     return lines
 
 
@@ -432,6 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("files", nargs="+", metavar="FILE_OR_GLOB")
     p.add_argument("--strand", choices=keys.STRANDS)
     p.add_argument("--project")
+    p.add_argument("--dataset", help="dataset name within the project "
+                   "(r6: a project may hold several datasets)")
     p.add_argument("--domain", help="data domain code (see vocabulary)")
     p.add_argument("--state", choices=keys.STATES)
     p.add_argument("--sensitivity")  # validated by hand so 'red' gets OUR message
@@ -514,87 +520,101 @@ def first_run_setup(rclone) -> dict:
 
 def resolve_project_choice(raw, entries):
     """'new' for n/new, else resolve_choice(raw, entries).
-    A project literally named 'n' or 'new' stays reachable by number."""
+    A project or dataset literally named 'n' or 'new' stays reachable
+    by number. Generic across both (r6 §1: the dataset picker reuses
+    this unchanged, no second implementation)."""
     token = (raw or "").strip().lower()
     if token in ("n", "new"):
         return "new"
     return resolve_choice(raw, entries)
 
 
-def prompt_new_project(strand: str, existing: List[str],
-                       confirm_create: bool = True) -> str:
-    """Ask for a project name, normalise it, warn on near-matches, and
-    confirm. confirm_create=False softens the wording to "Use project"
-    for when the listing failed and we can't actually claim it's new."""
+def prompt_new_project(container: str, existing: List[str],
+                       confirm_create: bool = True, kind: str = "project") -> str:
+    """Ask for a project or dataset name, normalise it, warn on
+    near-matches, and confirm. `container` describes where it lives
+    (a strand for a project, a full state prefix for a dataset - r6
+    §1's picker is this same function one level down).
+    confirm_create=False softens the wording to "Use X" for when the
+    listing failed and we can't actually claim it's new."""
     while True:
-        raw = ask("New project name (lowercase, hyphens, no spaces)")
+        raw = ask("New %s name (lowercase, hyphens, no spaces)" % kind)
         name = keys.normalise_project(raw)
         if not name:
-            say("Nothing usable remains after normalising %r - project names "
+            say("Nothing usable remains after normalising %r - %s names "
                 "are lowercase letters/digits with hyphens (e.g. csac, "
-                "treaty-texts)." % raw)
+                "treaty-texts)." % (raw, kind))
             continue
         if name != raw:
             say("  -> normalised to: %s" % name)
         if name in existing:
             # Exact match only: a legacy 'CSAC' is NOT the same prefix as
             # 'csac' and must go through the near-match warning instead.
-            say("'%s' already exists in %s - using it." % (name, strand))
+            say("'%s' already exists in %s - using it." % (name, container))
             return name
         similar = keys.similar_projects(name, existing)
         if similar:
             warn("similar to existing '%s' - sure this is different?"
                  % "', '".join(similar))
         if confirm_create:
-            confirmed = ask_yes_no("Create new project '%s' in %s?"
-                                   % (name, strand))
+            confirmed = ask_yes_no("Create new %s '%s' in %s?"
+                                   % (kind, name, container))
         else:
-            confirmed = ask_yes_no("Use project '%s' in %s?" % (name, strand))
+            confirmed = ask_yes_no("Use %s '%s' in %s?"
+                                   % (kind, name, container))
         if confirmed:
             return name
 
 
-def prompt_project(strand: str, listing: Optional[List[str]]) -> str:
-    """Numbered picker over existing project prefixes (r4 §2), with [n]
-    for a new one. listing is None when it could not be fetched - never
-    presented as an empty strand (it may be a permissions artefact)."""
+def prompt_project(container: str, listing: Optional[List[str]],
+                   kind: str = "project") -> str:
+    """Numbered picker over existing project (or dataset) names (r4 §2,
+    generalised one level down for datasets by r6 §1), with [n] for a
+    new one. listing is None when it could not be fetched - never
+    presented as empty (it may be a permissions artefact)."""
+    plural = kind + "s"
     if listing is None:
-        say("Couldn't list existing projects in %s - you can still enter one."
-            % strand)
-        return prompt_new_project(strand, [], confirm_create=False)
+        say("Couldn't list existing %s in %s - you can still enter one."
+            % (plural, container))
+        return prompt_new_project(container, [], confirm_create=False,
+                                  kind=kind)
     if not listing:
-        say("No projects in %s yet - creating the first." % strand)
-        return prompt_new_project(strand, [])
+        say("No %s in %s yet - creating the first." % (plural, container))
+        return prompt_new_project(container, [], kind=kind)
     entries = [(str(i), p, "") for i, p in enumerate(listing, 1)]
     while True:
-        for line in choice_lines("Existing projects in %s" % strand, entries):
+        for line in choice_lines(
+                "Existing %s in %s" % (plural.capitalize(), container),
+                entries):
             say(line)
-        say("  %s new project" % style("[n]", "dim"))
+        say("  %s new %s" % (style("[n]", "dim"), kind))
         choice = resolve_project_choice(input("> "), entries)
         if choice == "new":
-            return prompt_new_project(strand, listing)
+            return prompt_new_project(container, listing, kind=kind)
         if choice is not None:
             if not keys.validate_project(choice):
                 say("'%s' predates the naming rule and can't be used as-is "
-                    "(try '%s' as a new project)."
-                    % (choice, keys.normalise_project(choice)))
+                    "(try '%s' as a new %s)."
+                    % (choice, keys.normalise_project(choice), kind))
                 continue
             return choice
-        say("Enter a number, a project name, or 'n' for a new project.")
+        say("Enter a number, a %s name, or 'n' for a new %s."
+            % (kind, kind))
 
 
-def check_project_flag(project: str, strand: str,
-                       listing: Optional[List[str]], dry_run: bool) -> None:
-    """--project skips the picker, but a name that doesn't exist in the
-    strand is a new-project creation: confirm once (r4 §2). Never prompts
+def check_project_flag(project: str, container: str,
+                       listing: Optional[List[str]], dry_run: bool,
+                       kind: str = "project") -> None:
+    """--project (or --dataset) skips the picker, but a name that
+    doesn't exist yet is a creation: confirm once (r4 §2). Never prompts
     under --dry-run - that's the non-interactive reproduction path.
     Raises ValueError if the user declines."""
     if listing is None or project in listing:
         return
     similar = keys.similar_projects(project, listing)
     if dry_run:
-        say("note: project '%s' does not exist in %s yet - a real run will "
-            "ask to confirm creating it." % (project, strand))
+        say("note: %s '%s' does not exist in %s yet - a real run will "
+            "ask to confirm creating it." % (kind, project, container))
         if similar:
             say("note: '%s' is similar to existing '%s'."
                 % (project, "', '".join(similar)))
@@ -602,22 +622,24 @@ def check_project_flag(project: str, strand: str,
     if similar:
         warn("similar to existing '%s' - sure this is different?"
              % "', '".join(similar))
-    if not ask_yes_no("Project '%s' does not exist in %s. Create it as a "
-                      "new project?" % (project, strand)):
+    if not ask_yes_no("%s '%s' does not exist in %s. Create it as a "
+                      "new %s?" % (kind.capitalize(), project, container, kind)):
         raise ValueError(
-            "nothing deposited: project '%s' was not confirmed - pick an "
-            "existing project or re-run and confirm" % project)
+            "nothing deposited: %s '%s' was not confirmed - pick an "
+            "existing %s or re-run and confirm" % (kind, project, kind))
 
 
-def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
+def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
                     probe_write=None, fetch_record=None):
     """Collect batch metadata, honouring flags. Returns (meta, existing)
     where existing is the parsed dataset record already at the target
     prefix, or None for a first deposit.
 
-    list_projects is a callable strand -> Optional[List[str]] (None when
-    the remote isn't usable). It is called once - project is a batch-level
-    field, so one listing per invocation is the session cache r4 asks for.
+    list_dirs is a callable prefix -> Optional[List[str]] (None when the
+    remote isn't usable), used for BOTH the project picker (keyed on the
+    strand) and the dataset picker one level down (keyed on the full
+    state prefix - r6 §1, same picker mechanism reused, not a second
+    implementation). Each is called once per invocation.
 
     probe_write is a callable prefix -> Optional[error kind] (None when
     the remote isn't usable or under --dry-run). It runs as soon as the
@@ -652,7 +674,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
             say("Enter a number or value from the list.")
     meta["sensitivity"] = sensitivity
 
-    listing = list_projects(meta["strand"]) if list_projects else None
+    listing = list_dirs(meta["strand"]) if list_dirs else None
     if args.project:
         project = args.project
         if not keys.validate_project(project):
@@ -666,8 +688,26 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
 
     meta["state"] = args.state or ask_select("State", STATE_ENTRIES)
 
-    prefix = "/".join((meta["strand"], meta["project"],
-                       meta["sensitivity"], meta["state"]))
+    # r6 §1: the dataset is a path element; a project may hold several.
+    # Mirrors the project picker exactly, one level down, keyed on the
+    # full state prefix rather than the strand - same functions, a
+    # parameterised call (kind="dataset"), not a second implementation.
+    container = "/".join((meta["strand"], meta["project"],
+                          meta["sensitivity"], meta["state"]))
+    dataset_listing = list_dirs(container) if list_dirs else None
+    if args.dataset:
+        if not keys.validate_project(args.dataset):
+            raise ValueError(
+                "dataset %r: use lowercase letters/digits and hyphens "
+                "(e.g. sentinel2-imagery)" % args.dataset)
+        check_project_flag(args.dataset, container, dataset_listing,
+                           args.dry_run, kind="dataset")
+        meta["dataset"] = args.dataset
+    else:
+        meta["dataset"] = prompt_project(container, dataset_listing,
+                                         kind="dataset")
+
+    prefix = container + "/" + meta["dataset"]
     if probe_write:
         kind = probe_write(prefix)
         if kind:
@@ -678,7 +718,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
     # it unread would silently drop members (dry-run warns and previews
     # as a first deposit; an unparseable record is surfaced either way).
     existing = None
-    record_key = prefix + "/" + keys.RECORD_FILENAME
+    record_key = prefix + "/" + keys.record_filename(meta["dataset"])
     if fetch_record:
         text, err = fetch_record(record_key)
         if text is not None:
@@ -694,9 +734,21 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
             else:
                 raise transfer.TransferError(err, record_key)
     if existing:
+        # r6 §2: the record must belong where it sits - a dataset or
+        # identifier that disagrees with the location means the record
+        # was moved or hand-edited. Error, not warning.
+        if (existing.get("dataset") != meta["dataset"]
+                or existing.get("identifier") != prefix):
+            e = record.RecordParseError(
+                "the record's dataset/identifier (%r / %r) do not match "
+                "its location %s"
+                % (existing.get("dataset"), existing.get("identifier"),
+                   prefix))
+            e.key = record_key
+            raise e
         say("")
         say("Existing dataset found: %s %s - %d files, modified %s."
-            % (meta["project"], existing.get("version", "?"),
+            % (meta["dataset"], existing.get("version", "?"),
                len(existing.get("files", [])),
                (existing.get("modified") or "?")[:10]))
         say("Adding to it. Current values will be kept unless you "
@@ -738,9 +790,11 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
         say("Version must be two integers like 3-0 (or 3.0 / v3-0, "
             "which I will normalise).")
 
-    for label, field in (("Coverage start (year or YYYY-MM-DD)", "coverage_start"),
-                         ("Coverage end (year or YYYY-MM-DD)", "coverage_end")):
-        default = existing.get(field) if existing else None
+    existing_temporal = (existing.get("temporal") or {}) if existing else {}
+    for label, field, temporal_part in (
+            ("Coverage start (year or YYYY-MM-DD)", "coverage_start", "start"),
+            ("Coverage end (year or YYYY-MM-DD)", "coverage_end", "end")):
+        default = existing_temporal.get(temporal_part)
         while True:
             value = ask(label, default=default)
             err = record.coverage_error(value)
@@ -750,10 +804,10 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
             meta[field] = value
             break
 
-    existing_subjects = list(existing.get("subjects") or []) if existing else []
+    existing_subjects = list(existing.get("subject") or []) if existing else []
     if existing_subjects and not record.unknown_subjects(
             existing_subjects, vocab.all_terms(vocab_dict)):
-        meta["subjects"] = existing_subjects
+        meta["subject"] = existing_subjects
     else:
         if existing_subjects:
             warn("the existing record's subjects are no longer all in the "
@@ -774,7 +828,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
                 say("At least one subject term is required.")
                 continue
             say("Subjects: %s" % ", ".join(subjects))
-            meta["subjects"] = subjects
+            meta["subject"] = subjects
             break
 
     if existing and existing.get("abstract") and not ask_yes_no(
@@ -798,14 +852,14 @@ def prompt_metadata(args, vocab_dict: Dict, list_projects=None,
     if existing:
         # Recommended fields carry over untouched; a metadata edit is a
         # deliberate act, not a toll on every deposit.
-        for field in ("licence", "source_type", "source_detail",
+        for field in ("license", "source_type", "source_detail",
                       "derived_from", "creator"):
             if existing.get(field):
                 meta[field] = existing[field]
     else:
-        default_licence = ("internal-only" if meta["sensitivity"] == "amber"
+        default_license = ("internal-only" if meta["sensitivity"] == "amber"
                            else "CC-BY-4.0")
-        meta["licence"] = ask("Licence", default=default_licence)
+        meta["license"] = ask("Licence", default=default_license)
 
         meta["source_type"] = ask_select("Source type", SOURCE_TYPE_ENTRIES)
         if meta["source_type"] == "other":
@@ -860,10 +914,13 @@ def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
                 if err:
                     say("  " + err)
                     continue
-                if value != meta[field]:
-                    o[field] = value
+                o[field] = value
                 break
-        if o:
+        # Only a range that differs from the shared one becomes a
+        # per-file temporal; both ends are kept so the nested shape is
+        # complete (r6 §3.1).
+        if (o.get("coverage_start") != meta["coverage_start"]
+                or o.get("coverage_end") != meta["coverage_end"]):
             overrides[path.name] = o
     return overrides
 
@@ -961,7 +1018,8 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
         "x-amz-meta-depositor": depositor,
     }
     prefix = keys.dataset_prefix(meta["strand"], meta["project"],
-                                 meta["sensitivity"], meta["state"])
+                                 meta["sensitivity"], meta["state"],
+                                 meta["dataset"])
 
     done = []
     skipped = []
@@ -999,31 +1057,29 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
             union, added, updated = record.merge_manifest(existing_files,
                                                           entries)
             now = record.utc_now_iso()
-            pairs = [(e.get("coverage_start"), e.get("coverage_end"))
-                     for e in union]
+            pairs = [record.temporal_pair(e.get("temporal")) for e in union]
             if existing:
                 # The old envelope keeps containment for legacy members
                 # whose per-file coverage was never recorded.
-                pairs.append((existing.get("coverage_start"),
-                              existing.get("coverage_end")))
+                pairs.append(record.temporal_pair(existing.get("temporal")))
             cov_start, cov_end = record.widen(
                 (meta["coverage_start"], meta["coverage_end"]), pairs)
             rec = record.build_record(
                 dataset_uuid=dataset_uuid,
                 identifier=prefix,
                 strand=meta["strand"], domain=meta["domain"],
-                project=meta["project"], state=meta["state"],
-                sensitivity=meta["sensitivity"],
-                coverage_start=cov_start, coverage_end=cov_end,
+                project=meta["project"], dataset=meta["dataset"],
+                state=meta["state"], sensitivity=meta["sensitivity"],
+                temporal=record.temporal_object(cov_start, cov_end),
                 version=meta["version"], abstract=meta["abstract"],
-                subjects=list(meta["subjects"]), files=union,
+                subject=list(meta["subject"]), files=union,
                 created=(existing or {}).get("created") or now,
                 modified=now,
                 vocabulary_version=meta.get("vocabulary_version"),
                 creator=meta.get("creator"),
                 source_type=meta.get("source_type"),
                 source_detail=meta.get("source_detail"),
-                licence=meta.get("licence"), steward=meta.get("steward"),
+                license=meta.get("license"), steward=meta.get("steward"),
                 depositors=record.append_depositor(
                     (existing or {}).get("depositors"), depositor),
                 derived_from=meta.get("derived_from"))
@@ -1034,11 +1090,12 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
                 raise transfer.TransferError("record_invalid",
                                              "; ".join(errors))
 
-            current = keys.RECORD_FILENAME
+            record_filename = keys.record_filename(meta["dataset"])
+            current = record_filename
             say("\nwriting dataset record...")
-            record_path = Path(tmp) / keys.RECORD_FILENAME
+            record_path = Path(tmp) / record_filename
             record_path.write_text(record.record_json(rec), encoding="utf-8")
-            record_key = prefix + "/" + keys.RECORD_FILENAME
+            record_key = prefix + "/" + record_filename
             labels = dict(base_labels)
             labels["x-amz-meta-checksum-sha256"] = record.sha256_file(record_path)
             transfer.copyto(rclone, record_path, args.remote, args.bucket,
@@ -1142,8 +1199,10 @@ def main(argv=None) -> int:
         warn(p)
     if not files:
         return fail("No files to deposit.")
-    if any(f.name == keys.RECORD_FILENAME for f in files):
-        return fail(MESSAGES["reserved_name"].format(name=keys.RECORD_FILENAME))
+    reserved = next((f.name for f in files if keys.is_reserved_name(f.name)),
+                    None)
+    if reserved:
+        return fail(MESSAGES["reserved_name"].format(name=reserved))
     total = sum(f.stat().st_size for f in files)
     say("%d file(s), %s total." % (len(files), human_size(total)))
 
@@ -1165,8 +1224,8 @@ def main(argv=None) -> int:
              "(version %s). Deposits still work - very new terms may be missing."
              % (source, vocab_dict.get("vocabulary_version")))
 
-    lister = ((lambda strand: transfer.list_projects(
-                   rclone, args.remote, args.bucket, strand))
+    lister = ((lambda prefix: transfer.list_dirs(
+                   rclone, args.remote, args.bucket, prefix))
               if (rclone and remote_ok) else None)
     prober = ((lambda prefix: transfer.check_write(
                    rclone, args.remote, args.bucket, prefix))
@@ -1183,7 +1242,7 @@ def main(argv=None) -> int:
     except record.RecordParseError as e:
         return fail(MESSAGES["bad_record"].format(
             key="%s:%s/%s" % (args.remote, args.bucket,
-                              getattr(e, "key", keys.RECORD_FILENAME)),
+                              getattr(e, "key", "the dataset record")),
             reason=e))
     except ValueError as e:
         return fail(str(e))
@@ -1213,7 +1272,7 @@ def main(argv=None) -> int:
             del seen[plan["key"]]
             new_key = keys.build_key(
                 meta["strand"], meta["project"], meta["sensitivity"],
-                meta["state"], new_name)
+                meta["state"], meta["dataset"], new_name)
             if new_key in seen:
                 raise ValueError(
                     "%s and %s would land at the same key (%s) - rename "
