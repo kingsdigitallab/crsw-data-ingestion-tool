@@ -6,8 +6,10 @@ translates into a human-readable message. Raw rclone stderr goes into
 TransferError.detail and is shown only in --verbose output — never by
 default (spec §8: no raw socket/S3 errors in front of users)."""
 import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,16 +23,40 @@ class TransferError(Exception):
         self.detail = detail
 
 
+def _script_dir() -> Optional[Path]:
+    """Where a bundled rclone would sit: the PyInstaller extraction dir
+    when frozen, else this file's own directory."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    try:
+        return Path(__file__).resolve().parent
+    except Exception:
+        return None
+
+
 def find_rclone(cwd=None) -> Optional[str]:
-    """Look for rclone on PATH, then ./rclone, then ./rclone.exe."""
+    """Look for rclone on PATH, then ./rclone(.exe) next to the current
+    directory, then next to this script. The script-dir check matters on
+    macOS/Linux: `python ~/tools/deposit.py *.csv` run from a data
+    directory has a cwd that is NOT the script's folder, so a bundled
+    rclone was previously invisible there even though MESSAGES["no_rclone"]
+    promised to look "next to this script". A candidate must also be
+    executable (POSIX only - Windows has no exec bit), so a downloaded,
+    un-chmod'ed or Gatekeeper-quarantined binary is skipped rather than
+    picked and then failing with a bare OSError."""
     on_path = shutil.which("rclone")
     if on_path:
         return on_path
-    base = Path(cwd) if cwd else Path.cwd()
-    for name in ("rclone", "rclone.exe"):
-        candidate = base / name
-        if candidate.is_file():
-            return str(candidate)
+    bases = [Path(cwd) if cwd else Path.cwd()]
+    script_dir = _script_dir()
+    if script_dir and script_dir not in bases:
+        bases.append(script_dir)
+    for base in bases:
+        for name in ("rclone", "rclone.exe"):
+            candidate = base / name
+            if candidate.is_file() and os.access(str(candidate), os.X_OK):
+                return str(candidate)
     return None
 
 
@@ -72,6 +98,14 @@ def _run(rclone: str, args: List[str],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired:
         return (124, "", "i/o timeout: rclone did not respond")
+    except OSError as e:
+        # A non-executable or Gatekeeper-quarantined binary raises here
+        # rather than exiting non-zero - without this the user sees a
+        # bare traceback, which the spec's own error-message test rules
+        # out (deposit.py's find_rclone already checks os.access, but a
+        # binary can still lose its exec bit or gain a quarantine flag
+        # between discovery and use).
+        return (126, "", "could not run rclone: %s" % e)
     return (proc.returncode,
             proc.stdout.decode("utf-8", "replace"),
             proc.stderr.decode("utf-8", "replace"))

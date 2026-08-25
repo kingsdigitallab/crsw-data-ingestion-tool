@@ -11,7 +11,8 @@ class TestFindRclone(unittest.TestCase):
 
     def test_falls_back_to_cwd(self):
         with mock.patch("transfer.shutil.which", return_value=None), \
-             mock.patch("transfer.Path.is_file", return_value=True):
+             mock.patch("transfer.Path.is_file", return_value=True), \
+             mock.patch("transfer.os.access", return_value=True):
             found = transfer.find_rclone(cwd=".")
             self.assertIsNotNone(found)
             self.assertIn("rclone", found)
@@ -20,6 +21,27 @@ class TestFindRclone(unittest.TestCase):
         with mock.patch("transfer.shutil.which", return_value=None), \
              mock.patch("transfer.Path.is_file", return_value=False):
             self.assertIsNone(transfer.find_rclone(cwd="."))
+
+    def test_skips_non_executable_candidate(self):
+        # A downloaded, un-chmod'ed (or Gatekeeper-quarantined) rclone
+        # must not be picked and then fail with a bare OSError later.
+        with mock.patch("transfer.shutil.which", return_value=None), \
+             mock.patch("transfer.Path.is_file", return_value=True), \
+             mock.patch("transfer.os.access", return_value=False):
+            self.assertIsNone(transfer.find_rclone(cwd="."))
+
+    def test_falls_back_to_script_dir(self):
+        # POSIX idiom: `python ~/tools/deposit.py *.csv` run from a data
+        # directory has a cwd that is NOT the script's folder.
+        with mock.patch("transfer.shutil.which", return_value=None), \
+             mock.patch("transfer.os.access", return_value=True), \
+             mock.patch("transfer._script_dir",
+                        return_value=transfer.Path("/opt/crsw-tool")):
+            def is_file(self):
+                return str(self).replace("\\", "/") == "/opt/crsw-tool/rclone"
+            with mock.patch("transfer.Path.is_file", is_file):
+                found = transfer.find_rclone(cwd="/somewhere/else")
+            self.assertEqual(found, str(transfer.Path("/opt/crsw-tool/rclone")))
 
 
 class TestClassifyError(unittest.TestCase):
@@ -58,6 +80,16 @@ class TestClassifyError(unittest.TestCase):
             code, out, err = transfer._run("rclone", ["lsjson", "x:y"])
         self.assertNotEqual(code, 0)
         self.assertEqual(transfer.classify_error(err), "unreachable")
+
+    def test_oserror_is_classified_not_raised(self):
+        # A non-executable or quarantined binary raises OSError from
+        # subprocess.run itself - this must become a classified result,
+        # never a bare traceback (the spec's own error-message test).
+        with mock.patch("transfer.subprocess.run",
+                        side_effect=PermissionError("denied")):
+            code, out, err = transfer._run("rclone", ["lsjson", "x:y"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("denied", err)
 
 
 class TestPreflightChecks(unittest.TestCase):
