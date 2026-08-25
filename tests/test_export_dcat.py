@@ -43,6 +43,19 @@ class TestMappingCompleteness(unittest.TestCase):
         self.assertEqual(export_dcat.MAPPING["schema_version"],
                          record.SCHEMA_VERSION)
 
+    def test_every_mapped_prefix_is_declared(self):
+        # A term whose prefix isn't in "namespaces" makes the exported
+        # @context unresolvable JSON-LD - catches the spdx:checksum gap.
+        namespaces = export_dcat.MAPPING["namespaces"]
+        for fields in (export_dcat.DATASET_FIELDS, export_dcat.FILE_FIELDS):
+            for name, entry in fields.items():
+                for term in [entry["term"]] + (
+                        [entry["also"]] if "also" in entry else []):
+                    prefix = term.split(":", 1)[0]
+                    self.assertIn(prefix, namespaces,
+                                 "%s: %s uses undeclared prefix %r"
+                                 % (name, term, prefix))
+
 
 class TestDcatShape(unittest.TestCase):
     def setUp(self):
@@ -101,7 +114,9 @@ class TestDcatShape(unittest.TestCase):
         self.assertEqual(len(dists), 2)
         self.assertEqual(dists[0]["dcat:downloadURL"], "csac-clean-2025.csv")
         self.assertEqual(dists[0]["dcat:byteSize"], 48211023)
-        self.assertEqual(len(dists[0]["spdx:checksum"]), 64)
+        # crsw:*, not spdx:* - "spdx" is never declared in @context, so
+        # a spdx:-prefixed term would make the JSON-LD unresolvable.
+        self.assertEqual(len(dists[0]["crsw:checksumSha256"]), 64)
         self.assertEqual(dists[1]["dcterms:temporal"],
                          {"dcat:startDate": "1989-01-01",
                           "dcat:endDate": "1989-12-31"})

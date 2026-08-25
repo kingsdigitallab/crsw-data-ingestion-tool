@@ -40,7 +40,7 @@
     "path":            {"term": "dcat:downloadURL", "note": "relative to dataset prefix"},
     "format":          {"term": "dcterms:format"},
     "bytes":           {"term": "dcat:byteSize"},
-    "checksum_sha256": {"term": "spdx:checksum", "local": true, "note": "named for kinship; SPDX not imported"},
+    "checksum_sha256": {"term": "crsw:checksumSha256", "local": true, "note": "named for kinship with SPDX's checksum term; SPDX not imported, so no spdx: prefix is declared"},
     "temporal":        {"term": "dcterms:temporal"},
     "derived_from":    {"term": "dcterms:source", "also": "prov:wasDerivedFrom"},
     "notes":           {"term": "crsw:notes", "local": true}
