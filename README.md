@@ -30,6 +30,8 @@ endpoint = https://OBJECT-STORE-ENDPOINT-FROM-ERESEARCH
 ```
 python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
 
+  --include-noise         deposit OS/editor noise files (.DS_Store,
+                          Thumbs.db, ._* etc.) instead of excluding them
   --strand rs2            skip strand prompt (rs1/rs2/rs3/rs4)
   --project csac          skip project prompt (a name new to the strand
                           is confirmed once before creating it)
@@ -79,6 +81,50 @@ characters the tool offers a correction but never applies one silently.
 After upload, every manifest entry is verified to exist at the expected
 size before the deposit is reported done.
 
+## Folders and sub-paths
+
+A folder argument is walked, and each file's path **relative to that
+argument** is preserved in both the object key and the manifest, instead
+of being flattened to a bare filename:
+
+```
+python deposit.py survey-2024/ --dataset coastal ...
+
+survey-2024/2024/tiles/a.tif  ->  .../coastal/2024/tiles/a.tif
+survey-2024/readme.md         ->  .../coastal/readme.md
+```
+
+The folder's own name (`survey-2024`) is never part of the key - the
+dataset element already names the collection. The same rule anchors a
+glob that spans directories: `data/*/results.csv` lands each match
+relative to `data`, so `data/site1/results.csv` and
+`data/site2/results.csv` no longer collide the way two flat
+same-named files would. An explicit single-file argument still lands at
+just its basename, exactly as before. A trailing slash makes no
+difference either way (`survey-2024` and `survey-2024/` are identical) -
+tab-completion adds one inconsistently across shells, so it is not
+treated as a signal. `**` now recurses to any depth (it previously
+matched only one level - re-check any script that already uses it, since
+it now covers more files than before). A literal filename containing `[`
+or `]` (e.g. `data[1].csv`) is matched literally with a note, rather than
+being read as a wildcard and reported as "no match".
+
+Within a walked folder: OS/editor noise (`.DS_Store`, `Thumbs.db`,
+`._*` AppleDouble files, `.git/`, `__pycache__/`, etc.) is excluded by
+default and the count is reported - pass `--include-noise` to deposit
+them anyway. Hidden/dotfiles ARE included (unlike a bare `*` glob, which
+skips them - the tool says how many). Symlinked files are followed;
+symlinked directories are not descended (to avoid cycles) and are
+named. Empty folders contribute nothing, since object storage has no
+directories. A member path matching the reserved `dataset.*.json`
+pattern is refused at any depth, not just the last segment.
+
+Re-depositing a file that already exists in the dataset under a
+*different* path (e.g. it was flat before and is now inside a folder) is
+detected by content and warned about before the point of no return:
+deposits are additive and the tool never removes a manifest member, so
+this would otherwise silently double the bytes in the dataset.
+
 The abstract's guidance is at least 50 words; shorter ones warn but do not
 block, which is deliberate for the testing phase — expect this to tighten
 before real deposits begin. Red-classified data is refused — it belongs
@@ -94,6 +140,14 @@ command-line flag → saved config → built-in default. Run with
 `--reconfigure` to change the saved values. Every run starts with a
 `Target:` line showing the resolved `remote:bucket` and where each value
 came from, so there is never any doubt about which storage a deposit used.
+
+Passing `--remote`/`--bucket` on the command line is transient by
+default - it applies to that run only. If the value differs from what's
+saved (and the remote/bucket has just been proven reachable and
+writable), the tool asks once whether to make it the new default; a
+plain Enter declines. This prompt never appears under `--dry-run`, when
+running non-interactively (piped/scripted input), or when nothing
+actually changed.
 
 ## Subjects and domains vocabulary
 
@@ -117,6 +171,39 @@ to force it on; piped or redirected output is always plain.
 Every successful deposit appends a line (timestamp, key, checksum, depositor)
 to `deposits.log` in `%LOCALAPPDATA%\crsw-deposit\` (Windows) or
 `~/.cache/crsw-deposit/` (macOS/Linux).
+
+## Platform notes
+
+The tool runs unchanged on Windows, macOS and Linux (stdlib only,
+`pathlib` throughout, object keys always use `/`). Config lives at
+`~/.config/crsw-deposit/config.json` on macOS/Linux (`XDG_CONFIG_HOME`
+is not consulted); the vocabulary cache and `deposits.log` live at
+`~/.cache/crsw-deposit/` (`XDG_CACHE_HOME` likewise not consulted).
+`$COMPUTERNAME`/registry lookups are never used - MIME types come from a
+private table so `.csv` doesn't vary by the depositor's OS.
+
+A few things worth knowing if you're depositing from macOS or Linux:
+
+- **rclone must be executable.** A binary dropped next to the script (or
+  downloaded manually) needs `chmod +x rclone`; a browser download on
+  macOS may also carry a quarantine flag - clear it with
+  `xattr -d com.apple.quarantine rclone` if the tool reports it can't be
+  found.
+- **Accented filenames are Unicode-normalised (NFC) in the object key
+  and manifest** - macOS hands back decomposed (NFD) Unicode for the
+  same characters Windows and Linux hand back composed, so without this
+  the identical file deposited from a Mac and a PC would produce two
+  manifest entries. Your local file is never renamed; only the object
+  name and manifest path are normalised, and the tool says so when it
+  changes anything.
+- **The problem-character check (`: * ? " < > |`, and leading/trailing
+  space) is about the file's *consumers*, not your filesystem** - those
+  characters are legal on macOS/Linux but break a straight save on
+  Windows, so they're still flagged even though your OS is happy with
+  them.
+- Two files that differ only by case (`README.md` / `readme.md`) are
+  distinct on Linux and in object storage, but collide on Windows and
+  default macOS - avoid depositing both into one dataset.
 
 ## Development
 
