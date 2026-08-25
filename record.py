@@ -395,9 +395,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                 errors.append("file %s: required field '%s' is missing or "
                               "empty" % (name, field))
         path = entry.get("path")
-        if path and keys.is_reserved_name(path):
+        if path:
+            structural = keys.member_path_error(path)
+            if structural:
+                errors.append("manifest path %s" % structural)
+        if path and keys.is_reserved_member(path):
             errors.append("manifest path %r matches the reserved "
-                          "dataset.*.json pattern" % path)
+                          "dataset.*.json pattern (at any depth)" % path)
         if path:
             if path in seen_paths:
                 errors.append("duplicate manifest path %r" % path)

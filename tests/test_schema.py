@@ -110,6 +110,11 @@ class TestSchemaInStepWithCode(unittest.TestCase):
         self.assertTrue(re.match(pattern, "dataset.meta.json"))
         self.assertTrue(re.match(pattern, "dataset.foo.json"))
         self.assertFalse(re.match(pattern, "dataset.json"))
+        # r7: the pattern is segment-aware - a nested reserved name must
+        # still be caught, since is_reserved_member checks every depth.
+        self.assertTrue(re.search(pattern, "sub/dataset.foo.json"))
+        self.assertTrue(re.search(pattern, "a/b/dataset.x.json"))
+        self.assertFalse(re.search(pattern, "a/b/notes.json"))
 
     def test_temporal_shape_at_record_and_entry_level(self):
         for location in (SCHEMA["properties"]["temporal"],
@@ -166,6 +171,12 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
         ("reserved path", {"files": [{"path": "dataset.meta.json",
                                       "checksum_sha256": "ab" * 32,
                                       "bytes": 1}]}),
+        ("nested reserved path", {"files": [{"path": "sub/dataset.x.json",
+                                             "checksum_sha256": "ab" * 32,
+                                             "bytes": 1}]}),
+        ("leading slash path", {"files": [{"path": "/a.csv",
+                                           "checksum_sha256": "ab" * 32,
+                                           "bytes": 1}]}),
         ("bad strand", {"strand": "rs9"}),
         ("missing created", {"created": None}),
         ("bad dataset slug", {"dataset": "Bad Slug"}),

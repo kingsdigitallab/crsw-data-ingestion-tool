@@ -1,11 +1,12 @@
 """Object key construction and filename checks for CRSW deposits.
 
-Kept separate from sidecar.py deliberately: the path convention
+Kept separate from record.py deliberately: the path convention
 (handbook v0.4 §4) may change independently of the metadata schema.
 Object keys ALWAYS use '/' regardless of platform.
 """
 import re
-from typing import List
+import unicodedata
+from typing import List, Optional
 
 STRANDS = ("rs1", "rs2", "rs3", "rs4")
 
@@ -89,6 +90,88 @@ def is_reserved_name(filename: str) -> bool:
     return bool(RESERVED_RECORD_RE.match(filename or ""))
 
 
+# --- member paths (r7 §1: folders as deposit arguments) ----------------
+# A "member path" is a filename that may contain '/' to preserve the
+# sub-path a file had relative to the argument's root (e.g. a folder
+# deposit). It is what becomes the object key's last element AND the
+# manifest `path` field - the same string serves both, which is why it
+# is validated in one place rather than at each use.
+
+MEMBER_SEGMENT_MAX_BYTES = 255
+MEMBER_PATH_MAX_BYTES = 1024  # the S3 key-length limit, checked on the
+                              # full key by the caller; here on the member
+_DRIVE_RE = re.compile(r"^[a-zA-Z]:")
+
+
+def normalise_member_path(parts) -> str:
+    """Join path segments (e.g. Path.parts, already relative to the
+    argument's root) with '/', each NFC-normalised. The local file on
+    disk is never touched - this only affects the object key and the
+    manifest path. macOS hands back decomposed (NFD) Unicode where
+    Windows/Linux hand back composed (NFC); without this, the same
+    accented filename deposited from a Mac and a PC produces two
+    manifest entries and two objects for identical content (r7 §4)."""
+    return "/".join(unicodedata.normalize("NFC", p) for p in parts)
+
+
+def member_path_error(member: str) -> Optional[str]:
+    """Structural problems that make a member path unusable as an object
+    key - refused outright, never offered as 'keep as-is'. This is about
+    the key/manifest grammar itself, not consumer-filesystem friendliness
+    (that is member_path_problems, advisory). None if the path is clean."""
+    if not member:
+        return "member path is empty"
+    if len(member.encode("utf-8")) > MEMBER_PATH_MAX_BYTES:
+        return "member path is over %d bytes" % MEMBER_PATH_MAX_BYTES
+    if "\\" in member:
+        return ("%r contains a backslash - object keys always use '/'"
+                % member)
+    if member.startswith("/") or member.endswith("/"):
+        return "%r starts or ends with '/'" % member
+    if _DRIVE_RE.match(member) or member.startswith("//"):
+        return "%r looks like an absolute or drive-rooted path" % member
+    for seg in member.split("/"):
+        if not seg:
+            return "%r has an empty segment ('//')" % member
+        if seg in (".", ".."):
+            return "%r contains a '%s' segment" % (member, seg)
+        if not seg.strip():
+            return "%r has a whitespace-only segment" % member
+        if any(ord(c) < 0x20 for c in seg):
+            return "%r contains a control character" % member
+        if len(seg.encode("utf-8")) > MEMBER_SEGMENT_MAX_BYTES:
+            return ("%r has a segment over %d bytes"
+                    % (member, MEMBER_SEGMENT_MAX_BYTES))
+    return None
+
+
+def member_path_problems(member: str) -> List[str]:
+    """Advisory, per-segment problems (the spec §4 set, same rules as
+    filename_problems) - offered as a correction, never blocking. Must
+    run per segment: PROBLEM_CHARS includes '/', so running the plain
+    filename check on a whole member path would flag every separator."""
+    problems = []
+    for seg in member.split("/"):
+        for p in filename_problems(seg):
+            problems.append("%r %s" % (seg, p))
+    return problems
+
+
+def suggest_member_path(member: str) -> str:
+    """Suggested correction for a member path: each segment run through
+    suggest_filename, rejoined. Never applied automatically."""
+    return "/".join(suggest_filename(seg) for seg in member.split("/"))
+
+
+def is_reserved_member(member: str) -> bool:
+    """True if ANY segment of a member path matches dataset.*.json - not
+    just the last. The reservation is a pattern, not a location (r6 §2):
+    since the dataset is a real path element, a nested dataset.sub.json
+    looks exactly like the record of a dataset called 'sub' to any
+    consumer walking the tree."""
+    return any(is_reserved_name(seg) for seg in member.split("/"))
+
+
 def record_filename(dataset: str) -> str:
     """The record filename for a dataset: dataset.<slug>.json. The slug
     always equals the prefix's final path element, so any consumer can
@@ -134,18 +217,26 @@ def record_key(strand: str, project: str, sensitivity: str,
 
 
 def build_key(strand: str, project: str, sensitivity: str, state: str,
-              dataset: str, filename: str) -> str:
+              dataset: str, member: str) -> str:
     """Build the object key
-    {strand}/{project}/{sensitivity}/{state}/{dataset}/{filename}.
+    {strand}/{project}/{sensitivity}/{state}/{dataset}/{member}.
+
+    `member` may contain '/' to preserve a sub-path relative to the
+    argument's root (r7 §1, folders as deposit arguments) - it is
+    validated here, the one place the "never let os.sep leak into a key"
+    invariant can be guaranteed for every caller, including the future
+    gateway which never goes near deposit.py.
 
     Raises RedDataError for sensitivity 'red', ValueError for any other
-    invalid part or for a reserved record filename. Backstops —
-    deposit.py refuses both earlier."""
+    invalid part, a structural member-path problem (member_path_error),
+    or a reserved record name at any depth (is_reserved_member).
+    Backstops — deposit.py refuses these earlier."""
     _validate_parts(strand, project, sensitivity, state, dataset)
-    if not filename:
-        raise ValueError("filename must not be empty")
-    if is_reserved_name(filename):
+    error = member_path_error(member)
+    if error:
+        raise ValueError(error)
+    if is_reserved_member(member):
         raise ValueError(
             "%r matches dataset.*.json, which is reserved for dataset "
-            "records" % filename)
-    return "/".join((strand, project, sensitivity, state, dataset, filename))
+            "records" % member)
+    return "/".join((strand, project, sensitivity, state, dataset, member))

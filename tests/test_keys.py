@@ -60,6 +60,71 @@ class TestBuildKey(unittest.TestCase):
             keys.build_key("rs2", "csac", "green", "2_final", "ds", name)
 
 
+class TestMemberPath(unittest.TestCase):
+    def test_build_key_accepts_subpath(self):
+        self.assertEqual(
+            keys.build_key("rs2", "csac", "green", "2_final",
+                          "sentinel2-imagery", "2024/tiles/a.tif"),
+            "rs2/csac/green/2_final/sentinel2-imagery/2024/tiles/a.tif")
+
+    def test_build_key_no_backslash_leaks_in(self):
+        with self.assertRaises(ValueError):
+            keys.build_key("rs2", "csac", "green", "2_final", "ds",
+                          "2024\\tiles\\a.tif")
+
+    def test_error_rejects_traversal_and_absolute(self):
+        for bad in ("../x.csv", "a/../b.csv", "a/./b.csv", "/a.csv",
+                    "a/", "/a", "a//b", "C:/a.csv", "//server/share"):
+            self.assertIsNotNone(keys.member_path_error(bad), bad)
+
+    def test_error_rejects_control_char_and_oversize_segment(self):
+        self.assertIsNotNone(keys.member_path_error("a\nb.csv"))
+        self.assertIsNotNone(keys.member_path_error("x" * 300 + ".csv"))
+
+    def test_error_none_for_clean_subpath(self):
+        self.assertIsNone(keys.member_path_error("2024/tiles/a.tif"))
+
+    def test_error_empty(self):
+        self.assertIsNotNone(keys.member_path_error(""))
+
+    def test_problems_per_segment(self):
+        problems = keys.member_path_problems("my data/bad:name.csv")
+        self.assertTrue(any("space" in p for p in problems))
+        self.assertTrue(any(":" in p for p in problems))
+
+    def test_problems_clean_path_empty(self):
+        self.assertEqual(keys.member_path_problems("2024/tiles/a.tif"), [])
+
+    def test_suggest_member_path_per_segment(self):
+        self.assertEqual(keys.suggest_member_path("my data/bad:name.csv"),
+                         "my-data/badname.csv")
+
+    def test_reserved_at_any_depth(self):
+        self.assertTrue(keys.is_reserved_member("sub/dataset.foo.json"))
+        self.assertTrue(keys.is_reserved_member("dataset.foo.json"))
+        self.assertTrue(keys.is_reserved_member("a/b/dataset.x.json"))
+        self.assertFalse(keys.is_reserved_member("a/b/notes.json"))
+
+    def test_build_key_refuses_reserved_at_any_depth(self):
+        with self.assertRaises(ValueError):
+            keys.build_key("rs2", "csac", "green", "2_final", "ds",
+                          "sub/dataset.foo.json")
+
+    def test_normalise_member_path_nfc(self):
+        import unicodedata
+        nfd = unicodedata.normalize("NFD", "café.csv")
+        nfc = unicodedata.normalize("NFC", "café.csv")
+        self.assertNotEqual(nfd, nfc)  # sanity: the two forms really differ
+        from pathlib import PurePosixPath
+        result = keys.normalise_member_path(PurePosixPath(nfd).parts)
+        self.assertEqual(result, nfc)
+
+    def test_normalise_member_path_joins_parts(self):
+        self.assertEqual(
+            keys.normalise_member_path(("2024", "tiles", "a.tif")),
+            "2024/tiles/a.tif")
+
+
 class TestReservedName(unittest.TestCase):
     def test_matches(self):
         for name in ("dataset.meta.json", "dataset.foo.json", "dataset..json"):

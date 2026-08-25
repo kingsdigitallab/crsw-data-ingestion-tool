@@ -166,6 +166,29 @@ class TestValidateRecord(unittest.TestCase):
         rec = _record(files=[entry, dict(entry)])
         self.assertTrue(any("duplicate" in e.lower() for e in self._errors(rec)))
 
+    def test_nested_manifest_path_ok(self):
+        # r7 §1: a member path may be a sub-path relative to the folder
+        # argument's root; merge_manifest/unchanged_paths compare it as a
+        # plain string, so this needs no special handling.
+        rec = _record(files=[{"path": "2024/tiles/a.tif",
+                              "checksum_sha256": "ab" * 32, "bytes": 1}])
+        self.assertEqual(self._errors(rec), [])
+
+    def test_nested_reserved_manifest_path_is_error(self):
+        # r7 §3: reservation applies at every depth, not just the last
+        # segment - record.py's own check must not be fooled by a
+        # sub-folder in front of the reserved name.
+        rec = _record(files=[{"path": "sub/dataset.foo.json",
+                              "checksum_sha256": "ab" * 32, "bytes": 1}])
+        self.assertTrue(any("reserved" in e for e in self._errors(rec)))
+
+    def test_traversal_manifest_path_is_error(self):
+        for bad in ("../a.csv", "a/../b.csv", "/a.csv", "a/",
+                    "a\\b.csv"):
+            rec = _record(files=[{"path": bad, "checksum_sha256": "ab" * 32,
+                                  "bytes": 1}])
+            self.assertTrue(self._errors(rec), bad)
+
     def test_bad_checksum_is_error(self):
         rec = _record(files=[{"path": "a.csv", "checksum_sha256": "zz",
                               "bytes": 1}])
