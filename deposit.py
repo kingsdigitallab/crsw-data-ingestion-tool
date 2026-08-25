@@ -7,6 +7,7 @@ human-readable messages. The logic modules (keys, record, vocab,
 transfer) have no interactive I/O so the future web gateway can import
 them unchanged."""
 import argparse
+import collections
 import glob as globlib
 import json
 import os
@@ -43,9 +44,12 @@ MESSAGES = {
     "no_rclone": (
         "Could not find rclone.\n"
         "Looked on your PATH, then for ./rclone and ./rclone.exe next to\n"
-        "this script.\n"
+        "your current folder and next to this script.\n"
         "Download it from %s and either install it or just drop the rclone\n"
-        "binary in this folder - both work." % RCLONE_DOWNLOAD_URL),
+        "binary in this folder - both work. On macOS/Linux it must be\n"
+        "executable (chmod +x rclone); a browser download on macOS may\n"
+        "also need 'xattr -d com.apple.quarantine rclone'."
+        % RCLONE_DOWNLOAD_URL),
     "no_remote": (
         "rclone is installed but has no remote named '{remote}'.\n"
         "Run 'rclone config file' to find your config file and add this\n"
@@ -143,6 +147,18 @@ def colour_enabled() -> bool:
         return True
     try:
         return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def interactive() -> bool:
+    """True when there is a human at the other end of stdin. Used to gate
+    prompts that are not already covered by --dry-run (offer_to_save_settings)
+    - every existing tty check (colour_enabled, the progress-bar check)
+    reads stdout, which is the wrong stream for deciding whether a
+    prompt is safe to show."""
+    try:
+        return sys.stdin.isatty()
     except Exception:
         return False
 
@@ -321,52 +337,239 @@ def human_size(n: int) -> str:
     return "%d B" % n
 
 
-def resolve_files(patterns: List[str]) -> Tuple[List[Path], List[str]]:
-    """Expand globs; reject directories and misses. Returns (files, problems)."""
-    files = []
-    problems = []
+# A "source" is one local file resolved from the command line: `path` is
+# the local Path exactly as the OS gave it (never rewritten), `member` is
+# the validated, NFC-normalised string that becomes both the object key's
+# last element and the manifest `path` field (r7 §1). For an explicit
+# file argument member is just the basename, unchanged from before r7;
+# for a file found inside a folder argument it is the path relative to
+# that argument's root, so structure is preserved instead of flattened.
+Source = collections.namedtuple("Source", ("path", "member"))
+
+# OS/editor noise that would otherwise silently double the manifest when
+# a whole folder is walked (r7 §2) - excluded by default, never silently:
+# resolve_files always reports how many it dropped, and --include-noise
+# keeps them. "._*" is a Mac writing to exFAT/SMB: an AppleDouble
+# sidecar for every single file, invisible in Finder.
+NOISE_FILE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+NOISE_FILE_PREFIXES = ("._",)
+NOISE_DIR_NAMES = {".git", "__pycache__", ".ipynb_checkpoints", "__MACOSX",
+                   ".Spotlight-V100", ".Trashes", ".svn", "$RECYCLE.BIN"}
+
+
+def _is_noise_file(name: str) -> bool:
+    return name in NOISE_FILE_NAMES or any(
+        name.startswith(p) for p in NOISE_FILE_PREFIXES)
+
+
+def _member_for(path: Path, root: Path) -> str:
+    """path's member string relative to root (r7 §1's anchoring rule),
+    NFC-normalised so the same file deposited from Windows/Linux and
+    from macOS (which hands back decomposed Unicode) produces the same
+    manifest path (r7 §4)."""
+    rel = os.path.relpath(str(path), str(root))
+    return keys.normalise_member_path(Path(rel).parts)
+
+
+def _pattern_root(pattern: str) -> Path:
+    """The literal directory prefix before a glob pattern's first
+    wildcard component - the anchor every match under that pattern is
+    made relative to (r7 §1), e.g. 'data/*/results.csv' -> 'data'.
+
+    Uses Path(pattern).parts rather than a manual separator split: a
+    plain string split-and-rejoin of an absolute Windows path silently
+    turns 'C:\\Users\\...' into the drive-RELATIVE 'C:Users\\...' (a
+    different path, resolved against the drive's current directory, not
+    the root) - pathlib's own parsing keeps the drive anchor intact."""
+    parts = Path(pattern).parts
+    literal = []
+    for part in parts:
+        if globlib.has_magic(part):
+            break
+        literal.append(part)
+    return Path(*literal) if literal else Path(".")
+
+
+def _walk_dir(dirpath: Path, root: Path, include_noise: bool,
+             sources: List[Source], problems: List[str], notes: List[str],
+             stats: Dict, seen: Dict) -> None:
+    """Walk dirpath (a matched directory) and add one Source per file
+    found, with member paths relative to `root` - which is dirpath
+    itself for a bare folder argument, but the shared pattern root for a
+    directory matched by a wildcard (r7 §1), so a whole tree's contents
+    land under one consistent anchor either way.
+
+    os.walk, not Path.rglob (r7 §1): rglob swallows OSError on an
+    unreadable subdirectory (a silent omission), can't be pruned before
+    descending, yields filesystem order (making the manifest differ
+    between NTFS/APFS/ext4), and follows symlinked directories."""
+    def onerror(err):
+        problems.append("cannot read %s: %s"
+                        % (err.filename, err.strerror or err))
+
+    for here, dirnames, filenames in os.walk(str(dirpath), onerror=onerror,
+                                             followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+        keep = []
+        for d in dirnames:
+            full = Path(here) / d
+            if not include_noise and d in NOISE_DIR_NAMES:
+                stats["noise"] += 1
+                continue
+            if full.is_symlink():
+                stats["symlinked_dirs"].append(str(full))
+                continue
+            keep.append(d)
+        dirnames[:] = keep
+        if not dirnames and not filenames:
+            stats["empty_dirs"] += 1
+        for name in filenames:
+            full = Path(here) / name
+            if full.is_symlink():
+                if not full.exists():
+                    problems.append("cannot read %s: broken link" % full)
+                    continue
+                stats["symlinks"] += 1
+            if not include_noise and _is_noise_file(name):
+                stats["noise"] += 1
+                continue
+            if name.startswith("."):
+                stats["hidden"] += 1
+            try:
+                if full.stat().st_size == 0:
+                    stats["zero_byte"] += 1
+            except OSError:
+                pass
+            try:
+                resolved = str(full.resolve())
+            except OSError:
+                resolved = str(full)
+            if resolved in seen:
+                notes.append("%s already included (as %s) - skipping "
+                             "duplicate" % (full, seen[resolved]))
+                continue
+            member = _member_for(full, root)
+            seen[resolved] = member
+            sources.append(Source(full, member))
+
+
+def resolve_files(patterns: List[str],
+                  include_noise: bool = False
+                  ) -> Tuple[List[Source], List[str], List[str]]:
+    """Expand globs and walk folders (r7 §1 - "no --recursive yet" is now
+    built). Returns (sources, problems, notes): problems are fatal-ish
+    (no match, unreadable), notes explain what the tool did on your
+    behalf (folder roots, exclusions) - said, never silent."""
+    sources: List[Source] = []
+    problems: List[str] = []
+    notes: List[str] = []
+    stats = {"noise": 0, "hidden": 0, "symlinks": 0, "symlinked_dirs": [],
+             "empty_dirs": 0, "zero_byte": 0}
+    seen: Dict[str, str] = {}
+
     for pattern in patterns:
-        matches = globlib.glob(pattern)
+        matches = globlib.glob(pattern, recursive=True)
+        literal = False
         if not matches:
-            problems.append("no file matches %r" % pattern)
-            continue
+            # A real file named e.g. 'data[1].csv' is otherwise reported
+            # as "no file matches" because glob reads '[1]' as a
+            # character class, not a literal (r7 §1).
+            if os.path.lexists(pattern):
+                matches = [pattern]
+                literal = True
+            else:
+                problems.append("no file matches %r" % pattern)
+                continue
+
+        bare = literal or not globlib.has_magic(pattern)
+        if bare:
+            p = Path(matches[0])
+            root = p if p.is_dir() else p.parent
+        else:
+            root = _pattern_root(pattern)
+        if literal:
+            notes.append("taking %r literally; the brackets would "
+                         "otherwise be read as a wildcard" % pattern)
+
         for m in matches:
             p = Path(m)
             if p.is_dir():
-                problems.append(
-                    "%s is a directory - deposit files individually or with a "
-                    "glob (there is no --recursive yet)" % p)
+                before = len(sources)
+                _walk_dir(p, root, include_noise, sources, problems, notes,
+                          stats, seen)
+                if bare:
+                    notes.append(
+                        "%s -> member paths relative to %s (%d file(s))"
+                        % (pattern, root, len(sources) - before))
             elif p.is_file():
-                files.append(p)
+                resolved = str(p.resolve())
+                member = _member_for(p, root)
+                if resolved in seen:
+                    notes.append("%s already included (as %s) - skipping "
+                                 "duplicate" % (p, seen[resolved]))
+                    continue
+                seen[resolved] = member
+                sources.append(Source(p, member))
             else:
                 problems.append("cannot read %s" % p)
-    return files, problems
+
+    if stats["noise"]:
+        notes.append("Excluded %d OS metadata/noise file(s) or folder(s) "
+                     "(--include-noise to keep them)." % stats["noise"])
+    if stats["hidden"]:
+        notes.append("%d hidden/dotfile(s) included." % stats["hidden"])
+    if stats["symlinks"]:
+        notes.append("Followed %d symlinked file(s)." % stats["symlinks"])
+    if stats["symlinked_dirs"]:
+        shown = stats["symlinked_dirs"][:5]
+        extra = len(stats["symlinked_dirs"]) - len(shown)
+        notes.append(
+            "Did not descend %d symlinked folder(s): %s%s - deposit them "
+            "directly if you mean to include their contents."
+            % (len(stats["symlinked_dirs"]), ", ".join(shown),
+               (" and %d more" % extra) if extra else ""))
+    if stats["empty_dirs"]:
+        notes.append("%d empty folder(s) contribute nothing (object "
+                     "storage has no directories)." % stats["empty_dirs"])
+    if stats["zero_byte"]:
+        notes.append("%d file(s) are zero bytes." % stats["zero_byte"])
+    return sources, problems, notes
 
 
-def plan_deposits(files: List[Path], meta: Dict, per_file: Dict) -> List[Dict]:
-    """Pure planning: one dict per file with its object key and manifest
-    overrides. per_file maps filename -> coverage overrides (r5 Q5).
-    Raises ValueError when two files would land at the same key - that
-    would be a silent overwrite inside one batch."""
+def set_member(plan: Dict, meta: Dict, new_member: str) -> None:
+    """Rewrite a plan's key and member TOGETHER - they must never drift
+    apart. The completion check at the end of a deposit reconstructs
+    every member's key as prefix + '/' + entry['path'], so a plan whose
+    key and member disagree would fail verification only after every
+    file has uploaded and the record has been written - the worst
+    possible point for that bug to surface."""
+    plan["member"] = new_member
+    plan["key"] = keys.build_key(meta["strand"], meta["project"],
+                                 meta["sensitivity"], meta["state"],
+                                 meta["dataset"], new_member)
+
+
+def plan_deposits(sources: List[Source], meta: Dict,
+                  per_file: Dict) -> List[Dict]:
+    """Pure planning: one dict per source with its object key and
+    manifest overrides. per_file maps member -> coverage overrides
+    (r5 Q5). Raises ValueError when two sources would land at the same
+    key - that would be a silent overwrite inside one batch."""
     plans = []
     seen = {}
-    for path in files:
+    for src in sources:
         key = keys.build_key(meta["strand"], meta["project"],
                              meta["sensitivity"], meta["state"],
-                             meta["dataset"], path.name)
+                             meta["dataset"], src.member)
         if key in seen:
             raise ValueError(
                 "%s and %s would land at the same key (%s) - rename one "
-                "and re-run" % (seen[key], path, key))
-        seen[key] = path
-        plans.append({"path": path, "key": key,
-                      "entry_overrides": dict(per_file.get(path.name, {}))})
+                "and re-run" % (seen[key], src.path, key))
+        seen[key] = src.path
+        plans.append({"path": src.path, "member": src.member, "key": key,
+                      "entry_overrides": dict(per_file.get(src.member, {}))})
     return plans
-
-
-def object_name(plan: Dict) -> str:
-    """The deposited filename: the key's last segment (renames included)."""
-    return plan["key"].rsplit("/", 1)[-1]
 
 
 def prepare_entries(plans: List[Dict]) -> List[Dict]:
@@ -374,17 +577,17 @@ def prepare_entries(plans: List[Dict]) -> List[Dict]:
     aligned with `plans` by index. Reads local files; never uploads."""
     entries = []
     for plan in plans:
-        name = object_name(plan)
+        member = plan["member"]
         overrides = plan.get("entry_overrides", {})
         entries.append(record.manifest_entry(
-            name,
+            member,
             record.sha256_file(plan["path"]),
             plan["path"].stat().st_size,
             temporal=(record.temporal_object(overrides.get("coverage_start"),
                                              overrides.get("coverage_end"))
                       if overrides.get("coverage_start")
                       or overrides.get("coverage_end") else None),
-            fmt=record.guess_format(name)))
+            fmt=record.guess_format(member)))
     return entries
 
 
@@ -395,6 +598,31 @@ def classify_members(entries: List[Dict], existing: Optional[Dict]):
     _, added, updated = record.merge_manifest(existing_files, entries)
     unchanged = sorted(record.unchanged_paths(existing_files, entries))
     return added, updated, unchanged
+
+
+def duplicate_content_warnings(entries: List[Dict],
+                               existing: Optional[Dict]) -> List[str]:
+    """A new member whose checksum matches an EXISTING member at a
+    different path is still added, not merged - deposits are additive
+    and the tool never removes a manifest member (r7 §1). The likely
+    cause is a file previously deposited flat and now re-deposited from
+    inside a folder, which silently doubles the bytes in the dataset if
+    nobody is told. Warn before the point of no return; never block -
+    two genuine copies in two folders is legal."""
+    existing_files = (existing or {}).get("files") or []
+    by_checksum: Dict[str, List[str]] = {}
+    for e in existing_files:
+        by_checksum.setdefault(e.get("checksum_sha256"), []).append(e["path"])
+    warnings = []
+    for entry in entries:
+        others = [p for p in by_checksum.get(entry["checksum_sha256"], [])
+                 if p != entry["path"]]
+        if others:
+            warnings.append(
+                "%r has the same content as %s, already in this dataset - "
+                "depositing adds a second copy (the tool never removes "
+                "members)." % (entry["path"], ", ".join(repr(p) for p in others)))
+    return warnings
 
 
 def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
@@ -419,7 +647,7 @@ def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
     lines.append("    members: %d added, %d updated, %d unchanged"
                  % (len(added), len(updated), len(unchanged)))
     for plan in plans[:limit]:
-        name = object_name(plan)
+        name = plan["member"]
         note = ""
         if name in updated:
             note = "  (new version; previous kept by bucket versioning)"
@@ -440,6 +668,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Deposit research files into CRSW shared storage, "
                     "described by one dataset record per prefix.")
     p.add_argument("files", nargs="+", metavar="FILE_OR_GLOB")
+    p.add_argument("--include-noise", action="store_true",
+                   help="deposit OS/editor noise files (.DS_Store, "
+                        "Thumbs.db, ._* etc.) instead of excluding them")
     p.add_argument("--strand", choices=keys.STRANDS)
     p.add_argument("--project")
     p.add_argument("--dataset", help="dataset name within the project "
@@ -481,7 +712,12 @@ def save_config(cfg: dict, path: Optional[Path] = None) -> None:
     path = Path(path) if path is not None else config_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        # newline="\n": Path.write_text applies platform newline
+        # translation (CRLF on Windows), which is harmless for a config
+        # file nobody hashes but inconsistent with every other file this
+        # tool writes - kept explicit here too (r7 §4).
+        with open(str(path), "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(cfg, indent=2) + "\n")
     except OSError:
         warn("could not save settings to %s - flags still work" % path)
 
@@ -520,6 +756,34 @@ def first_run_setup(rclone) -> dict:
     save_config(cfg)
     say("Saved to %s (re-run setup any time with --reconfigure)." % config_path())
     return cfg
+
+
+def offer_to_save_settings(flagged_remote: Optional[str],
+                           flagged_bucket: Optional[str], cfg: dict,
+                           remote: str, bucket: str, already_set_up: bool,
+                           dry_run: bool) -> None:
+    """--remote/--bucket are transient by default; offer once to persist
+    them to config.json when a flag actually changed the resolved value.
+    Stays silent (no prompt at all) when: first_run_setup just ran or
+    --reconfigure did (already_set_up - no double prompt), neither flag
+    was passed, --dry-run (the non-interactive support-reproduction
+    path must never mutate the machine), stdin isn't a tty (scripted
+    runs), or the proposed values already match what's saved."""
+    if already_set_up or dry_run or not interactive():
+        return
+    if flagged_remote is None and flagged_bucket is None:
+        return
+    proposed = dict(cfg)
+    proposed["remote"] = remote
+    proposed["bucket"] = bucket
+    if proposed.get("remote") == cfg.get("remote") and \
+            proposed.get("bucket") == cfg.get("bucket"):
+        return
+    if ask_yes_no("Save %s:%s as your default target?" % (remote, bucket)):
+        save_config(proposed)
+        say("Saved to %s." % config_path())
+    else:
+        say("Not saved - the flags applied to this run only.")
 
 
 # ---------------------------------------------------------------- prompts
@@ -913,20 +1177,22 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
     return meta, existing
 
 
-def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
+def prompt_per_file_overrides(sources: List[Source], meta: Dict) -> Dict:
     """Ask once whether the shared coverage dates apply to all; per-file
-    prompts if not. Overrides land in the manifest entries; the dataset
-    envelope is then computed, not asked for (r5 Q5). The per-file
-    abstract retired with the per-file sidecar - one dataset, one
-    abstract."""
-    if len(files) <= 1:
+    prompts if not. Overrides land in the manifest entries, keyed by
+    member path (r7 §1) rather than local filename, so two files with
+    the same basename in different sub-folders don't collide here
+    either. The dataset envelope is then computed, not asked for (r5
+    Q5). The per-file abstract retired with the per-file sidecar - one
+    dataset, one abstract."""
+    if len(sources) <= 1:
         return {}
     if ask_yes_no("Apply the same coverage dates to all %d files?"
-                  % len(files), default_no=False):
+                  % len(sources), default_no=False):
         return {}
     overrides = {}
-    for path in files:
-        say("\n%s:" % path.name)
+    for src in sources:
+        say("\n%s:" % src.member)
         o = {}
         for label, field in (("  Coverage start", "coverage_start"),
                              ("  Coverage end", "coverage_end")):
@@ -943,29 +1209,31 @@ def prompt_per_file_overrides(files: List[Path], meta: Dict) -> Dict:
         # complete (r6 §3.1).
         if (o.get("coverage_start") != meta["coverage_start"]
                 or o.get("coverage_end") != meta["coverage_end"]):
-            overrides[path.name] = o
+            overrides[src.member] = o
     return overrides
 
 
-def confirm_filenames(files: List[Path]) -> Optional[Dict]:
-    """Offer corrections for problem filenames. Returns {orig_name: deposit_name}
-    or None if the user aborts. NEVER auto-applies (spec §4.3)."""
+def confirm_filenames(sources: List[Source]) -> Optional[Dict]:
+    """Offer corrections for problem member paths (advisory tier, one
+    problem set per segment - r7 §1). Returns {orig_member: new_member}
+    or None if the user aborts. NEVER auto-applies (spec §4.3); the
+    local file and its folder are never touched, only the object name."""
     renames = {}
-    for path in files:
-        problems = keys.filename_problems(path.name)
+    for src in sources:
+        problems = keys.member_path_problems(src.member)
         if not problems:
             continue
-        suggestion = keys.suggest_filename(path.name)
-        say("\n%r %s." % (path.name, "; ".join(problems)))
+        suggestion = keys.suggest_member_path(src.member)
+        say("\n%r %s." % (src.member, "; ".join(problems)))
         say("Suggested object name: %r (your local file is not renamed)" % suggestion)
         choice = ask_choice("  [a]ccept suggestion / [e]dit / [k]eep as-is / [q]uit",
                             ("a", "e", "k", "q"))
         if choice == "q":
             return None
         if choice == "a":
-            renames[path.name] = suggestion
+            renames[src.member] = suggestion
         elif choice == "e":
-            renames[path.name] = ask("  Object filename")
+            renames[src.member] = ask("  Object filename")
     return renames
 
 
@@ -1004,7 +1272,8 @@ def append_log(line: str) -> None:
     try:
         d = vocab.cache_dir()
         d.mkdir(parents=True, exist_ok=True)
-        with open(str(d / "deposits.log"), "a", encoding="utf-8") as f:
+        with open(str(d / "deposits.log"), "a", encoding="utf-8",
+                 newline="\n") as f:
             f.write(line + "\n")
     except OSError:
         pass
@@ -1053,8 +1322,8 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
     with tempfile.TemporaryDirectory(prefix="crsw-deposit-") as tmp:
         try:
             for i, (plan, entry) in enumerate(zip(plans, entries), 1):
-                current = plan["path"].name
-                say("\n[%d/%d] %s" % (i, len(plans), plan["path"].name))
+                current = plan["member"]
+                say("\n[%d/%d] %s" % (i, len(plans), plan["member"]))
                 if entry["path"] in skip:
                     say("  skipped (unchanged): %s" % plan["key"])
                     skipped.append(plan)
@@ -1116,7 +1385,15 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
             current = record_filename
             say("\nwriting dataset record...")
             record_path = Path(tmp) / record_filename
-            record_path.write_text(record.record_json(rec), encoding="utf-8")
+            # newline="\n": Path.write_text applies platform newline
+            # translation, so identical record content was previously
+            # CRLF on Windows and LF on macOS/Linux - and the record's
+            # own checksum label is computed from these exact bytes, so
+            # it differed by depositor platform for byte-identical JSON
+            # (r7 §4). Every depositor must now hash the same bytes.
+            with open(str(record_path), "w", encoding="utf-8",
+                     newline="\n") as f:
+                f.write(record.record_json(rec))
             record_key = prefix + "/" + record_filename
             labels = dict(base_labels)
             labels["x-amz-meta-checksum-sha256"] = record.sha256_file(record_path)
@@ -1154,11 +1431,15 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
             interrupted = True
 
     # ------- report (spec §7 step 10): what landed, what didn't, what next.
+    REPORT_LIMIT = 20
     say("\n" + "=" * 60)
     if done:
         say("Uploaded %d file(s):" % len(done))
-        for plan in done:
+        for plan in done[:REPORT_LIMIT]:
             say("  %s" % plan["key"])
+        if len(done) > REPORT_LIMIT:
+            say("  ... and %d more (see deposits.log)"
+               % (len(done) - REPORT_LIMIT))
     if skipped:
         say("Skipped %d unchanged file(s)." % len(skipped))
     remaining = [p for p in plans
@@ -1172,7 +1453,7 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
     if (failed is not None or interrupted) and not record_written:
         if remaining:
             say("\nNot deposited: %s"
-                % ", ".join(p["path"].name for p in remaining))
+                % ", ".join(p["member"] for p in remaining))
         say("No record was written - the dataset record still describes "
             "the last complete deposit. Re-running the same command is "
             "safe: finished files are skipped and the record is written "
@@ -1204,6 +1485,11 @@ def main(argv=None) -> int:
         if rclone_for_setup:
             cfg = first_run_setup(rclone_for_setup)
         # no rclone -> preflight will fail with the no_rclone message anyway
+    # Captured BEFORE resolve_settings overwrites args.remote/args.bucket -
+    # the same ordering hazard setting_sources already documents - so
+    # offer_to_save_settings below can tell "flag given" from "resolved
+    # from config/default".
+    flagged_remote, flagged_bucket = args.remote, args.bucket
     remote_src, bucket_src = setting_sources(args, cfg)
     args.remote, args.bucket = resolve_settings(args, cfg)
 
@@ -1216,17 +1502,20 @@ def main(argv=None) -> int:
         % (style("%s:%s" % (args.remote, args.bucket), "bold"), detail))
 
     # Local checks first: files readable? No reserved names?
-    files, problems = resolve_files(args.files)
+    sources, problems, notes = resolve_files(args.files,
+                                             include_noise=args.include_noise)
     for p in problems:
         warn(p)
-    if not files:
+    for n in notes:
+        say("note: " + n)
+    if not sources:
         return fail("No files to deposit.")
-    reserved = next((f.name for f in files if keys.is_reserved_name(f.name)),
-                    None)
+    reserved = next((s.member for s in sources
+                     if keys.is_reserved_member(s.member)), None)
     if reserved:
         return fail(MESSAGES["reserved_name"].format(name=reserved))
-    total = sum(f.stat().st_size for f in files)
-    say("%d file(s), %s total." % (len(files), human_size(total)))
+    total = sum(s.path.stat().st_size for s in sources)
+    say("%d file(s), %s total." % (len(sources), human_size(total)))
 
     # Remote preflight (§8). Dry-run downgrades failures to warnings so the
     # preview still works offline - it's the support reproduction path.
@@ -1238,6 +1527,15 @@ def main(argv=None) -> int:
         else:
             return fail("\n\n".join(failures))
     remote_ok = not failures
+
+    # Offer to persist --remote/--bucket only once they've been proven
+    # reachable and writable - otherwise the tool would happily save a
+    # typo. Skipped entirely under --dry-run, on a non-tty, or when
+    # first-run/--reconfigure setup already saved this run's values.
+    if remote_ok:
+        offer_to_save_settings(flagged_remote, flagged_bucket, cfg,
+                               args.remote, args.bucket, run_setup,
+                               args.dry_run)
 
     # Vocabulary (§6): warn once, non-fatally, naming the source used.
     vocab_dict, source = vocab.load_vocabulary()
@@ -1274,9 +1572,9 @@ def main(argv=None) -> int:
                 target="%s:%s/%s/" % (args.remote, args.bucket, e.detail)))
         return fail(MESSAGES.get(e.kind, MESSAGES["unknown"]))
 
-    per_file = prompt_per_file_overrides(files, meta)
+    per_file = prompt_per_file_overrides(sources, meta)
 
-    renames = confirm_filenames(files)
+    renames = confirm_filenames(sources)
     if renames is None:
         say("Nothing deposited.")
         return 0
@@ -1285,22 +1583,25 @@ def main(argv=None) -> int:
     # are never touched). A rename into the reserved record name, or into
     # a key another batch file already claims, is refused, not crashed.
     try:
-        plans = plan_deposits(files, meta, per_file)
+        plans = plan_deposits(sources, meta, per_file)
         seen = {plan["key"]: plan["path"] for plan in plans}
         for plan in plans:
-            if plan["path"].name not in renames:
+            if plan["member"] not in renames:
                 continue
-            new_name = renames[plan["path"].name]
+            new_member = renames[plan["member"]]
             del seen[plan["key"]]
             new_key = keys.build_key(
                 meta["strand"], meta["project"], meta["sensitivity"],
-                meta["state"], meta["dataset"], new_name)
+                meta["state"], meta["dataset"], new_member)
             if new_key in seen:
                 raise ValueError(
                     "%s and %s would land at the same key (%s) - rename "
                     "one and re-run" % (seen[new_key], plan["path"], new_key))
             seen[new_key] = plan["path"]
-            plan["key"] = new_key
+            # key and member must be rewritten together (set_member) -
+            # a plan whose two disagree fails the completion check only
+            # after every file has uploaded (r7 §1).
+            set_member(plan, meta, new_member)
     except ValueError as e:
         return fail(str(e))
 
@@ -1315,6 +1616,8 @@ def main(argv=None) -> int:
     except OSError as e:
         return fail("Could not read a file while checksumming: %s" % e)
     classification = classify_members(entries, existing)
+    for w in duplicate_content_warnings(entries, existing):
+        warn(w)
 
     say("\nPlanned deposit:")
     for line in preview_lines(plans, meta, existing, classification):

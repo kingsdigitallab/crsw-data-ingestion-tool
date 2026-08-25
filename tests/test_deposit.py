@@ -7,17 +7,127 @@ import deposit
 
 
 class TestResolveFiles(unittest.TestCase):
-    def test_expands_glob_and_reports_dirs(self):
+    def test_expands_glob_and_walks_dirs(self):
+        # r7 §1: directories are no longer rejected - they are walked,
+        # and a miss is the only remaining problem.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             (base / "a.csv").write_text("x")
             (base / "b.csv").write_text("y")
             (base / "sub").mkdir()
-            files, problems = deposit.resolve_files([str(base / "*.csv"),
-                                                     str(base / "sub"),
-                                                     str(base / "missing.txt")])
-            self.assertEqual(sorted(f.name for f in files), ["a.csv", "b.csv"])
-            self.assertEqual(len(problems), 2)  # dir rejected + miss reported
+            (base / "sub" / "nested.csv").write_text("z")
+            sources, problems, notes = deposit.resolve_files(
+                [str(base / "*.csv"), str(base / "sub"),
+                 str(base / "missing.txt")])
+            self.assertEqual(sorted(s.member for s in sources),
+                             ["a.csv", "b.csv", "nested.csv"])
+            self.assertEqual(len(problems), 1)
+            self.assertIn("missing.txt", problems[0])
+            self.assertTrue(any(str(base / "sub") in n for n in notes))
+
+    def test_bare_folder_preserves_relative_structure(self):
+        # r7 §1's worked example: survey-2024/2024/tiles/a.tif ->
+        # member "2024/tiles/a.tif", the folder's own name dropped.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "survey-2024"
+            (base / "2024" / "tiles").mkdir(parents=True)
+            (base / "2024" / "tiles" / "a.tif").write_text("x")
+            (base / "readme.md").write_text("y")
+            sources, problems, notes = deposit.resolve_files([str(base)])
+            self.assertEqual(problems, [])
+            self.assertEqual(sorted(s.member for s in sources),
+                             ["2024/tiles/a.tif", "readme.md"])
+
+    def test_same_basename_different_subfolders_no_collision(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "coastal"
+            (base / "2023").mkdir(parents=True)
+            (base / "2024").mkdir(parents=True)
+            (base / "2023" / "a.tif").write_text("x")
+            (base / "2024" / "a.tif").write_text("y")
+            sources, problems, notes = deposit.resolve_files([str(base)])
+            self.assertEqual(sorted(s.member for s in sources),
+                             ["2023/a.tif", "2024/a.tif"])
+
+    def test_wildcard_across_subfolders_anchors_at_literal_prefix(self):
+        # data/*/results.csv -> root "data" -> "site1/results.csv" etc.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "data"
+            for site in ("site1", "site2"):
+                (base / site).mkdir(parents=True)
+                (base / site / "results.csv").write_text(site)
+            pattern = str(base / "*" / "results.csv")
+            sources, problems, notes = deposit.resolve_files([pattern])
+            self.assertEqual(sorted(s.member for s in sources),
+                             ["site1/results.csv", "site2/results.csv"])
+
+    def test_explicit_file_argument_unchanged(self):
+        # Backward compatibility: an explicit file's member is still just
+        # its basename, exactly as before r7.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "a" / "b"
+            base.mkdir(parents=True)
+            (base / "c.txt").write_text("x")
+            sources, problems, notes = deposit.resolve_files(
+                [str(base / "c.txt")])
+            self.assertEqual([s.member for s in sources], ["c.txt"])
+
+    def test_double_star_recurses(self):
+        # '**' without recursive=True used to collapse to exactly one
+        # level (verified against Python's own glob module); the member
+        # is relative to the literal prefix before the wildcard ("d"),
+        # same anchoring rule as any other wildcard pattern.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "a" / "b").mkdir(parents=True)
+            (base / "a" / "b" / "deep.csv").write_text("x")
+            sources, problems, notes = deposit.resolve_files(
+                [str(base / "**" / "*.csv")])
+            self.assertEqual([s.member for s in sources], ["a/b/deep.csv"])
+
+    def test_literal_bracket_filename_falls_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "data[1].csv").write_text("x")
+            sources, problems, notes = deposit.resolve_files(
+                [str(base / "data[1].csv")])
+            self.assertEqual([s.member for s in sources], ["data[1].csv"])
+            self.assertTrue(any("literally" in n for n in notes))
+
+    def test_noise_files_excluded_by_default_and_counted(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "tree"
+            base.mkdir()
+            (base / "a.csv").write_text("x")
+            (base / ".DS_Store").write_text("junk")
+            (base / "._a.csv").write_text("junk")
+            sources, problems, notes = deposit.resolve_files([str(base)])
+            self.assertEqual([s.member for s in sources], ["a.csv"])
+            self.assertTrue(any("Excluded 2" in n for n in notes))
+
+    def test_include_noise_keeps_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "tree"
+            base.mkdir()
+            (base / "a.csv").write_text("x")
+            (base / ".DS_Store").write_text("junk")
+            sources, problems, notes = deposit.resolve_files(
+                [str(base)], include_noise=True)
+            self.assertEqual(sorted(s.member for s in sources),
+                             [".DS_Store", "a.csv"])
+
+    def test_reserved_name_nested_in_folder_still_flagged(self):
+        # r7 §3: reservation applies at every depth, not just the last
+        # segment - confirmed here via the member path produced by a
+        # folder walk (the caller in main() runs is_reserved_member on
+        # this exact string).
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "tree"
+            (base / "sub").mkdir(parents=True)
+            (base / "sub" / "dataset.foo.json").write_text("{}")
+            sources, problems, notes = deposit.resolve_files([str(base)])
+            self.assertTrue(any(deposit.keys.is_reserved_member(s.member)
+                                for s in sources))
 
 
 class TestHumanSize(unittest.TestCase):
@@ -41,29 +151,46 @@ _VOCAB = {"vocabulary_version": "2026-07-23",
           "facets": {"themes": ["armed-conflict"]}}
 
 
+def _source(path_str, member=None):
+    """A Source for a bare local path string, mirroring what
+    resolve_files would produce for an explicit file argument."""
+    p = Path(path_str)
+    return deposit.Source(p, member if member is not None else p.name)
+
+
 class TestPlanDeposits(unittest.TestCase):
     def test_builds_keys_and_overrides(self):
         per_file = {"x.csv": {"coverage_start": "2001"}}
-        plans = deposit.plan_deposits([Path("data/x.csv")], dict(_META),
+        plans = deposit.plan_deposits([_source("data/x.csv")], dict(_META),
                                       per_file)
         self.assertEqual(plans[0]["key"],
                          "rs2/csac/green/2_final/sentinel2-imagery/x.csv")
+        self.assertEqual(plans[0]["member"], "x.csv")
         self.assertEqual(plans[0]["entry_overrides"],
                          {"coverage_start": "2001"})
 
     def test_duplicate_keys_refused(self):
-        # Same filename from two directories would silently overwrite.
+        # Same filename from two EXPLICIT file arguments would silently
+        # overwrite - member is the basename for both.
         with self.assertRaises(ValueError):
-            deposit.plan_deposits([Path("a/x.csv"), Path("b/x.csv")],
+            deposit.plan_deposits([_source("a/x.csv"), _source("b/x.csv")],
                                   dict(_META), {})
+
+    def test_same_basename_different_subpaths_no_collision(self):
+        # r7 §1: two files with the same basename under different
+        # sub-folders of ONE folder argument keep their sub-path, so
+        # they no longer collide the way two flat same-named files do.
+        deposit.plan_deposits(
+            [_source("2023/a.tif", "2023/a.tif"),
+             _source("2024/a.tif", "2024/a.tif")], dict(_META), {})
 
     def test_same_filename_in_two_datasets_no_collision(self):
         # r6 §1: the dataset element removes the filename-collision
         # hazard entirely - two datasets can each have a readme.md.
         meta_a = dict(_META, dataset="sentinel2-imagery")
         meta_b = dict(_META, dataset="training-labels")
-        plan_a = deposit.plan_deposits([Path("readme.md")], meta_a, {})
-        plan_b = deposit.plan_deposits([Path("readme.md")], meta_b, {})
+        plan_a = deposit.plan_deposits([_source("readme.md")], meta_a, {})
+        plan_b = deposit.plan_deposits([_source("readme.md")], meta_b, {})
         self.assertNotEqual(plan_a[0]["key"], plan_b[0]["key"])
         self.assertEqual(plan_a[0]["key"],
                          "rs2/csac/green/2_final/sentinel2-imagery/readme.md")
@@ -71,23 +198,58 @@ class TestPlanDeposits(unittest.TestCase):
                          "rs2/csac/green/2_final/training-labels/readme.md")
 
 
+class TestSetMember(unittest.TestCase):
+    def test_rewrites_key_and_member_together(self):
+        plan = {"path": Path("x.csv"), "member": "x.csv",
+                "key": "rs2/csac/green/2_final/sentinel2-imagery/x.csv",
+                "entry_overrides": {}}
+        deposit.set_member(plan, dict(_META), "2024/x.csv")
+        self.assertEqual(plan["member"], "2024/x.csv")
+        self.assertEqual(
+            plan["key"],
+            "rs2/csac/green/2_final/sentinel2-imagery/2024/x.csv")
+
+    def test_invariant_key_equals_prefix_plus_member(self):
+        # The completion check reconstructs every key as
+        # prefix + "/" + entry["path"] - this must hold for every plan.
+        meta = dict(_META)
+        prefix = deposit.keys.dataset_prefix(
+            meta["strand"], meta["project"], meta["sensitivity"],
+            meta["state"], meta["dataset"])
+        plans = deposit.plan_deposits(
+            [_source("a.csv"), _source("2024/x.csv", "2024/x.csv")],
+            meta, {})
+        for plan in plans:
+            self.assertEqual(plan["key"], prefix + "/" + plan["member"])
+
+
 class TestPrepareEntries(unittest.TestCase):
     def test_checksums_and_formats(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.csv"
             p.write_text("1,2,3")
-            plans = deposit.plan_deposits([p], dict(_META), {})
+            plans = deposit.plan_deposits([_source(str(p), "x.csv")],
+                                          dict(_META), {})
             entries = deposit.prepare_entries(plans)
         self.assertEqual(entries[0]["path"], "x.csv")
         self.assertEqual(entries[0]["bytes"], 5)
         self.assertEqual(len(entries[0]["checksum_sha256"]), 64)
         self.assertEqual(entries[0]["format"], "text/csv")
 
+    def test_nested_member_becomes_manifest_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "a.tif"
+            p.write_text("x")
+            plans = deposit.plan_deposits(
+                [_source(str(p), "2024/tiles/a.tif")], dict(_META), {})
+            entries = deposit.prepare_entries(plans)
+        self.assertEqual(entries[0]["path"], "2024/tiles/a.tif")
+
     def test_entry_uses_renamed_object_name(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "bad name.csv"
             p.write_text("x")
-            plan = {"path": p,
+            plan = {"path": p, "member": "bad-name.csv",
                     "key": "rs2/csac/green/2_final/sentinel2-imagery/bad-name.csv",
                     "entry_overrides": {"coverage_start": "1990"}}
             entries = deposit.prepare_entries([plan])
@@ -115,9 +277,34 @@ class TestClassifyMembers(unittest.TestCase):
         self.assertEqual(unchanged, ["a.csv"])
 
 
+class TestDuplicateContentWarnings(unittest.TestCase):
+    def test_warns_when_checksum_matches_a_different_existing_path(self):
+        # r7 §1: a file re-deposited from inside a folder gets a NEW
+        # manifest path, so it is added rather than updated - warn
+        # before the point of no return rather than silently doubling.
+        existing = {"files": [{"path": "readme.md",
+                               "checksum_sha256": "ab" * 32, "bytes": 1}]}
+        entries = [{"path": "2024/readme.md",
+                   "checksum_sha256": "ab" * 32, "bytes": 1}]
+        warnings = deposit.duplicate_content_warnings(entries, existing)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("2024/readme.md", warnings[0])
+        self.assertIn("readme.md", warnings[0])
+
+    def test_no_warning_for_the_same_path(self):
+        existing = {"files": [{"path": "a.csv",
+                               "checksum_sha256": "ab" * 32, "bytes": 1}]}
+        entries = [{"path": "a.csv", "checksum_sha256": "ab" * 32, "bytes": 1}]
+        self.assertEqual(deposit.duplicate_content_warnings(entries, existing), [])
+
+    def test_no_existing_record_no_warnings(self):
+        entries = [{"path": "a.csv", "checksum_sha256": "ab" * 32, "bytes": 1}]
+        self.assertEqual(deposit.duplicate_content_warnings(entries, None), [])
+
+
 class TestPreview(unittest.TestCase):
     def _plans(self, n):
-        return [{"path": Path("f%d.csv" % i),
+        return [{"path": Path("f%d.csv" % i), "member": "f%d.csv" % i,
                  "key": "rs2/csac/green/2_final/sentinel2-imagery/f%d.csv" % i,
                  "entry_overrides": {}} for i in range(n)]
 
@@ -162,6 +349,53 @@ class TestPreview(unittest.TestCase):
         self.assertIn("unchanged - upload will be skipped", text)
 
 
+class TestConfirmFilenames(unittest.TestCase):
+    def test_clean_member_not_prompted(self):
+        src = deposit.Source(Path("x"), "2024/tiles/a.tif")
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            self.assertEqual(deposit.confirm_filenames([src]), {})
+
+    def test_problem_in_nested_segment_offers_correction(self):
+        src = deposit.Source(Path("x"), "my folder/bad:name.csv")
+        with mock.patch("builtins.input", side_effect=["a"]), \
+             mock.patch("deposit.say"):
+            renames = deposit.confirm_filenames([src])
+        self.assertEqual(renames,
+                         {"my folder/bad:name.csv": "my-folder/badname.csv"})
+
+    def test_keep_as_is_records_no_rename(self):
+        src = deposit.Source(Path("x"), "bad name.csv")
+        with mock.patch("builtins.input", side_effect=["k"]), \
+             mock.patch("deposit.say"):
+            self.assertEqual(deposit.confirm_filenames([src]), {})
+
+    def test_quit_returns_none(self):
+        src = deposit.Source(Path("x"), "bad name.csv")
+        with mock.patch("builtins.input", side_effect=["q"]), \
+             mock.patch("deposit.say"):
+            self.assertIsNone(deposit.confirm_filenames([src]))
+
+
+class TestPromptPerFileOverrides(unittest.TestCase):
+    def test_single_source_never_prompts(self):
+        src = deposit.Source(Path("x"), "a.csv")
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            self.assertEqual(
+                deposit.prompt_per_file_overrides([src], dict(_META)), {})
+
+    def test_keyed_on_member_not_local_basename(self):
+        # Two sources share a local basename (x.csv) but have different
+        # member paths (r7 §1) - overrides must be keyed on the member.
+        sources = [deposit.Source(Path("a/x.csv"), "2023/x.csv"),
+                  deposit.Source(Path("b/x.csv"), "2024/x.csv")]
+        with mock.patch("builtins.input",
+                        side_effect=["n", "1990", "1991", "1989", "2025"]), \
+             mock.patch("deposit.say"):
+            overrides = deposit.prompt_per_file_overrides(sources, dict(_META))
+        self.assertIn("2023/x.csv", overrides)
+        self.assertNotIn("2024/x.csv", overrides)  # matched the shared dates
+
+
 class TestParser(unittest.TestCase):
     def test_defaults(self):
         args = deposit.build_parser().parse_args(["a.csv"])
@@ -178,7 +412,7 @@ class TestParser(unittest.TestCase):
 
 
 def _plan_for(path: Path):
-    return {"path": path,
+    return {"path": path, "member": path.name,
             "key": "rs2/csac/green/2_final/sentinel2-imagery/" + path.name,
             "entry_overrides": {}}
 
@@ -942,6 +1176,93 @@ class TestConfig(unittest.TestCase):
     def test_config_path_dirname(self):
         self.assertEqual(deposit.config_path().name, "config.json")
         self.assertEqual(deposit.config_path().parent.name, "crsw-deposit")
+
+
+class TestOfferToSaveSettings(unittest.TestCase):
+    def _run(self, flagged_remote, flagged_bucket, cfg, remote, bucket,
+            already_set_up=False, dry_run=False, answer="y"):
+        calls = []
+        with mock.patch("deposit.interactive", return_value=True), \
+             mock.patch("builtins.input", return_value=answer), \
+             mock.patch("deposit.save_config",
+                        side_effect=lambda c, path=None: calls.append(c)), \
+             mock.patch("deposit.say"):
+            deposit.offer_to_save_settings(
+                flagged_remote, flagged_bucket, cfg, remote, bucket,
+                already_set_up, dry_run)
+        return calls
+
+    def test_already_set_up_stays_silent(self):
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.offer_to_save_settings("k1", None, {}, "k1", "crsw",
+                                           True, False)
+
+    def test_no_flags_given_stays_silent(self):
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.offer_to_save_settings(
+                None, None, {"remote": "ceph", "bucket": "crsw"},
+                "ceph", "crsw", False, False)
+
+    def test_dry_run_stays_silent(self):
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.offer_to_save_settings("k1", None, {}, "k1", "crsw",
+                                           False, True)
+
+    def test_non_tty_stays_silent(self):
+        with mock.patch("deposit.interactive", return_value=False), \
+             mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.offer_to_save_settings("k1", None, {}, "k1", "crsw",
+                                           False, False)
+
+    def test_matching_saved_value_stays_silent(self):
+        with mock.patch("deposit.interactive", return_value=True), \
+             mock.patch("builtins.input", side_effect=AssertionError):
+            deposit.offer_to_save_settings(
+                "ceph", "crsw", {"remote": "ceph", "bucket": "crsw"},
+                "ceph", "crsw", False, False)
+
+    def test_differing_value_prompts_and_saves_on_yes(self):
+        calls = self._run("k1", None, {"remote": "ceph", "bucket": "crsw"},
+                          "k1", "crsw", answer="y")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["remote"], "k1")
+        self.assertEqual(calls[0]["bucket"], "crsw")
+
+    def test_differing_value_declines_on_no(self):
+        calls = self._run("k1", None, {"remote": "ceph", "bucket": "crsw"},
+                          "k1", "crsw", answer="n")
+        self.assertEqual(calls, [])
+
+
+class TestFolderDepositIntegration(unittest.TestCase):
+    """The pieces of r7 §1 exercised together, from a real folder on
+    disk through to the preview and the completion-check invariant -
+    without driving the full interactive interview in main()."""
+
+    def test_folder_argument_through_to_preview(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "survey-2024"
+            (base / "2024" / "tiles").mkdir(parents=True)
+            (base / "2024" / "tiles" / "a.tif").write_text("x")
+            (base / "readme.md").write_text("y")
+            sources, problems, notes = deposit.resolve_files([str(base)])
+            self.assertEqual(problems, [])
+            plans = deposit.plan_deposits(sources, dict(_META), {})
+            entries = deposit.prepare_entries(plans)
+            classification = deposit.classify_members(entries, None)
+            text = "\n".join(deposit.preview_lines(
+                plans, dict(_META), None, classification, limit=10))
+
+        self.assertEqual(sorted(e["path"] for e in entries),
+                         ["2024/tiles/a.tif", "readme.md"])
+        self.assertIn("2024/tiles/a.tif", text)
+        self.assertIn("readme.md", text)
+
+        prefix = deposit.keys.dataset_prefix(
+            _META["strand"], _META["project"], _META["sensitivity"],
+            _META["state"], _META["dataset"])
+        for plan, entry in zip(plans, entries):
+            self.assertEqual(plan["key"], prefix + "/" + entry["path"])
 
 
 class TestNoRemoteMessage(unittest.TestCase):
