@@ -9,7 +9,7 @@ One repository, two deposit routes into CRSW's shared object storage (Ceph, S3-c
 - `crsw_deposit/` — the conventions: key construction, dataset record, manifest, object labels, vocabulary, noise rules. **Stdlib-only, Python 3.8+.** Both routes import it; nothing convention-shaped may live anywhere else.
 - `deposit.py` + `transfer.py` — the command-line tool (rclone-based). Built and working. Researchers run it from a checkout with no install.
 - `crsw_web/` — the browser-based deposit service (FastAPI, boto3, Python 3.12) for researchers who cannot use the KCL VPN. Proof of concept in progress; see `docs/web-deposit/plan.md` for phases and checkpoints.
-- `promoter/` — moves validated deposits from `staging/` to their destination (Phase 4, not yet present).
+- `promoter/` — moves checked deposits from `staging/` to their dataset prefix. Runs on the internal VM only, with the real key, from the same image (`docker compose --profile internal run --rm promoter`, or `python -m promoter run` locally with `.env.promoter`). Never in the web container.
 
 Specs: `docs/specs/DEPOSIT_TOOL_SPEC.md` is the original brief; `_R2`…`_R7` each **supersede it where they speak** (r7 most recent). `docs/web-deposit/` holds the web service plan, proposal and Phase 0 orientation note. Read the relevant ones before changing behaviour.
 
@@ -62,7 +62,8 @@ docker compose -f deploy/compose.yaml up --build   # web service + nginx sidecar
 - **Streaming only.** Browser → service → Ceph via S3 multipart upload. Never buffer to disk or fully into memory. No volumes or tmpfs. nginx sets `proxy_request_buffering off` and `client_max_body_size` to the agreed cap.
 - **Staging-only key.** The service's Ceph credential writes only under `staging/`. It never gets a key that can touch the strand prefixes. (Local dev uses a personal key as a stand-in until eResearch provision one.)
 - **Staging keys** are `staging/<user>/<deposit-id>/<final-prefix>/<member>`, so promotion is a prefix strip and the record is byte-identical before and after.
-- **Separate promoter** inside the KCL network with the real key. Human approval by default, dry-run first, every promotion logged. Never silent.
+- **Separate promoter** inside the KCL network with the real key. Automated: every complete deposit whose checks all pass is promoted; anything amiss is reported and left in staging (decision of 18 Sept 2026, replacing the plan's "human approval by default"). `--dry-run` reviews without moving. Every action is a JSON line in the log. Checks: record parses and validates, manifest matches objects (sizes), SHA-256 re-hashed, all four labels, size limits, member paths, depositor authorised for the strand (`PROMOTER_AUTHORISED`), destination record sane. Members first, record last, verify, then delete markers in staging (control object last).
+- **Existing destination record: merge with a warning.** Same rules as a CLI re-deposit via `deposit_logic.assemble_record(meta, existing, …)`: keep `dataset_uuid` and `created`, union the manifest, append the depositor, widen coverage. Copied objects are re-labelled with the kept UUID. A destination record that cannot be parsed or whose identifier does not match its location blocks promotion.
 - **Auth is a seam.** `crsw_web.auth` is the only place identity is resolved. Placeholder mode for the PoC; OIDC (KCL SSO, group `er_prj_kdl_slavery`) later by config. The depositor field holds the KCL username so both routes agree.
 - **Ceph specifics everywhere.** Endpoint `rgw.ceph.er.kcl.ac.uk`, path-style addressing on every client.
 - **Containerised from Phase 1.** One compose file: `deposit-web` + nginx sidecar, promoter added in Phase 4. Deploy from the image, not a checkout. Docker by default; Podman if eResearch prefer.

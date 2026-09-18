@@ -26,7 +26,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["crsw_deposit", "crsw_web"]
+packages = ["crsw_deposit", "crsw_web", "promoter"]
 
 [tool.setuptools.package-data]
 crsw_deposit = ["vocab.json"]

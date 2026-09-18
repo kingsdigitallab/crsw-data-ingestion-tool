@@ -14,6 +14,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY crsw_deposit ./crsw_deposit
 COPY crsw_web ./crsw_web
+COPY promoter ./promoter
 RUN pip install --no-cache-dir ".[web]"
 
 USER app

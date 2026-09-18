@@ -43,4 +43,18 @@ services:
       && exec nginx -g 'daemon off;'"
     restart: unless-stopped
 
-  # promoter: added in Phase 4 (runs on the internal VM with the real key).
+  # The promoter runs on the INTERNAL VM only, with the real key, from the
+  # same image. Start it there with:  docker compose --profile internal run --rm promoter
+  # It must never be started on the web VM, and ../.env.promoter must not exist there.
+  promoter:
+    profiles: ["internal"]
+    image: crsw-deposit-web:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env.promoter
+    environment:
+      PROMOTER_LOG_PATH: /dev/stdout
+    command: ["python", "-m", "promoter", "run", "--env-file", "/dev/null"]
+    read_only: true
