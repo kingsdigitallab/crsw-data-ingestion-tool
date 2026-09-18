@@ -45,6 +45,8 @@ docker compose -f deploy/compose.yaml up -d --build
 curl -s localhost:8080/health
 ```
 
+`/health` is the only path nginx serves to a source outside `CRSW_TRUSTED_PROXY_CIDRS`; every other path answers 403 from the VM itself, which is the allow-list working. The same CIDR value must be in `.env` (the app's peer check) and exported in the shell (the nginx sidecar), and the export is needed again for every later `docker compose` command.
+
 First deploy only, to learn the identity header:
 
 1. In `.env` set `CRSW_DEBUG_HEADERS=1` and, temporarily, `CRSW_AUTH_MODE=placeholder`; restart.
