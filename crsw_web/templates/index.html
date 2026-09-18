@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <span class="wordmark">CRSW data deposit</span>
+    <span class="who">Depositing as <strong>{{ user.username }}</strong></span>
+  </div>
+</header>
+
+<main class="page">
+<form id="deposit-form" class="form" novalidate>
+
+  <section class="step" id="step-describe">
+    <h2><span class="n">1</span>Describe the dataset</h2>
+    <p class="lede">The same questions the command-line tool asks. Fields marked with a dot are required.</p>
+
+    <div class="grid two">
+      <fieldset class="field" data-field="strand">
+        <legend>Research strand <i class="req"></i></legend>
+        <div class="choices">
+          {% for s in strands %}<label><input type="radio" name="strand" value="{{ s }}" required> {{ s }}</label>{% endfor %}
+        </div>
+        <p class="error" hidden></p>
+      </fieldset>
+
+      <fieldset class="field" data-field="sensitivity">
+        <legend>Sensitivity <i class="req"></i></legend>
+        <div class="choices">
+          <label class="sens green"><input type="radio" name="sensitivity" value="green" required> green <small>publicly shareable</small></label>
+          <label class="sens amber"><input type="radio" name="sensitivity" value="amber" required> amber <small>internal, access controlled</small></label>
+        </div>
+        <p class="hint">Red data never enters shared storage. It belongs in the TRE; contact the domain steward.</p>
+        <p class="error" hidden></p>
+      </fieldset>
+    </div>
+
+    <div class="grid two">
+      <div class="field" data-field="project">
+        <label for="project">Project <i class="req"></i></label>
+        <input id="project" name="project" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. csac" required>
+        <p class="hint">Lowercase letters, digits and hyphens. A project can hold several datasets.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="dataset">
+        <label for="dataset">Dataset <i class="req"></i></label>
+        <input id="dataset" name="dataset" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. sentinel2-imagery" required>
+        <p class="hint">Names the collection these files belong to.</p>
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="grid two">
+      <fieldset class="field" data-field="state">
+        <legend>State of the data <i class="req"></i></legend>
+        <div class="choices stack">
+          <label><input type="radio" name="state" value="0_raw" required> 0_raw <small>as received, unmodified</small></label>
+          <label><input type="radio" name="state" value="1_interim" required> 1_interim <small>cleaned or in progress</small></label>
+          <label><input type="radio" name="state" value="2_final" required> 2_final <small>released, citable</small></label>
+        </div>
+        <p class="error" hidden></p>
+      </fieldset>
+
+      <div class="field" data-field="domain">
+        <label for="domain">Domain <i class="req"></i></label>
+        <select id="domain" name="domain" required>
+          <option value="">Choose a domain</option>
+          {% for d in domains %}<option value="{{ d.code }}" data-steward="{{ d.steward }}">{{ d.code }} — {{ d.label }}</option>{% endfor %}
+        </select>
+        <p class="hint" id="steward-hint">The steward is set by the domain.</p>
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="grid three">
+      <div class="field" data-field="version">
+        <label for="version">Version</label>
+        <input id="version" name="version" type="text" value="1-0" placeholder="1-0">
+        <p class="hint">Two integers, like 3-0.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="coverage_start">
+        <label for="coverage_start">Coverage start <i class="req"></i></label>
+        <input id="coverage_start" name="coverage_start" type="text" placeholder="1989 or 2025-12-31" required>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="coverage_end">
+        <label for="coverage_end">Coverage end <i class="req"></i></label>
+        <input id="coverage_end" name="coverage_end" type="text" placeholder="1989 or 2025-12-31" required>
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <fieldset class="field" data-field="subject">
+      <legend>Subjects <i class="req"></i> <span class="legend-note">choose one or more (vocabulary {{ vocabulary_version }})</span></legend>
+      <div class="facets">
+        {% for facet, terms in facets.items() %}
+        <div class="facet">
+          <h3>{{ facet }}</h3>
+          {% for t in terms %}<label><input type="checkbox" name="subject" value="{{ t }}"> {{ t }}</label>{% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+      <p class="error" hidden></p>
+    </fieldset>
+
+    <div class="field" data-field="abstract">
+      <label for="abstract">Abstract <i class="req"></i></label>
+      <textarea id="abstract" name="abstract" rows="6" required></textarea>
+      <p class="hint"><span id="wordcount">0 words</span>. Aim for at least 50: enough for someone deciding whether this dataset is worth requesting.</p>
+      <p class="error" hidden></p>
+    </div>
+
+    <div class="grid two">
+      <div class="field" data-field="license">
+        <label for="license">Licence</label>
+        <input id="license" name="license" type="text" placeholder="CC-BY-4.0">
+        <p class="hint">Left blank: CC-BY-4.0 for green, internal-only for amber.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="creator">
+        <label for="creator">Creator</label>
+        <input id="creator" name="creator" type="text" placeholder="Person or team intellectually responsible">
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="field" data-field="source_type">
+        <label for="source_type">Source type</label>
+        <select id="source_type" name="source_type">
+          <option value="">Not stated</option>
+          {% for code, help in source_types %}<option value="{{ code }}">{{ code }} — {{ help }}</option>{% endfor %}
+        </select>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="source_detail">
+        <label for="source_detail">Source detail</label>
+        <input id="source_detail" name="source_detail" type="text" placeholder="Archive name, URL, or collection reference">
+        <p class="error" hidden></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="step-files">
+    <h2><span class="n">2</span>Choose the files</h2>
+    <p class="lede">Pick files, or a whole folder to keep its structure. Filenames are kept exactly as they are.</p>
+    <div class="pickers">
+      <label class="picker"><input type="file" id="pick-files" multiple> Choose files</label>
+      <label class="picker"><input type="file" id="pick-folder" webkitdirectory multiple> Choose a folder</label>
+      <button type="button" class="link" id="clear-files" hidden>Clear the list</button>
+    </div>
+    <p class="hint" id="picker-note" hidden></p>
+    <table class="files" id="files" hidden>
+      <thead><tr><th>Path in the dataset</th><th class="num">Size</th><th>Progress</th></tr></thead>
+      <tbody></tbody>
+      <tfoot><tr><td id="files-summary"></td><td class="num" id="files-total"></td><td></td></tr></tfoot>
+    </table>
+    <p class="empty" id="files-empty">No files chosen yet.</p>
+  </section>
+
+  <section class="step" id="step-deposit">
+    <h2><span class="n">3</span>Deposit</h2>
+    <p class="lede">Files upload one at a time, then the dataset record is written last. Until it is written, the deposit is incomplete by design.</p>
+    <div class="actions">
+      <button type="submit" class="primary" id="submit">Deposit files</button>
+      <span class="status" id="status" aria-live="polite"></span>
+    </div>
+    <ul class="warnings" id="warnings" hidden></ul>
+    <div class="result" id="result" hidden></div>
+  </section>
+
+</form>
+
+<aside class="slip" aria-label="Where the files will land">
+  <h2>Deposit slip</h2>
+  <dl>
+    <dt>Storage path</dt>
+    <dd><code class="path" id="path-preview"><span class="ph">strand</span>/<span class="ph">project</span>/<span class="ph">sensitivity</span>/<span class="ph">state</span>/<span class="ph">dataset</span>/</code></dd>
+    <dt>Record</dt>
+    <dd><code id="record-preview">dataset.<span class="ph">dataset</span>.json</code></dd>
+    <dt>Files</dt>
+    <dd id="slip-files">none yet</dd>
+    <dt>Steward</dt>
+    <dd id="slip-steward">set by the domain</dd>
+    <dt>Depositor</dt>
+    <dd>{{ user.username }}</dd>
+  </dl>
+  <p class="slip-note">Deposits land in a holding area first. A checking step inside KCL moves them to this path after review.</p>
+</aside>
+</main>
+
+<script id="rules" type="application/json">{{ rules | tojson }}</script>
+<script src="/static/deposit.js" defer></script>
+</body>
+</html>

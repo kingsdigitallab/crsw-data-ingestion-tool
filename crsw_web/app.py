@@ -6,9 +6,13 @@ call into crsw_deposit. Run with:
     uvicorn --factory crsw_web.app:create_app
 """
 import hashlib
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 import crsw_deposit
 from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
@@ -16,10 +20,33 @@ from . import s3
 from .auth import User, make_authenticator
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
-from .metadata import validate_meta
+from .metadata import SOURCE_TYPES, validate_meta
 from .upload import TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
+HERE = Path(__file__).resolve().parent
+SOURCE_TYPE_HELP = {
+    "archive": "existing collection or repository",
+    "survey": "primary data collection instrument",
+    "scrape": "automated extraction from an online source",
+    "instrument": "sensor, satellite, or other device output",
+    "partner": "supplied by a partner organisation",
+    "derived": "produced from other data already held",
+    "other": "none of the above",
+}
+
+
+def client_rules() -> Dict:
+    """The rules the browser pre-checks with. Read from crsw_deposit so
+    the page can never disagree with the server; the server still
+    enforces every one of them."""
+    return {
+        "noise_file_names": sorted(noise.NOISE_FILE_NAMES),
+        "noise_file_prefixes": list(noise.NOISE_FILE_PREFIXES),
+        "noise_dir_names": sorted(noise.NOISE_DIR_NAMES),
+        "reserved_record_pattern": keys.RESERVED_RECORD_RE.pattern,
+        "problem_chars": keys.PROBLEM_CHARS,
+    }
 
 
 def create_app(settings: Optional[Settings] = None,
@@ -39,6 +66,37 @@ def create_app(settings: Optional[Settings] = None,
                   docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.vocab = vocab_dict
+    app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+    templates = Jinja2Templates(directory=str(HERE / "templates"))
+
+    # --- Phase 3: the browser form ----------------------------------------
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request, user: User = Depends(current_user)):
+        return templates.TemplateResponse(request, "index.html", {
+            "user": user,
+            "strands": keys.STRANDS,
+            "domains": vocab.domains(vocab_dict),
+            "facets": vocab_dict.get("facets", {}),
+            "vocabulary_version": vocab_dict.get("vocabulary_version"),
+            "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
+            "rules": client_rules(),
+        })
+
+    @app.get("/deposits/{deposit_id}/summary", response_class=HTMLResponse)
+    def summary(deposit_id: str, request: Request,
+                user: User = Depends(current_user)):
+        dep = load_or_404(user, deposit_id)
+        record_text = None
+        if dep.record_key:
+            try:
+                obj = client.get_object(Bucket=settings.s3_bucket, Key=dep.record_key)
+                record_text = obj["Body"].read().decode("utf-8")
+            except Exception:
+                record_text = None
+        return templates.TemplateResponse(request, "summary.html", {
+            "user": user, "dep": dep, "record_text": record_text,
+            "staging_root": store.root(dep.user, dep.id),
+        })
 
     def storage_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=502,

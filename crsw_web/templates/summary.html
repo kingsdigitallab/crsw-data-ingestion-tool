@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deposit {{ dep.id }} · CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="/">CRSW data deposit</a>
+    <span class="who">Depositing as <strong>{{ user.username }}</strong></span>
+  </div>
+</header>
+
+<main class="page single">
+  <article class="summary">
+    <h1>{% if dep.status == "complete" %}Deposited{% else %}Deposit in progress{% endif %}</h1>
+    <dl>
+      <dt>Dataset</dt><dd><code>{{ dep.prefix }}</code></dd>
+      <dt>Deposit id</dt><dd><code>{{ dep.id }}</code></dd>
+      <dt>Status</dt><dd>{{ dep.status }}{% if dep.finalised %}, record written {{ dep.finalised }}{% endif %}</dd>
+      <dt>Holding area</dt><dd><code>{{ staging_root }}/</code></dd>
+      {% if dep.record_key %}<dt>Record</dt><dd><code>{{ dep.record_key }}</code></dd>{% endif %}
+      <dt>Files</dt>
+      <dd>
+        {% if dep.entries %}
+        <table class="files">
+          <thead><tr><th>Path</th><th class="num">Bytes</th><th>SHA-256</th></tr></thead>
+          <tbody>
+          {% for e in dep.entries %}
+          <tr><td><code>{{ e.path }}</code></td><td class="num">{{ e.bytes }}</td><td><code class="sha">{{ e.checksum_sha256[:16] }}…</code></td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}none{% endif %}
+      </dd>
+    </dl>
+    {% if record_text %}
+    <h2>Dataset record</h2>
+    <p class="lede">Written last, so its presence means the deposit is complete. This is what the checking step will read.</p>
+    <pre class="record">{{ record_text }}</pre>
+    {% endif %}
+    <p><a href="/">Make another deposit</a></p>
+  </article>
+</main>
+</body>
+</html>
