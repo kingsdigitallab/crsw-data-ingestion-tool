@@ -23,6 +23,8 @@ Prepared for eResearch, 18 September 2026. Branch `feature/web-deposit`. Everyth
 
 Trust decreases left to right at each arrow. The design rule is that each layer assumes the one in front of it may have failed.
 
+Until the internal VM is provisioned, the promoter is run by hand from an administrator's laptop on the KCL VPN, with the real key held only there; the web VM is deployed alone and deposits wait in `staging/` between runs.
+
 ## 2. What each credential can do
 
 Measured with the probes in `tests/` and by hand on 18 September (see `phase-2-transcript.md` and the Phase 3 report):

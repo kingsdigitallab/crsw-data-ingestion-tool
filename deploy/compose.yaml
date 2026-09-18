@@ -4,8 +4,17 @@
 # in flight touches disk.
 name: crsw-deposit
 
+# Container logs are the only thing on the web VM that can grow; cap them so
+# a 10 GB disk never fills (uploads never touch disk).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   deposit-web:
+    logging: *logging
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -26,6 +35,7 @@ services:
       retries: 3
 
   nginx:
+    logging: *logging
     image: nginx:1.27-alpine
     depends_on:
       - deposit-web
@@ -55,6 +65,7 @@ services:
   # same image. Start it there with:  docker compose --profile internal run --rm promoter
   # It must never be started on the web VM, and ../.env.promoter must not exist there.
   promoter:
+    logging: *logging
     profiles: ["internal"]
     image: crsw-deposit-web:local
     build:

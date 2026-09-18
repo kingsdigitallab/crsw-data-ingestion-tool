@@ -8,6 +8,9 @@ Two VMs on eResearch OpenStack. Either can be rebuilt from a bare image in under
 | Reachable from | the KCL reverse proxy only | nothing inbound |
 | Key on the host | `.env` with the **staging-only** key | `.env.promoter` with the **real** key |
 | Must never hold | `.env.promoter` | (the web service) |
+| Minimum instance | 1 vCPU, 2 GB RAM, 10 GB disk | 1 vCPU, 1 GB RAM, 10 GB disk |
+
+The web VM is small because uploads stream through it: one worker peaked at 96 MiB RSS while streaming a 1 GB file (68 MiB idle), and nothing in flight touches disk. Container logs are the only thing that grows; compose rotates them (5 × 10 MB per container).
 
 ## 0. Before either VM: the KCL reverse proxy
 
@@ -67,10 +70,22 @@ journalctl -u crsw-promoter.service -f        # one JSON line per action
 
 The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
 
+### Interim: promoter from a laptop
+
+Until the internal VM exists, the web VM can run alone. Finalised deposits wait in `staging/`; nothing expires and nothing breaks, and each user's quota is freed when their deposits are promoted. Promote from an admin laptop on the VPN, from a checkout at the same tag as the web VM, with `.env.promoter` in the repo root:
+
+```
+.venv/Scripts/python -m promoter run --dry-run      # review
+.venv/Scripts/python -m promoter run                # promote, log to promoter.log
+```
+
+`.env.promoter` still never goes on the web VM. When the internal VM arrives, install the timer there as above; the web VM is untouched.
+
 ## 4. Routine operations
 
 - **Upgrade**: `git fetch && git checkout <new tag>`, then `docker compose -f deploy/compose.yaml up -d --build` on the web VM and `--profile internal build promoter` on the internal VM. Both must run the same tag.
 - **Roll back**: check out the previous tag and rebuild; images are reproducible from the tag.
+- **Disk**: after an upgrade run `docker system prune -f` to drop the old image layers. Logs are rotated by compose; `docker system df` shows what Docker holds.
 - **Rotate a key**: edit the env file, restart the service (web) or nothing (promoter picks it up next run). Old key revoked by eResearch.
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
