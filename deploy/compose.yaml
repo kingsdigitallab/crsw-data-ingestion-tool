@@ -11,9 +11,10 @@ services:
       dockerfile: deploy/Dockerfile
     image: crsw-deposit-web:local
     env_file:
-      - ../.env
-    environment:
-      CRSW_AUTH_MODE: ${CRSW_AUTH_MODE:-placeholder}
+      - path: ../.env
+        required: true
+      - path: ../.env.local      # optional overrides (e.g. proxy mode on the VM)
+        required: false
     expose:
       - "8000"
     read_only: true    # and no tmpfs, deliberately: uploads must not touch disk
@@ -31,14 +32,21 @@ services:
     ports:
       - "${CRSW_HTTP_PORT:-8080}:80"
     environment:
-      # Consumed by nginx.conf via the image's envsubst templating.
+      # Consumed by nginx.conf via envsubst at start.
       CRSW_MAX_BODY: ${CRSW_MAX_BODY:-5g}
+      # Comma-separated networks the KCL proxy connects from. Empty = allow all (local dev).
+      CRSW_TRUSTED_PROXY_CIDRS: ${CRSW_TRUSTED_PROXY_CIDRS:-}
     volumes:
       - ./nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
-    # The stock image only templates into conf.d; we want the whole
-    # config, so render it ourselves then start nginx.
+    # Render the allow-list and the config, then start nginx.
     command: >
-      /bin/sh -c "envsubst '$$CRSW_MAX_BODY'
+      /bin/sh -c "
+      : > /etc/nginx/allow.conf;
+      if [ -n \"$$CRSW_TRUSTED_PROXY_CIDRS\" ]; then
+        for c in $$(echo \"$$CRSW_TRUSTED_PROXY_CIDRS\" | tr ',' ' '); do echo \"allow $$c;\" >> /etc/nginx/allow.conf; done;
+        echo 'deny all;' >> /etc/nginx/allow.conf;
+      fi;
+      envsubst '$$CRSW_MAX_BODY'
       < /etc/nginx/templates/nginx.conf.template > /etc/nginx/nginx.conf
       && exec nginx -g 'daemon off;'"
     restart: unless-stopped

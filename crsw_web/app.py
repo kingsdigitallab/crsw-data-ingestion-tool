@@ -6,6 +6,7 @@ call into crsw_deposit. Run with:
     uvicorn --factory crsw_web.app:create_app
 """
 import hashlib
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -21,9 +22,11 @@ from .auth import User, make_authenticator
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .metadata import SOURCE_TYPES, validate_meta
+from . import quota
 from .upload import TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
+log = logging.getLogger("crsw_web")
 HERE = Path(__file__).resolve().parent
 SOURCE_TYPE_HELP = {
     "archive": "existing collection or repository",
@@ -129,7 +132,19 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/whoami")
     def whoami(user: User = Depends(current_user)):
-        return {"username": user.username}
+        return {"username": user.username, "auth_mode": settings.auth_mode}
+
+    @app.get("/auth/headers")
+    def auth_headers(request: Request):
+        """First-deploy diagnostic: what does the KCL proxy send us? Only
+        exists while CRSW_DEBUG_HEADERS=1; read it once, set
+        CRSW_PROXY_USER_HEADER, then unset the flag."""
+        if not settings.debug_headers:
+            raise HTTPException(status_code=404, detail="Not Found")
+        hidden = {"cookie", "authorization", "proxy-authorization"}
+        return {"peer": request.client.host if request.client else None,
+                "headers": {k: v for k, v in request.headers.items()
+                            if k.lower() not in hidden}}
 
     @app.get("/connectivity")
     def connectivity(user: User = Depends(current_user)):
@@ -160,11 +175,21 @@ def create_app(settings: Optional[Settings] = None,
                                 detail={"errors": errors, "warnings": warnings})
         prefix = deposit_logic.dataset_prefix(meta)
         try:
+            use = quota.usage(store, user.username)
+            if use.open_deposits >= settings.user_max_open_deposits:
+                raise HTTPException(
+                    status_code=429,
+                    detail="you have %d deposits still open; finalise or delete "
+                           "one before starting another (limit %d)"
+                           % (use.open_deposits, settings.user_max_open_deposits))
             dep = store.create(user.username, meta, prefix,
                                deposit_logic.dataset_uuid_for(None),
                                record.utc_now_iso())
+        except HTTPException:
+            raise
         except Exception as exc:
             raise storage_error(exc)
+        log.info("deposit created user=%s deposit=%s prefix=%s", user.username, dep.id, prefix)
         return {"id": dep.id, "prefix": prefix,
                 "staging_prefix": store.root(dep.user, dep.id) + "/" + prefix,
                 "dataset_uuid": dep.dataset_uuid, "warnings": warnings}
@@ -202,16 +227,34 @@ def create_app(settings: Optional[Settings] = None,
             raise HTTPException(status_code=422, detail=str(e))
 
         declared = request.headers.get("content-length")
-        if declared and int(declared) > settings.max_body_bytes:
+        declared_n = int(declared) if declared and declared.isdigit() else None
+        if declared_n is not None and declared_n > settings.max_body_bytes:
             raise HTTPException(status_code=413,
                                 detail="body exceeds the %d-byte limit"
                                 % settings.max_body_bytes)
+        if dep.entry_for(member) is None and len(dep.entries) >= settings.max_members_per_deposit:
+            raise HTTPException(status_code=413,
+                                detail="a deposit may hold at most %d files"
+                                % settings.max_members_per_deposit)
+
+        # Per-user staging quota: what is there now plus this body.
+        limit = settings.max_body_bytes
+        if settings.user_quota_bytes is not None:
+            try:
+                use = quota.usage(store, dep.user)
+            except Exception as exc:
+                raise storage_error(exc)
+            remaining = quota.remaining_bytes(settings, use)
+            if declared_n is not None and declared_n > remaining:
+                raise HTTPException(status_code=413,
+                                    detail=quota.quota_message(settings, use, declared_n))
+            limit = min(limit, remaining)
 
         staged = store.staged_key(dep.user, dep.id, final_key)
         try:
             size, checksum = await stream_to_s3(
                 client, settings.s3_bucket, staged, request.stream(),
-                lambda c: labels_for(dep, c), max_bytes=settings.max_body_bytes)
+                lambda c: labels_for(dep, c), max_bytes=limit)
         except TooLarge as e:
             raise HTTPException(status_code=413, detail=str(e))
         except Exception as exc:
@@ -234,6 +277,8 @@ def create_app(settings: Optional[Settings] = None,
             store.save(dep)
         except Exception as exc:
             raise storage_error(exc)
+        log.info("file stored user=%s deposit=%s member=%s bytes=%d",
+                 dep.user, dep.id, member, size)
         return {"member": member, "key": final_key, "staged_key": staged,
                 "bytes": size, "checksum_sha256": checksum,
                 "format": entry.get("format")}
@@ -252,6 +297,7 @@ def create_app(settings: Optional[Settings] = None,
             store.save(dep)
         except Exception as exc:
             raise storage_error(exc)
+        log.info("file removed user=%s deposit=%s member=%s", dep.user, dep.id, member)
         return Response(status_code=204)
 
     @app.post("/deposits/{deposit_id}/finalise")
@@ -300,6 +346,8 @@ def create_app(settings: Optional[Settings] = None,
             store.save(dep)
         except Exception as exc:
             raise storage_error(exc)
+        log.info("deposit finalised user=%s deposit=%s files=%d record=%s",
+                 dep.user, dep.id, len(union), record_key)
         return {"id": dep.id, "record_key": record_key,
                 "dataset_uuid": dep.dataset_uuid,
                 "files": len(union), "warnings": warnings,

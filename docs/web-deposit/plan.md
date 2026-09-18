@@ -70,8 +70,8 @@ Standalone script for the internal VM. Lists complete deposits in staging, runs 
 *Checkpoint: dry-run output reviewed; one deposit promoted by hand.*
 
 **Phase 5 — auth seam and hardening**
-Replace placeholder login with an OIDC integration point (config only; real SSO registration needs eResearch). Per-user upload quota, rate limiting, nginx size caps, no other services on the VM. Add the promoter as a second service in the compose file for the internal VM.
-*Checkpoint: security review with eResearch.*
+~~Replace placeholder login with an OIDC integration point~~ *Revised 18 Sept 2026: the KCL reverse proxy already provides sign-in, allowed groups, KCL-network restriction, WAF and TLS, so the app gets a `proxy` auth mode that trusts the proxy's identity header only from the proxy's address ranges. No in-app OIDC.* Per-user upload quota, rate limiting, nginx size caps, no other services on the VM. Add the promoter as a second service in the compose file for the internal VM.
+*Checkpoint: security review with eResearch — see `security-review.md` and `runbook.md`.*
 
 **Phase 6 — documentation**
 Update repo `docs/`: decision record for the web deposit approach, deployment notes for both VMs, researcher-facing how-to. Note what was deferred (presigned URLs, large-file handling beyond streaming).

@@ -1,13 +1,24 @@
-"""Identity: the one seam between the service and KCL SSO.
+"""Identity: the one seam between the service and KCL sign-in.
 
-Request handlers depend on `User` and nothing else. Swapping the
-placeholder for OIDC (KCL SSO, group er_prj_kdl_slavery) changes this
-module and the config, not the handlers. The same seam is where a
-later egress feature adds per-prefix authorisation."""
+Sign-in itself is not this service's job. The KCL reverse proxy in
+front of the VM requires authentication, restricts to allowed groups,
+can restrict to the KCL network, and terminates TLS. What reaches us
+is a plain HTTP request carrying the signed-in user in a header. This
+module turns that header into a User, and refuses to believe it from
+anywhere but the proxy. Request handlers depend on `User` and nothing
+else; the same seam is where a later egress feature adds per-prefix
+authorisation.
+
+Modes:
+  placeholder  local development; a fixed username from config
+  proxy        production; identity from the proxy's header, source
+               checked against CRSW_TRUSTED_PROXY_CIDRS"""
+import ipaddress
+import re
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, List, Mapping, Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from .config import Settings
 
@@ -16,6 +27,53 @@ from .config import Settings
 class User:
     username: str   # the KCL username, e.g. k1078591 - what the record's
                     # depositor field holds, so CLI and web deposits agree
+
+
+class NotAuthenticated(Exception):
+    pass
+
+
+class NotAuthorised(Exception):
+    pass
+
+
+def _split_groups(raw: str) -> List[str]:
+    return [g.strip() for g in re.split(r"[,; ]+", raw or "") if g.strip()]
+
+
+def user_from_headers(headers: Mapping[str, str], settings: Settings) -> User:
+    """Map the proxy's headers to a User, or raise. Pure; no request."""
+    raw = (headers.get(settings.proxy_user_header) or "").strip()
+    if not raw:
+        raise NotAuthenticated(
+            "no identity received from the proxy (header %r absent or empty)"
+            % settings.proxy_user_header)
+    username = raw
+    if settings.proxy_username_pattern:
+        m = re.match(settings.proxy_username_pattern, raw)
+        if not m or not m.group(1):
+            raise NotAuthorised("identity %r does not match the expected form" % raw)
+        username = m.group(1)
+    username = username.strip().lower()
+    if settings.proxy_groups_header and settings.proxy_required_group:
+        groups = _split_groups(headers.get(settings.proxy_groups_header) or "")
+        if settings.proxy_required_group not in groups:
+            raise NotAuthorised(
+                "%s is not a member of %s" % (username, settings.proxy_required_group))
+    return User(username=username)
+
+
+def peer_is_trusted(host: Optional[str], cidrs) -> bool:
+    """True if `host` (the immediate client as the sidecar saw it) is
+    inside one of the trusted proxy ranges. No ranges configured means
+    no check (local development)."""
+    if not cidrs:
+        return True
+    try:
+        addr = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return any(addr in net for net in cidrs)
 
 
 def make_authenticator(settings: Settings) -> Callable[[Request], User]:
@@ -29,9 +87,21 @@ def make_authenticator(settings: Settings) -> Callable[[Request], User]:
             return user
         return placeholder
 
-    if settings.auth_mode == "oidc":
-        raise NotImplementedError(
-            "CRSW_AUTH_MODE=oidc needs the SSO registration from eResearch "
-            "(plan Phase 5). Use CRSW_AUTH_MODE=placeholder for now.")
+    if settings.auth_mode == "proxy":
+        cidrs = settings.trusted_proxy_networks()
+
+        def proxy(request: Request) -> User:
+            host = request.client.host if request.client else None
+            if not peer_is_trusted(host, cidrs):
+                raise HTTPException(
+                    status_code=403,
+                    detail="requests are only accepted from the KCL proxy")
+            try:
+                return user_from_headers(request.headers, settings)
+            except NotAuthenticated as e:
+                raise HTTPException(status_code=401, detail=str(e))
+            except NotAuthorised as e:
+                raise HTTPException(status_code=403, detail=str(e))
+        return proxy
 
     raise ValueError("unknown auth mode %r" % settings.auth_mode)

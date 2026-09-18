@@ -22,4 +22,5 @@ EXPOSE 8000
 # No temp dirs, no volumes: request bodies stream through to Ceph.
 CMD ["uvicorn", "--factory", "crsw_web.app:create_app", \
      "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", \
-     "--forwarded-allow-ips", "*"]
+     "--forwarded-allow-ips", "*", "--workers", "2", \
+     "--limit-concurrency", "64", "--timeout-keep-alive", "5"]

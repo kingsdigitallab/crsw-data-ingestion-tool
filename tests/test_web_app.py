@@ -54,7 +54,7 @@ class TestSkeleton(unittest.TestCase):
 
     def test_whoami_is_placeholder_user(self):
         self.assertEqual(self.client.get("/whoami").json(),
-                         {"username": "k1078591"})
+                         {"username": "k1078591", "auth_mode": "placeholder"})
 
     def test_connectivity_empty_prefix_is_a_pass(self):
         r = self.client.get("/connectivity")
@@ -78,7 +78,17 @@ class TestSkeleton(unittest.TestCase):
         self.assertEqual(r.status_code, 502)
         self.assertIn("does not exist", r.json()["detail"])
 
-    def test_oidc_mode_fails_at_startup(self):
+    def test_unknown_auth_mode_fails_at_startup(self):
         settings = Settings(**dict(SETTINGS, auth_mode="oidc"))
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(ValueError):
             create_app(settings, s3_client=self.s3)
+
+    def test_storage_error_is_translated_never_a_trace(self):
+        from botocore.exceptions import ClientError
+        err = ClientError({"Error": {"Code": "InternalError", "Message": "boom"}},
+                          "ListObjectsV2")
+        with mock.patch.object(self.s3, "get_paginator", side_effect=err):
+            r = self.client.get("/connectivity")
+        self.assertEqual(r.status_code, 502)
+        self.assertIn("storage error InternalError", r.json()["detail"])
+        self.assertNotIn("Traceback", r.text)

@@ -3,16 +3,20 @@
 The same image serves the KCL-only phase and the pilot; only the
 environment differs (plan: "config by environment"). Secrets arrive as
 env vars or a mounted .env file, never from the image or the repo."""
+import ipaddress
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional, Tuple
 
 ENV_PREFIX = "CRSW_"
 
 REQUIRED = ("S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET",
             "STAGING_PREFIX")
-AUTH_MODES = ("placeholder", "oidc")
+# placeholder: local development. proxy: production behind the KCL
+# reverse proxy, which does sign-in and group restriction and forwards
+# the user in a header. There is deliberately no in-app OIDC.
+AUTH_MODES = ("placeholder", "proxy")
 
 
 class ConfigError(RuntimeError):
@@ -31,36 +35,90 @@ class Settings:
     auth_mode: str = "placeholder"
     dev_user: str = "k1078591"   # placeholder-mode identity
     max_body_bytes: int = 5 * 1024 ** 3
+    # proxy mode
+    proxy_user_header: str = ""            # discovered on first deploy
+    proxy_groups_header: str = ""          # optional
+    proxy_required_group: str = "er_prj_kdl_slavery"
+    proxy_username_pattern: str = ""       # optional regex, group 1 = username
+    trusted_proxy_cidrs: Tuple[str, ...] = ()
+    debug_headers: bool = False            # first-deploy diagnostic only
+    # limits
+    user_quota_bytes: Optional[int] = None
+    user_max_open_deposits: int = 5
+    max_members_per_deposit: int = 10000
+
+    def trusted_proxy_networks(self):
+        return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "Settings":
         env = os.environ if env is None else env
-        missing = [ENV_PREFIX + k for k in REQUIRED
-                   if not (env.get(ENV_PREFIX + k) or "").strip()]
+
+        def get(name, default=""):
+            return (env.get(ENV_PREFIX + name) or default).strip()
+
+        def opt_int(name, default=None):
+            raw = get(name)
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                raise ConfigError("%s%s must be an integer, got %r" % (ENV_PREFIX, name, raw))
+
+        missing = [ENV_PREFIX + k for k in REQUIRED if not get(k)]
         if missing:
             raise ConfigError(
                 "missing required environment variable(s): %s. "
                 "See .env.example." % ", ".join(missing))
-        auth_mode = env.get(ENV_PREFIX + "AUTH_MODE", "placeholder").strip()
+        auth_mode = get("AUTH_MODE", "placeholder")
         if auth_mode not in AUTH_MODES:
             raise ConfigError("%sAUTH_MODE must be one of %s, got %r"
                               % (ENV_PREFIX, "/".join(AUTH_MODES), auth_mode))
-        prefix = env[ENV_PREFIX + "STAGING_PREFIX"].strip().strip("/")
+        prefix = get("STAGING_PREFIX").strip("/")
         if not prefix.startswith("staging"):
             # Belt and braces: the key is meant to be staging-only, but
             # the config must not point elsewhere either.
             raise ConfigError("%sSTAGING_PREFIX must be under staging/, got %r"
                               % (ENV_PREFIX, prefix))
-        max_body = env.get(ENV_PREFIX + "MAX_BODY_BYTES")
+        user_header = get("PROXY_USER_HEADER")
+        if auth_mode == "proxy" and not user_header:
+            raise ConfigError("%sPROXY_USER_HEADER is required in proxy mode "
+                              "(discover it with CRSW_DEBUG_HEADERS=1 and "
+                              "GET /auth/headers)" % ENV_PREFIX)
+        cidrs = tuple(c.strip() for c in get("TRUSTED_PROXY_CIDRS").split(",") if c.strip())
+        for c in cidrs:
+            try:
+                ipaddress.ip_network(c, strict=False)
+            except ValueError:
+                raise ConfigError("%sTRUSTED_PROXY_CIDRS: %r is not a network" % (ENV_PREFIX, c))
+        pattern = get("PROXY_USERNAME_PATTERN")
+        if pattern:
+            try:
+                import re
+                if re.compile(pattern).groups < 1:
+                    raise ConfigError("%sPROXY_USERNAME_PATTERN needs one capture group"
+                                      % ENV_PREFIX)
+            except re.error as e:
+                raise ConfigError("%sPROXY_USERNAME_PATTERN: %s" % (ENV_PREFIX, e))
         return cls(
-            s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
-            s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
-            s3_secret_key=env[ENV_PREFIX + "S3_SECRET_KEY"].strip(),
-            s3_bucket=env[ENV_PREFIX + "S3_BUCKET"].strip(),
+            s3_endpoint=get("S3_ENDPOINT"),
+            s3_access_key=get("S3_ACCESS_KEY"),
+            s3_secret_key=get("S3_SECRET_KEY"),
+            s3_bucket=get("S3_BUCKET"),
             staging_prefix=prefix,
             auth_mode=auth_mode,
-            dev_user=env.get(ENV_PREFIX + "DEV_USER", "k1078591").strip(),
-            max_body_bytes=int(max_body) if max_body else cls.max_body_bytes,
+            dev_user=get("DEV_USER", "k1078591"),
+            max_body_bytes=opt_int("MAX_BODY_BYTES", cls.max_body_bytes),
+            proxy_user_header=user_header,
+            proxy_groups_header=get("PROXY_GROUPS_HEADER"),
+            proxy_required_group=get("PROXY_REQUIRED_GROUP", cls.proxy_required_group),
+            proxy_username_pattern=pattern,
+            trusted_proxy_cidrs=cidrs,
+            debug_headers=get("DEBUG_HEADERS") == "1",
+            user_quota_bytes=opt_int("USER_QUOTA_BYTES"),
+            user_max_open_deposits=opt_int("USER_MAX_OPEN_DEPOSITS", cls.user_max_open_deposits),
+            max_members_per_deposit=opt_int("MAX_MEMBERS_PER_DEPOSIT", cls.max_members_per_deposit),
         )
 
 
