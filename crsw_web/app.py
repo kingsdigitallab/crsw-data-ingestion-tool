@@ -1,37 +1,72 @@
 """FastAPI application factory.
 
-Phase 1 skeleton: health, identity, and a connectivity check that
-lists the staging prefix with the service key. Deposit endpoints
-arrive in Phase 2. Run with:
+Routes are thin: every rule about keys, records, labels and noise is a
+call into crsw_deposit. Run with:
 
     uvicorn --factory crsw_web.app:create_app
 """
-from typing import Optional
+import hashlib
+from typing import Dict, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 
 import crsw_deposit
+from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
 from . import s3
 from .auth import User, make_authenticator
 from .config import Settings
+from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
+from .metadata import validate_meta
+from .upload import TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
 
 
 def create_app(settings: Optional[Settings] = None,
-               s3_client=None) -> FastAPI:
+               s3_client=None, vocab_dict: Optional[Dict] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
+    if vocab_dict is None:
+        # fetch -> cache -> bundled. The cache write is best-effort, so a
+        # read-only container root just means the bundled copy is used.
+        vocab_dict, _source = vocab.load_vocabulary()
+    store = DepositStore(client, settings.s3_bucket, settings.staging_prefix)
+    vocab_terms = vocab.all_terms(vocab_dict)
+    domain_codes = vocab.domain_codes(vocab_dict)
 
     app = FastAPI(title="CRSW web deposit", version=crsw_deposit.__version__,
                   docs_url=None, redoc_url=None)
     app.state.settings = settings
+    app.state.vocab = vocab_dict
 
+    def storage_error(exc: Exception) -> HTTPException:
+        return HTTPException(status_code=502,
+                             detail=s3.translate_error(exc, settings))
+
+    def load_or_404(user: User, deposit_id: str) -> Deposit:
+        try:
+            dep = store.load(user.username, deposit_id)
+        except Exception as exc:
+            raise storage_error(exc)
+        if dep is None:
+            raise HTTPException(status_code=404, detail="no such deposit")
+        return dep
+
+    def must_be_open(dep: Deposit) -> None:
+        if dep.status != STATUS_OPEN:
+            raise HTTPException(status_code=409,
+                                detail="deposit %s is already %s"
+                                % (dep.id, dep.status))
+
+    def labels_for(dep: Deposit, checksum: str) -> Dict[str, str]:
+        return labels_mod.object_labels(dep.dataset_uuid, checksum,
+                                        dep.meta["sensitivity"], dep.user)
+
+    # --- Phase 1 ----------------------------------------------------------
     @app.get("/health")
     def health():
-        return {"status": "ok",
-                "version": crsw_deposit.__version__,
+        return {"status": "ok", "version": crsw_deposit.__version__,
                 "auth_mode": settings.auth_mode}
 
     @app.get("/whoami")
@@ -40,22 +75,176 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/connectivity")
     def connectivity(user: User = Depends(current_user)):
-        """Prove the service key can list the staging prefix. An empty
-        prefix is a pass; a rejected key or unreachable endpoint is
-        reported in words, not S3 error codes."""
         try:
-            keys = s3.list_prefix(client, settings.s3_bucket,
-                                  settings.staging_prefix,
-                                  limit=CONNECTIVITY_SAMPLE)
-        except Exception as exc:  # translated below; never a bare 500
+            sample = s3.list_prefix(client, settings.s3_bucket,
+                                    settings.staging_prefix,
+                                    limit=CONNECTIVITY_SAMPLE)
+        except Exception as exc:
+            raise storage_error(exc)
+        return {"endpoint": settings.s3_endpoint, "bucket": settings.s3_bucket,
+                "prefix": settings.staging_prefix + "/", "sample": sample,
+                "sample_limit": CONNECTIVITY_SAMPLE, "checked_by": user.username}
+
+    @app.get("/vocabulary")
+    def vocabulary():
+        return {"vocabulary_version": vocab_dict.get("vocabulary_version"),
+                "facets": vocab_dict.get("facets", {}),
+                "domains": vocab.domains(vocab_dict),
+                "strands": list(keys.STRANDS), "states": list(keys.STATES),
+                "sensitivities": list(keys.SENSITIVITIES)}
+
+    # --- Phase 2: the deposit API -----------------------------------------
+    @app.post("/deposits", status_code=201)
+    def create_deposit(form: Dict, user: User = Depends(current_user)):
+        meta, errors, warnings = validate_meta(form, vocab_dict)
+        if errors:
+            raise HTTPException(status_code=422,
+                                detail={"errors": errors, "warnings": warnings})
+        prefix = deposit_logic.dataset_prefix(meta)
+        try:
+            dep = store.create(user.username, meta, prefix,
+                               deposit_logic.dataset_uuid_for(None),
+                               record.utc_now_iso())
+        except Exception as exc:
+            raise storage_error(exc)
+        return {"id": dep.id, "prefix": prefix,
+                "staging_prefix": store.root(dep.user, dep.id) + "/" + prefix,
+                "dataset_uuid": dep.dataset_uuid, "warnings": warnings}
+
+    @app.get("/deposits/{deposit_id}")
+    def get_deposit(deposit_id: str, user: User = Depends(current_user)):
+        dep = load_or_404(user, deposit_id)
+        return dep
+
+    @app.put("/deposits/{deposit_id}/files/{member:path}")
+    async def put_file(deposit_id: str, member: str, request: Request,
+                       include_noise: bool = False,
+                       user: User = Depends(current_user)):
+        dep = load_or_404(user, deposit_id)
+        must_be_open(dep)
+
+        member = keys.normalise_member_path(member.split("/"))
+        problem = keys.member_path_error(member)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
+        if keys.is_reserved_member(member):
+            raise HTTPException(
+                status_code=422,
+                detail="%r matches dataset.*.json, which is reserved for "
+                       "dataset records" % member)
+        if noise.is_noise_member(member) and not include_noise:
+            raise HTTPException(
+                status_code=422,
+                detail="%r looks like OS/editor noise and is excluded by "
+                       "default; re-send with ?include_noise=1 to deposit "
+                       "it anyway" % member)
+        try:
+            (_, final_key), = deposit_logic.plan_keys(dep.meta, [member])
+        except (ValueError, keys.RedDataError) as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+        declared = request.headers.get("content-length")
+        if declared and int(declared) > settings.max_body_bytes:
+            raise HTTPException(status_code=413,
+                                detail="body exceeds the %d-byte limit"
+                                % settings.max_body_bytes)
+
+        staged = store.staged_key(dep.user, dep.id, final_key)
+        try:
+            size, checksum = await stream_to_s3(
+                client, settings.s3_bucket, staged, request.stream(),
+                lambda c: labels_for(dep, c), max_bytes=settings.max_body_bytes)
+        except TooLarge as e:
+            raise HTTPException(status_code=413, detail=str(e))
+        except Exception as exc:
+            raise storage_error(exc)
+
+        # Size, never checksum-vs-ETag (r2 §0).
+        stored = store.stored_size(staged)
+        if stored != size:
+            store.delete(staged)
             raise HTTPException(
                 status_code=502,
-                detail=s3.translate_error(exc, settings))
-        return {"endpoint": settings.s3_endpoint,
-                "bucket": settings.s3_bucket,
-                "prefix": settings.staging_prefix + "/",
-                "sample": keys,
-                "sample_limit": CONNECTIVITY_SAMPLE,
-                "checked_by": user.username}
+                detail="the upload appeared to finish but the stored object "
+                       "is missing or the wrong size (expected %d, stored %s). "
+                       "Re-send the file." % (size, stored))
+
+        entry = record.manifest_entry(member, checksum, size,
+                                      fmt=record.guess_format(member))
+        dep.put_entry(entry)
+        try:
+            store.save(dep)
+        except Exception as exc:
+            raise storage_error(exc)
+        return {"member": member, "key": final_key, "staged_key": staged,
+                "bytes": size, "checksum_sha256": checksum,
+                "format": entry.get("format")}
+
+    @app.delete("/deposits/{deposit_id}/files/{member:path}", status_code=204)
+    def delete_file(deposit_id: str, member: str,
+                    user: User = Depends(current_user)):
+        dep = load_or_404(user, deposit_id)
+        must_be_open(dep)
+        member = keys.normalise_member_path(member.split("/"))
+        if not dep.drop_entry(member):
+            raise HTTPException(status_code=404, detail="no such member")
+        (_, final_key), = deposit_logic.plan_keys(dep.meta, [member])
+        try:
+            store.delete(store.staged_key(dep.user, dep.id, final_key))
+            store.save(dep)
+        except Exception as exc:
+            raise storage_error(exc)
+        return Response(status_code=204)
+
+    @app.post("/deposits/{deposit_id}/finalise")
+    def finalise(deposit_id: str, user: User = Depends(current_user)):
+        dep = load_or_404(user, deposit_id)
+        must_be_open(dep)
+        if not dep.entries:
+            raise HTTPException(status_code=409, detail="no files deposited yet")
+
+        staged_prefix = store.staged_key(dep.user, dep.id, dep.prefix)
+        try:
+            problems = deposit_logic.completion_problems(
+                staged_prefix, dep.entries, store.stored_size)
+        except Exception as exc:
+            raise storage_error(exc)
+        if problems:
+            raise HTTPException(status_code=409, detail={"problems": problems})
+
+        rec, union, _added, _updated = deposit_logic.assemble_record(
+            dep.meta, None, dep.entries, dep.user, record.utc_now_iso(),
+            dep.dataset_uuid)
+        errors, warnings = record.validate_record(rec, vocab_terms, domain_codes)
+        if errors:
+            raise HTTPException(status_code=422,
+                                detail={"errors": errors, "warnings": warnings})
+
+        data = deposit_logic.record_bytes(rec)
+        checksum = hashlib.sha256(data).hexdigest()
+        record_key = staged_prefix + "/" + keys.record_filename(dep.meta["dataset"])
+        try:
+            client.put_object(Bucket=settings.s3_bucket, Key=record_key,
+                              Body=data, ContentType="application/json",
+                              Metadata=labels_for(dep, checksum))
+            back = client.get_object(Bucket=settings.s3_bucket, Key=record_key)
+            record.parse_record(back["Body"].read().decode("utf-8"))
+        except record.RecordParseError as e:
+            raise HTTPException(status_code=502,
+                                detail="record round-trip failed: %s" % e)
+        except Exception as exc:
+            raise storage_error(exc)
+
+        dep.status = STATUS_COMPLETE
+        dep.record_key = record_key
+        dep.finalised = rec["modified"]
+        try:
+            store.save(dep)
+        except Exception as exc:
+            raise storage_error(exc)
+        return {"id": dep.id, "record_key": record_key,
+                "dataset_uuid": dep.dataset_uuid,
+                "files": len(union), "warnings": warnings,
+                "staging_prefix": staged_prefix}
 
     return app

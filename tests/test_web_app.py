@@ -32,8 +32,10 @@ class TestSkeleton(unittest.TestCase):
             "AWS_ENDPOINT_URL_S3": "",
         })
         self.env.start()
+        self.addCleanup(self.env.stop)
         self.mock = mock_aws()
         self.mock.start()
+        self.addCleanup(self.mock.stop)
         self.s3 = boto3.client("s3", region_name="us-east-1",
                                aws_access_key_id="testing",
                                aws_secret_access_key="testing")
@@ -41,9 +43,6 @@ class TestSkeleton(unittest.TestCase):
         self.settings = Settings(**SETTINGS)
         self.client = TestClient(create_app(self.settings, s3_client=self.s3))
 
-    def tearDown(self):
-        self.mock.stop()
-        self.env.stop()
 
     def test_health(self):
         r = self.client.get("/health")
