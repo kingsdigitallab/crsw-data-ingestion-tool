@@ -104,7 +104,11 @@ Memory stays within one 8 MiB part plus overhead; nothing was written to disk (t
 
 ## Left for the reviewer to inspect
 
-The deposit above is still in staging at `staging/_test/k1078591/dd85a7172677/`. The memory-test deposits were purged.
+The deposit above is still in staging at `staging/_test/k1078591/dd85a7172677/`. The memory-test deposits were removed with plain `delete_object` calls (delete markers).
+
+## Finding: versioning and the developer key
+
+The `crsw` bucket is versioned and the personal key used as the stand-in can add delete markers but cannot delete specific object versions (`DeleteObject` with a version id returns `AccessDenied`). `rclone purge` on a remote with `versions` enabled therefore fails; the service's own DELETE route and boto3 `delete_object` succeed. Two consequences for eResearch: the staging lifecycle rule must expire noncurrent versions as well as current objects, and the promoter's "delete from staging after copy" step must be defined in terms of delete markers unless its key is allowed to delete versions.
 
 ## Known gap carried to Phase 4
 
