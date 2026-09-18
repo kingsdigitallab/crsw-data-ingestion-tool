@@ -3,9 +3,9 @@
 
 ALL user interaction lives in this file: argparse, prompting, preview,
 confirmation, progress, and translation of structured errors into
-human-readable messages. The logic modules (keys, record, vocab,
-transfer) have no interactive I/O so the future web gateway can import
-them unchanged."""
+human-readable messages. The conventions live in the crsw_deposit
+package (no interactive I/O) so the web deposit service imports the
+same code; transfer.py is the rclone layer and stays CLI-only."""
 import argparse
 import collections
 import glob as globlib
@@ -17,10 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import keys
-import record
+from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
 import transfer
-import vocab
 
 RCLONE_DOWNLOAD_URL = "https://rclone.org/downloads/"
 
@@ -349,17 +347,10 @@ Source = collections.namedtuple("Source", ("path", "member"))
 # OS/editor noise that would otherwise silently double the manifest when
 # a whole folder is walked (r7 §2) - excluded by default, never silently:
 # resolve_files always reports how many it dropped, and --include-noise
-# keeps them. "._*" is a Mac writing to exFAT/SMB: an AppleDouble
-# sidecar for every single file, invisible in Finder.
-NOISE_FILE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
-NOISE_FILE_PREFIXES = ("._",)
-NOISE_DIR_NAMES = {".git", "__pycache__", ".ipynb_checkpoints", "__MACOSX",
-                   ".Spotlight-V100", ".Trashes", ".svn", "$RECYCLE.BIN"}
-
-
-def _is_noise_file(name: str) -> bool:
-    return name in NOISE_FILE_NAMES or any(
-        name.startswith(p) for p in NOISE_FILE_PREFIXES)
+# keeps them. The rules live in crsw_deposit.noise so the web route
+# applies exactly the same set.
+NOISE_DIR_NAMES = noise.NOISE_DIR_NAMES
+_is_noise_file = noise.is_noise_file
 
 
 def _member_for(path: Path, root: Path) -> str:
@@ -556,20 +547,11 @@ def plan_deposits(sources: List[Source], meta: Dict,
     manifest overrides. per_file maps member -> coverage overrides
     (r5 Q5). Raises ValueError when two sources would land at the same
     key - that would be a silent overwrite inside one batch."""
-    plans = []
-    seen = {}
-    for src in sources:
-        key = keys.build_key(meta["strand"], meta["project"],
-                             meta["sensitivity"], meta["state"],
-                             meta["dataset"], src.member)
-        if key in seen:
-            raise ValueError(
-                "%s and %s would land at the same key (%s) - rename one "
-                "and re-run" % (seen[key], src.path, key))
-        seen[key] = src.path
-        plans.append({"path": src.path, "member": src.member, "key": key,
-                      "entry_overrides": dict(per_file.get(src.member, {}))})
-    return plans
+    planned = deposit_logic.plan_keys(meta, [s.member for s in sources],
+                                      display=[str(s.path) for s in sources])
+    return [{"path": src.path, "member": member, "key": key,
+             "entry_overrides": dict(per_file.get(member, {}))}
+            for src, (member, key) in zip(sources, planned)]
 
 
 def prepare_entries(plans: List[Dict]) -> List[Dict]:
@@ -1299,18 +1281,16 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
     (spec §7): stop on first failure and report exactly what landed.
     `entries` are the precomputed manifest entries, aligned with `plans`;
     `existing` is the parsed current record or None (first deposit)."""
-    dataset_uuid = (existing["dataset_uuid"] if existing
-                    else record.mint_uuid())
+    dataset_uuid = deposit_logic.dataset_uuid_for(existing)
     existing_files = existing.get("files") if existing else None
     skip = record.unchanged_paths(existing_files, entries)
-    base_labels = {
-        "x-amz-meta-dataset-uuid": dataset_uuid,
-        "x-amz-meta-sensitivity": meta["sensitivity"],
-        "x-amz-meta-depositor": depositor,
-    }
-    prefix = keys.dataset_prefix(meta["strand"], meta["project"],
-                                 meta["sensitivity"], meta["state"],
-                                 meta["dataset"])
+
+    def headers_for(checksum: str) -> Dict[str, str]:
+        # The four labels, in rclone's --header-upload spelling.
+        return labels_mod.as_s3_headers(labels_mod.object_labels(
+            dataset_uuid, checksum, meta["sensitivity"], depositor))
+
+    prefix = deposit_logic.dataset_prefix(meta)
 
     done = []
     skipped = []
@@ -1330,12 +1310,10 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
                     continue
                 size = plan["path"].stat().st_size
                 show = size >= PROGRESS_THRESHOLD and sys.stdout.isatty()
-                labels = dict(base_labels)
-                labels["x-amz-meta-checksum-sha256"] = entry["checksum_sha256"]
                 say("  uploading (%s)..." % human_size(size))
                 transfer.copyto(rclone, plan["path"], args.remote, args.bucket,
                                 plan["key"], show_progress=show,
-                                headers=labels)
+                                headers=headers_for(entry["checksum_sha256"]))
                 say("  verifying...")
                 _verify_stored_size(rclone, args, plan["key"], size)
                 append_log("%s\t%s\t%s\t%s" % (
@@ -1345,35 +1323,11 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
                 say(style("  done: %s" % plan["key"], "green"))
 
             # All members are in place - assemble and write the record.
-            union, added, updated = record.merge_manifest(existing_files,
-                                                          entries)
-            now = record.utc_now_iso()
-            pairs = [record.temporal_pair(e.get("temporal")) for e in union]
-            if existing:
-                # The old envelope keeps containment for legacy members
-                # whose per-file coverage was never recorded.
-                pairs.append(record.temporal_pair(existing.get("temporal")))
-            cov_start, cov_end = record.widen(
-                (meta["coverage_start"], meta["coverage_end"]), pairs)
-            rec = record.build_record(
-                dataset_uuid=dataset_uuid,
-                identifier=prefix,
-                strand=meta["strand"], domain=meta["domain"],
-                project=meta["project"], dataset=meta["dataset"],
-                state=meta["state"], sensitivity=meta["sensitivity"],
-                temporal=record.temporal_object(cov_start, cov_end),
-                version=meta["version"], abstract=meta["abstract"],
-                subject=list(meta["subject"]), files=union,
-                created=(existing or {}).get("created") or now,
-                modified=now,
-                vocabulary_version=meta.get("vocabulary_version"),
-                creator=meta.get("creator"),
-                source_type=meta.get("source_type"),
-                source_detail=meta.get("source_detail"),
-                license=meta.get("license"), steward=meta.get("steward"),
-                depositors=record.append_depositor(
-                    (existing or {}).get("depositors"), depositor),
-                derived_from=meta.get("derived_from"))
+            # Envelope widening, created/modified, depositor accumulation
+            # all live in deposit_logic so the web route does the same.
+            rec, union, added, updated = deposit_logic.assemble_record(
+                meta, existing, entries, depositor,
+                now=record.utc_now_iso(), dataset_uuid=dataset_uuid)
             errors, _ = record.validate_record(
                 rec, vocab.all_terms(vocab_dict),
                 vocab.domain_codes(vocab_dict))
@@ -1385,20 +1339,15 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
             current = record_filename
             say("\nwriting dataset record...")
             record_path = Path(tmp) / record_filename
-            # newline="\n": Path.write_text applies platform newline
-            # translation, so identical record content was previously
-            # CRLF on Windows and LF on macOS/Linux - and the record's
-            # own checksum label is computed from these exact bytes, so
-            # it differed by depositor platform for byte-identical JSON
-            # (r7 §4). Every depositor must now hash the same bytes.
-            with open(str(record_path), "w", encoding="utf-8",
-                     newline="\n") as f:
-                f.write(record.record_json(rec))
+            # Written as bytes, never text: the record's own checksum
+            # label is computed from these exact bytes, which used to
+            # differ by platform newline translation (r7 §4).
+            # deposit_logic.record_bytes is the one serialiser.
+            record_path.write_bytes(deposit_logic.record_bytes(rec))
             record_key = prefix + "/" + record_filename
-            labels = dict(base_labels)
-            labels["x-amz-meta-checksum-sha256"] = record.sha256_file(record_path)
+            record_checksum = record.sha256_file(record_path)
             transfer.copyto(rclone, record_path, args.remote, args.bucket,
-                            record_key, headers=labels)
+                            record_key, headers=headers_for(record_checksum))
             text, err = transfer.read_key(rclone, args.remote, args.bucket,
                                           record_key)
             if text is None:
@@ -1411,17 +1360,22 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
                     "verify_failed", "record round-trip: %s" % e)
             append_log("%s\t%s\t%s\t%s" % (
                 record.utc_now_iso(), record_key,
-                labels["x-amz-meta-checksum-sha256"], depositor))
+                record_checksum, depositor))
             record_written = True
 
             # Completion check (r5 Q4): every manifest entry - including
             # skipped and legacy members - exists at its key at size.
             current = "manifest verification"
             say("verifying the manifest against the store...")
-            for entry in union:
-                _verify_stored_size(rclone, args,
-                                    prefix + "/" + entry["path"],
-                                    entry["bytes"])
+
+            def stored_size(key):
+                entry = transfer.stat_key(rclone, args.remote, args.bucket, key)
+                return None if entry is None else entry.get("Size")
+
+            problems = deposit_logic.completion_problems(prefix, union,
+                                                         stored_size)
+            if problems:
+                raise transfer.TransferError("verify_failed", problems[0])
         except transfer.TransferError as e:
             failed = (current, MESSAGES.get(e.kind, MESSAGES["unknown"])
                       + _detail(args, e))

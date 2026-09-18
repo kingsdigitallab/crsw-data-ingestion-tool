@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import vocab
+from crsw_deposit import vocab
 
 GOOD = {"vocabulary_version": "2026-07-23",
         "facets": {"practices": ["forced-labour"], "contexts": ["armed-conflict"]}}

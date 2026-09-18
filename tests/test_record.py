@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import record
+from crsw_deposit import record
 
 VOCAB_TERMS = {"armed-conflict", "forced-labour", "human-trafficking"}
 

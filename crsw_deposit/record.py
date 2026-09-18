@@ -13,7 +13,7 @@ import re
 import uuid
 from typing import List, Optional, Set, Tuple
 
-import keys
+from . import keys
 
 SCHEMA_VERSION = "0.5"
 

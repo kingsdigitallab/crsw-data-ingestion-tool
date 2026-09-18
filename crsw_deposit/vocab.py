@@ -11,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
-import keys
+from . import keys
 
 # Single line to update once the vocabulary repo is created.
 VOCAB_URL = ("https://raw.githubusercontent.com/"
@@ -21,8 +21,12 @@ FETCH_TIMEOUT = 4  # seconds
 
 def bundled_vocab_path() -> Path:
     """Locate the bundled vocab.json, PyInstaller-compatible."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base / "vocab.json"
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        # A PyInstaller build must add crsw_deposit/vocab.json under the
+        # same package path: datas=[("crsw_deposit/vocab.json", "crsw_deposit")]
+        return Path(meipass) / "crsw_deposit" / "vocab.json"
+    return Path(__file__).resolve().parent / "vocab.json"
 
 
 def cache_dir() -> Path:

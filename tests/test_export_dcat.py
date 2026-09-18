@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 import export_dcat
-import record
+from crsw_deposit import record
 from tests.test_schema import worked_example, SCHEMA
 
 

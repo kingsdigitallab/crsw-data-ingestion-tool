@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 import deposit
-import keys
-import record
+from crsw_deposit import keys
+from crsw_deposit import record
 
 try:
     import jsonschema

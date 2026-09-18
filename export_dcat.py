@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-import record
+from crsw_deposit import record
 
 MAPPING_PATH = Path(__file__).resolve().parent / "crsw-dc-mapping.json"
 MAPPING = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))

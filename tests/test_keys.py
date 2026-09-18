@@ -1,6 +1,6 @@
 import unittest
 
-import keys
+from crsw_deposit import keys
 
 
 class TestBuildKey(unittest.TestCase):
