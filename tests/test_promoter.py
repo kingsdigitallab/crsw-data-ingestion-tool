@@ -165,6 +165,9 @@ class TestPromote(PromoterBase):
             Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode())
         self.assertEqual(rec["dataset_uuid"], dep.dataset_uuid)
         self.assertEqual([e["path"] for e in rec["files"]], ["one.csv", "sub/r.md"])
+        # created = when the researcher finalised, not when it was promoted.
+        self.assertEqual(rec["created"], dep.finalised)
+        self.assertGreaterEqual(rec["modified"], rec["created"])
         # Staging is empty (delete markers), including the control object.
         self.assertEqual(self.keys_under("staging/"), [])
         actions = [l["action"] for l in self.log.lines]

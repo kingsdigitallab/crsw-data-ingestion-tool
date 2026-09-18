@@ -94,9 +94,13 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
             log.write("copied", dep, source=src, destination=dst, bytes=entry["bytes"])
 
         # Record last, reconciled with whatever is already there.
+        # `created` is when the dataset first existed: the staged record's
+        # (the moment the researcher finalised), unless the destination
+        # already has one. Promotion time is `modified`.
+        staged_created = (rep.staged_record or {}).get("created") or dep.finalised
         rec, union, added, updated = deposit_logic.assemble_record(
             dep.meta, existing, dep.entries, dep.user, record.utc_now_iso(),
-            dataset_uuid)
+            dataset_uuid, created=staged_created)
         errors, _ = record.validate_record(rec, vocab_terms, domain_codes)
         if errors:
             raise PromotionError("assembled record invalid: %s" % "; ".join(errors))

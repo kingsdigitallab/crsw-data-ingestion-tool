@@ -90,6 +90,17 @@ class TestAssembleRecord(unittest.TestCase):
         self.assertEqual(added, ["c.csv"])
         self.assertEqual(updated, ["a.csv"])
 
+    def test_created_hint_used_only_for_first_deposit(self):
+        rec, _, _, _ = deposit_logic.assemble_record(
+            META, None, [entry("a.csv")], "d", LATER, UUID, created=NOW)
+        self.assertEqual((rec["created"], rec["modified"]), (NOW, LATER))
+        existing = {"dataset_uuid": UUID, "created": "2020-01-01T00:00:00Z",
+                    "temporal": {"start": "2020", "end": "2021"},
+                    "files": [entry("old.csv")]}
+        rec, _, _, _ = deposit_logic.assemble_record(
+            META, existing, [entry("a.csv")], "d", LATER, UUID, created=NOW)
+        self.assertEqual(rec["created"], "2020-01-01T00:00:00Z")
+
     def test_envelope_widens_over_member_coverage(self):
         rec, _, _, _ = deposit_logic.assemble_record(
             META, None,

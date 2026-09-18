@@ -21,6 +21,7 @@ class Report:
     problems: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     existing_record: Optional[Dict] = None
+    staged_record: Optional[Dict] = None
     total_bytes: int = 0
 
     @property
@@ -81,6 +82,7 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             staged_rec = record.parse_record(text)
         except record.RecordParseError as e:
             p.append("staged record cannot be used: %s" % e)
+    rep.staged_record = staged_rec
     if staged_rec:
         errors, _ = record.validate_record(staged_rec, vocab_terms, domain_codes)
         for e in errors:

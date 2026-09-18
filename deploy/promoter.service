@@ -1,0 +1,17 @@
+# /etc/systemd/system/crsw-promoter.service  (internal VM only)
+# One promoter run. Triggered by crsw-promoter.timer; never enabled on
+# its own. The compose file and .env.promoter live in /opt/crsw-deposit.
+[Unit]
+Description=CRSW deposit promoter (one run)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/crsw-deposit
+# flock: a slow run must never overlap the next timer tick.
+ExecStart=/usr/bin/flock -n /run/lock/crsw-promoter.lock \
+  /usr/bin/docker compose -f deploy/compose.yaml --profile internal run --rm promoter
+# Exit 1 means "something was refused", which is worth seeing in the
+# journal but is not a service failure.
+SuccessExitStatus=1

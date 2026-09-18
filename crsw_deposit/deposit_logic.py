@@ -62,7 +62,8 @@ def dataset_uuid_for(existing: Optional[Dict], mint=record.mint_uuid) -> str:
 
 def assemble_record(meta: Dict, existing: Optional[Dict],
                     entries: List[Dict], depositor: str, now: str,
-                    dataset_uuid: str) -> Tuple[Dict, List[Dict], List[str], List[str]]:
+                    dataset_uuid: str, created: Optional[str] = None
+                    ) -> Tuple[Dict, List[Dict], List[str], List[str]]:
     """The record for this deposit, plus (union, added, updated) for
     the caller's report.
 
@@ -71,7 +72,9 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
     - the coverage envelope widens over every member's own range AND the
       old envelope, so legacy members whose per-file coverage was never
       recorded stay contained
-    - `created` is preserved from the existing record; `modified` is now
+    - `created` is preserved from the existing record, else `created`
+      if the caller knows when the dataset first came into being (the
+      promoter passes the staged record's), else now; `modified` is now
     - depositors accumulate, first-seen order, no repeats
     The result is NOT validated here: callers run record.validate_record
     with their vocabulary and treat errors as fatal before writing."""
@@ -91,7 +94,7 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         temporal=record.temporal_object(cov_start, cov_end),
         version=meta["version"], abstract=meta["abstract"],
         subject=list(meta["subject"]), files=union,
-        created=(existing or {}).get("created") or now,
+        created=(existing or {}).get("created") or created or now,
         modified=now,
         vocabulary_version=meta.get("vocabulary_version"),
         creator=meta.get("creator"),
