@@ -1,0 +1,19 @@
+# Keep secrets, local state and everything the image does not need out
+# of the build context. The Dockerfile copies only what it names.
+.env
+*.env
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+.pytest_cache/
+docs/
+tests/
+scratch/
+*.png
+*.docx
+deposit.py
+transfer.py
+export_dcat.py
+rclone*
