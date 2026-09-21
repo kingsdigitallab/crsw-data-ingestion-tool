@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 import crsw_deposit
 from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
 from . import s3
-from .auth import User, make_authenticator
+from .auth import User, make_authenticator, peer_address
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .metadata import SOURCE_TYPES, validate_meta
@@ -142,7 +142,7 @@ def create_app(settings: Optional[Settings] = None,
         if not settings.debug_headers:
             raise HTTPException(status_code=404, detail="Not Found")
         hidden = {"cookie", "authorization", "proxy-authorization"}
-        return {"peer": request.client.host if request.client else None,
+        return {"peer": peer_address(request),
                 "headers": {k: v for k, v in request.headers.items()
                             if k.lower() not in hidden}}
 

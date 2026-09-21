@@ -63,6 +63,19 @@ def user_from_headers(headers: Mapping[str, str], settings: Settings) -> User:
     return User(username=username)
 
 
+PEER_HEADER = "x-sidecar-peer"
+
+
+def peer_address(request: Request) -> Optional[str]:
+    """The address that connected to the nginx sidecar. nginx always sets
+    X-Sidecar-Peer from its own $remote_addr (a client cannot supply it,
+    and the app port is reachable only from the sidecar). request.client
+    is NOT that: uvicorn --proxy-headers rewrites it from X-Forwarded-For,
+    whose leftmost entry is the browser behind the KCL proxy."""
+    return request.headers.get(PEER_HEADER) or (
+        request.client.host if request.client else None)
+
+
 def peer_is_trusted(host: Optional[str], cidrs) -> bool:
     """True if `host` (the immediate client as the sidecar saw it) is
     inside one of the trusted proxy ranges. No ranges configured means
@@ -91,8 +104,7 @@ def make_authenticator(settings: Settings) -> Callable[[Request], User]:
         cidrs = settings.trusted_proxy_networks()
 
         def proxy(request: Request) -> User:
-            host = request.client.host if request.client else None
-            if not peer_is_trusted(host, cidrs):
+            if not peer_is_trusted(peer_address(request), cidrs):
                 raise HTTPException(
                     status_code=403,
                     detail="requests are only accepted from the KCL proxy")

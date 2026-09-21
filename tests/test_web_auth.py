@@ -102,6 +102,20 @@ class TestProxyMode(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertIn("KCL proxy", r.json()["detail"])
 
+    def test_sidecar_peer_header_wins_over_forwarded_client(self):
+        # Behind the KCL proxy, uvicorn's client address is the browser
+        # (leftmost X-Forwarded-For); the sidecar's own peer decides.
+        app = self.app(trusted_proxy_cidrs=("10.202.65.116/32",))
+        c = TestClient(app, client=("10.202.65.81", 1234))       # the browser
+        self.assertEqual(c.get("/whoami", headers={
+            "X-Remote-User": "k1",
+            "X-Sidecar-Peer": "10.202.65.116"}).status_code, 200)
+        self.assertEqual(c.get("/whoami", headers={
+            "X-Remote-User": "k1",
+            "X-Sidecar-Peer": "10.202.65.81"}).status_code, 403)
+        self.assertEqual(c.get("/whoami", headers={
+            "X-Remote-User": "k1"}).status_code, 403)
+
     def test_group_refusal_is_403_with_reason(self):
         c = TestClient(self.app(proxy_groups_header="X-Remote-Groups"))
         r = c.get("/whoami", headers={"X-Remote-User": "k1", "X-Remote-Groups": "staff"})

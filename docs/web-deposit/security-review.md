@@ -44,7 +44,7 @@ Sign-in is the KCL proxy's job ("Require authentication", "Allowed groups"). The
 - reads the user from the header the proxy sets (`CRSW_PROXY_USER_HEADER`; name discovered on first deploy with the one-time `/auth/headers` diagnostic, then the flag is unset);
 - optionally normalises it with a regex so the record's `depositor` field is the KCL username, matching CLI deposits;
 - optionally re-checks group membership if the proxy forwards groups (`CRSW_PROXY_GROUPS_HEADER`), although the proxy's allowed-groups setting is the primary gate;
-- **only believes the header when the connection comes from the proxy**: nginx `allow`/`deny` on `CRSW_TRUSTED_PROXY_CIDRS`, and the app checks the peer again. A request from anywhere else is refused before the header is read (403), and a request from the proxy without the header is 401.
+- **only believes the header when the connection comes from the proxy**: nginx `allow`/`deny` on `CRSW_TRUSTED_PROXY_CIDRS`, and the app checks the peer again using `X-Sidecar-Peer`, a header the sidecar always overwrites with the address that connected to it (the app port is reachable only from the sidecar). `X-Forwarded-For` is not used for this: the KCL proxy extends it and its leftmost entry is the browser. A request from anywhere else is refused before the header is read (403), and a request from the proxy without the header is 401.
 
 Every mutating request is logged with the username and deposit id; bodies are never logged.
 
@@ -73,10 +73,11 @@ Every mutating request is logged with the username and deposit id; bodies are ne
 1. **The staging key can list the whole bucket.** Object names are metadata. Please scope the policy's `ListBucket` to the `staging/` prefix.
 2. **Lifecycle rule on `staging/`**: expire current objects after N days *and* noncurrent versions, or staging will grow forever under versioning.
 3. **Confirm the security group** admits only the proxy's three load-balancer ranges on the service port, and nothing else on the web VM.
-4. **Identity header**: the header name and whether groups are forwarded. We discover it on first deploy; a documented answer would remove the guesswork.
+4. **Identity header**: please configure the proxy to forward the authenticated username, and groups if possible, in a request header, and tell us its name. Observed on 21 September 2026 with authentication on: the proxy forwards only `x-forwarded-*`, `x-real-ip` and `via`; nothing identifies the user. Without it the service cannot record who deposited.
 5. **Promoter key**: confirm it need not delete object versions (delete markers are enough), or grant it if the lifecycle approach is not acceptable.
 6. **Docker or Podman** on eResearch OpenStack images; the compose file is engine-agnostic.
 7. **Exposure beyond KCL** for the UoN pilot is a proxy setting ("Restrict to KCL network" off); we ask for your view before it is changed.
+8. **Group check**: with allowed group `er_prj_kdl_slavery` the proxy refuses a member of that group (403 before the VM is reached); with `er_kdl_bastion_users` the same person passes. Which directory does the proxy evaluate groups against, and what is the storage project group called there?
 
 ## 6. How to verify each claim
 
