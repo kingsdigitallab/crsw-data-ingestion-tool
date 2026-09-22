@@ -73,11 +73,15 @@ Every mutating request is logged with the username and deposit id; bodies are ne
 1. **The staging key can list the whole bucket.** Object names are metadata. Please scope the policy's `ListBucket` to the `staging/` prefix.
 2. **Lifecycle rule on `staging/`**: expire current objects after N days *and* noncurrent versions, or staging will grow forever under versioning.
 3. **Confirm the security group** admits only the proxy's three load-balancer ranges on the service port, and nothing else on the web VM.
-4. **Identity header**: please configure the proxy to forward the authenticated username, and groups if possible, in a request header, and tell us its name. Observed on 21 September 2026 with authentication on: the proxy forwards only `x-forwarded-*`, `x-real-ip` and `via`; nothing identifies the user. Without it the service cannot record who deposited.
+4. **Identity header**: please forward the authenticated username, and groups if possible, to the backend. Observed on 21 September 2026 with authentication on: the VM receives only `x-forwarded-*`, `x-real-ip` and `via`; nothing identifies the user. The webfarm's Apache layer (mod_auth_mellon against Keycloak) already has it: its access log records the k-number as `REMOTE_USER`, and the SAML attributes are in `MELLON_*`. The change we are asking for is on that layer, for example:
+   ```
+   RequestHeader set X-Remote-User "%{REMOTE_USER}s"
+   ```
+   plus the group attribute under a second header if Keycloak releases one; please tell us which attribute carries groups. The service is configured with `CRSW_PROXY_USER_HEADER=X-Remote-User` on that assumption. Without it the service cannot record who deposited.
 5. **Promoter key**: confirm it need not delete object versions (delete markers are enough), or grant it if the lifecycle approach is not acceptable.
 6. **Docker or Podman** on eResearch OpenStack images; the compose file is engine-agnostic.
 7. **Exposure beyond KCL** for the UoN pilot is a proxy setting ("Restrict to KCL network" off); we ask for your view before it is changed.
-8. **Group check**: with allowed group `er_prj_kdl_slavery` the proxy refuses a member of that group (403 before the VM is reached); with `er_kdl_bastion_users` the same person passes. Which directory does the proxy evaluate groups against, and what is the storage project group called there?
+8. **Group check**: with allowed group `er_prj_kdl_slavery` the proxy refuses a member of that group (403 before the VM is reached); with `er_kdl_bastion_users` the same person passes. Which directory does the proxy evaluate groups against, and what is the storage project group called there? By 22 September the first member was admitted with no change on our side, so membership appears to propagate with a delay and to be read at sign-in; what is the sync cadence, and is a fresh SSO session required after being added?
 
 ## 6. How to verify each claim
 

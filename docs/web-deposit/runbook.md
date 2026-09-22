@@ -22,6 +22,8 @@ In the proxy's management interface, Proxy mode, target the web VM by name and t
 - Require authentication: on. Allowed groups: `er_prj_kdl_slavery`.
 - The proxy must forward the authenticated username (and groups, if it can) in a request header. As observed on 21 September 2026 it forwards none by default, and `er_prj_kdl_slavery` was refused by its group check while `er_kdl_bastion_users` passed. Both are open asks to eResearch; until they are answered, see "Interim: proxy gate without identity" in section 2.
 
+The proxy is a webfarm: front nginx (TLS, HTTP/2) → Apache with mod_auth_mellon (SAML) → Keycloak at `kc.sso.er.kcl.ac.uk`. Apache's access log already records the signed-in k-number, so forwarding it is a config change on their side (security review, ask 4). Group membership is read from the SAML assertion at sign-in and propagates with a delay: after adding someone to the group, they must sign out of KCL SSO completely and back in, and may need to wait for the next sync. A 403 from the proxy for a newly added member is usually this, not a fault.
+
 Note the proxy's load-balancer address ranges; they go into the security group and `CRSW_TRUSTED_PROXY_CIDRS`.
 
 ## 1. Host preparation (both VMs)
@@ -59,7 +61,7 @@ First deploy only, to learn the identity header:
 
 While the proxy forwards no identity header, the proxy can still gate access (authentication on, with a group its directory evaluates) but the app cannot know who signed in. For the administrator's own end-to-end test only, run the app in `CRSW_AUTH_MODE=placeholder` with `CRSW_DEV_USER=<your k-number>` so test deposits carry the right depositor. This is never acceptable for the pilot: every deposit would be attributed to that one user.
 
-Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per create, upload, removal and finalise with the username and deposit id. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second): that is the proxy's web application firewall probing the backend, not an attack.
+Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per create, upload, removal and finalise with the username and deposit id. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second): that is the proxy's web application firewall probing the backend, not an attack. In the webfarm's own logs every request appears twice, once from the front nginx and once from Apache; duplicate lines there are normal.
 
 ## 3. Internal VM
 
