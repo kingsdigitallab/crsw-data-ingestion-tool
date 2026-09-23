@@ -515,7 +515,7 @@ class TestPerformDeposits(unittest.TestCase):
                                 depositor="njakeman")
         self.assertEqual(code, 0)
         rec = store.record()
-        self.assertEqual(rec["schema_version"], "0.5")
+        self.assertEqual(rec["schema_version"], deposit.record.SCHEMA_VERSION)
         self.assertEqual(rec["identifier"],
                          "rs2/csac/green/2_final/sentinel2-imagery")
         self.assertEqual(rec["dataset"], "sentinel2-imagery")

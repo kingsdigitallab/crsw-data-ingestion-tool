@@ -198,6 +198,32 @@ class TestPromote(PromoterBase):
         head = self.s3.head_object(Bucket="crsw", Key=DEST + "/one.csv")
         self.assertEqual(head["Metadata"]["dataset-uuid"], old_uuid)
 
+    def test_05_destination_record_is_merged_and_written_as_06(self):
+        # r8 §5 (decided): nobody converts a record by hand. A 0.5
+        # destination with a string derived_from merges with a 0.6 deposit;
+        # the result is 0.6 with the reference upgraded and carried over.
+        dep = self.stage()
+        old_uuid = "11111111-1111-4111-8111-111111111111"
+        existing, _, _, _ = deposit_logic.assemble_record(
+            dep.meta, None, [record.manifest_entry("old.csv", "b" * 64, 3)],
+            "alice", "2026-01-01T00:00:00Z", old_uuid)
+        existing["schema_version"] = "0.5"
+        existing["derived_from"] = "https://github.com/jrnold/CDB90"
+        self.s3.put_object(Bucket="crsw", Key=DEST + "/dataset.promo.json",
+                           Body=deposit_logic.record_bytes(existing))
+        self.s3.put_object(Bucket="crsw", Key=DEST + "/old.csv", Body=b"old")
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(rep.problems, [])
+        self.assertTrue(any("schema 0.5" in w for w in rep.warnings), rep.warnings)
+        out = promote(dep, rep, self.store, self.log, TERMS, CODES)
+        self.assertTrue(out.promoted, out.error)
+        raw = self.s3.get_object(Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode()
+        rec = json.loads(raw)
+        self.assertEqual(rec["schema_version"], "0.6")
+        self.assertEqual(rec["derived_from"],
+                         [{"kind": "external", "url": "https://github.com/jrnold/CDB90"}])
+        self.assertEqual(rec["dataset_uuid"], old_uuid)
+
     def test_keep_staging(self):
         dep = self.stage()
         rep = check(dep, self.store, self.cfg, TERMS, CODES)

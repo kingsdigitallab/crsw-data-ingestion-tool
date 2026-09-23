@@ -73,7 +73,7 @@ class TestForm(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("Deposited", r.text)
         self.assertIn("dataset.poc-form.json", r.text)
-        self.assertIn('&#34;schema_version&#34;: &#34;0.5&#34;', r.text)  # HTML-escaped in <pre>
+        self.assertIn('&#34;schema_version&#34;: &#34;0.6&#34;', r.text)  # HTML-escaped in <pre>
 
     def test_summary_404_for_unknown(self):
         self.assertEqual(self.client.get("/deposits/nope/summary").status_code, 404)

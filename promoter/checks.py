@@ -79,9 +79,13 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
         p.append("staged record %s: %s" % (dep.record_key, err))
     else:
         try:
-            staged_rec = record.parse_record(text)
+            staged_rec, upgraded = record.parse_record_with_status(text)
         except record.RecordParseError as e:
             p.append("staged record cannot be used: %s" % e)
+        else:
+            if upgraded:
+                rep.warnings.append("staged record was schema 0.5; it will be "
+                                    "written as %s" % record.SCHEMA_VERSION)
     rep.staged_record = staged_rec
     if staged_rec:
         errors, _ = record.validate_record(staged_rec, vocab_terms, domain_codes)
@@ -149,11 +153,15 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
     text, err = _read_json_object(client, bucket, dest_record_key)
     if text is not None:
         try:
-            existing = record.parse_record(text)
+            existing, upgraded = record.parse_record_with_status(text)
         except record.RecordParseError as e:
             p.append("destination record %s cannot be built on: %s"
                      % (dest_record_key, e))
         else:
+            if upgraded:
+                rep.warnings.append("destination record was schema 0.5; the "
+                                    "merged record will be written as %s"
+                                    % record.SCHEMA_VERSION)
             if (existing.get("identifier") != dep.prefix
                     or existing.get("dataset") != dep.meta["dataset"]):
                 p.append("destination record's dataset/identifier (%r / %r) do not "

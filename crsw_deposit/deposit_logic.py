@@ -19,7 +19,8 @@ from . import record
 # strand, project, sensitivity, state, dataset, domain, version,
 # abstract, subject (list), coverage_start, coverage_end. Optional:
 # vocabulary_version, creator, source_type, source_detail, license,
-# steward, derived_from.
+# steward, derived_from (list of references), provenance (list of
+# activities).
 
 
 def plan_keys(meta: Dict, members: List[str],
@@ -76,9 +77,16 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
       if the caller knows when the dataset first came into being (the
       promoter passes the staged record's), else now; `modified` is now
     - depositors accumulate, first-seen order, no repeats
+    - provenance activities accumulate too: the existing list followed by
+      whatever this deposit supplies (r8 §3, decided); derived_from is
+      this deposit's list if it supplies one, else the existing one
     The result is NOT validated here: callers run record.validate_record
     with their vocabulary and treat errors as fatal before writing."""
-    existing_files = existing.get("files") if existing else None
+    existing = existing or {}
+    existing_files = existing.get("files") or None
+    provenance = list(existing.get("provenance") or []) + list(
+        meta.get("provenance") or [])
+    derived_from = meta.get("derived_from") or existing.get("derived_from")
     union, added, updated = record.merge_manifest(existing_files, entries)
     pairs = [record.temporal_pair(e.get("temporal")) for e in union]
     if existing:
@@ -94,7 +102,7 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         temporal=record.temporal_object(cov_start, cov_end),
         version=meta["version"], abstract=meta["abstract"],
         subject=list(meta["subject"]), files=union,
-        created=(existing or {}).get("created") or created or now,
+        created=existing.get("created") or created or now,
         modified=now,
         vocabulary_version=meta.get("vocabulary_version"),
         creator=meta.get("creator"),
@@ -102,8 +110,8 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         source_detail=meta.get("source_detail"),
         license=meta.get("license"), steward=meta.get("steward"),
         depositors=record.append_depositor(
-            (existing or {}).get("depositors"), depositor),
-        derived_from=meta.get("derived_from"))
+            existing.get("depositors"), depositor),
+        derived_from=derived_from, provenance=provenance)
     return rec, union, added, updated
 
 

@@ -1,0 +1,45 @@
+{
+  "schema_version": "0.5",
+  "dataset_uuid": "dea5c0f8-0b01-41f2-8e10-cd0ec859bf82",
+  "identifier": "rs2/cdisaw-harmonised/green/2_final/cdb90",
+  "strand": "rs2",
+  "project": "cdisaw-harmonised",
+  "dataset": "cdb90",
+  "sensitivity": "green",
+  "state": "2_final",
+  "domain": "quant",
+  "version": "1-0",
+  "abstract": "CDB90: CAA Database of Battles (1600-1973). The CAA (Center for Army Analysis) Database of Battles, version 1990, documents over 660 historical land battles fought between 1600 and 1973. Includes force strengths, casualties, battle outcomes, commanders, and tactical attributes. Reformatted by Jeffrey Arnold (2014) as open data. Downloaded from GitHub at ingest time. Harmonised copy produced by cdisaw-parquet: the (CD)ISaW ingest script for this source was run unchanged against a Parquet writer instead of PostGIS, giving 440 event rows in the wide 35-column layout (wide/) and an 18-column crws-nodes projection (crws/). Dataset-level domain: conflict.",
+  "subject": [
+    "armed-conflict",
+    "forced-labour"
+  ],
+  "temporal": {
+    "start": "1643-05-19",
+    "end": "1982-06-11"
+  },
+  "source_type": "scrape",
+  "source_detail": "Arnold, J. (2014). CDB90: CAA Database of Battles (v1990), reformatted. GitHub. https://github.com/jrnold/CDB90. Original: U.S. Army Concepts Analysis Agency (1990). | https://github.com/jrnold/CDB90",
+  "license": "ODC-BY (data); BSD-3 (code)",
+  "depositors": [
+    "neil_"
+  ],
+  "created": "2026-09-17T08:59:10Z",
+  "modified": "2026-09-17T08:59:10Z",
+  "derived_from": "https://github.com/jrnold/CDB90",
+  "notes": "TEST DEPOSIT under k1078591:crsw/cdisaw-test/ (a single prefix holding every source); the identifier records where this dataset would live under the Centre's path convention. cdisaw event domain: conflict. Source script: cdb90; rows: 440. cdisaw classification codes without a vocabulary term: chattel_slavery, civil_war, colonial_conflict, interstate_war. Projection note: Harmonised by cdisaw ingest script via the Parquet shim; source_type=rest_api",
+  "files": [
+    {
+      "path": "wide/events/cdb90.parquet",
+      "checksum_sha256": "a41ffd964e55334eed2f143d9786a005525a5ea02710d9072225c425c86e9453",
+      "bytes": 57247,
+      "notes": "35-column shim output (schema.wide_schema)"
+    },
+    {
+      "path": "crws/events/cdb90.parquet",
+      "checksum_sha256": "33f5e1c81b310b1393f5f6819f7879ec544869269cb7c1f24c66b2276fe3643b",
+      "bytes": 37226,
+      "notes": "18-column crws-nodes projection"
+    }
+  ]
+}

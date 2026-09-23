@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
 from . import keys
+from . import record
 
 # Single line to update once the vocabulary repo is created.
 VOCAB_URL = ("https://raw.githubusercontent.com/"
@@ -117,3 +118,20 @@ def domains(vocab_dict: dict) -> List[dict]:
 
 def domain_codes(vocab_dict: dict) -> List[str]:
     return [d["code"] for d in domains(vocab_dict)]
+
+
+def activities(vocab_dict: dict) -> List[dict]:
+    """Provenance activity kinds (code/label), r8 §2. Vocabulary-managed
+    so RS3 can add its own steps without a release; falls back to the
+    built-in list the same way domains do."""
+    entries = []
+    for a in vocab_dict.get("activities") or []:
+        if isinstance(a, dict) and a.get("code"):
+            entries.append({"code": a["code"], "label": a.get("label", "")})
+    if entries:
+        return entries
+    return [{"code": c, "label": ""} for c in record.ACTIVITY_KINDS]
+
+
+def activity_codes(vocab_dict: dict) -> List[str]:
+    return [a["code"] for a in activities(vocab_dict)]

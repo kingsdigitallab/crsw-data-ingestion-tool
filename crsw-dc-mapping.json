@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.5",
+  "schema_version": "0.6",
   "namespaces": {
     "dcterms": "http://purl.org/dc/terms/",
     "dcat": "http://www.w3.org/ns/dcat#",
@@ -21,7 +21,8 @@
     "spatial":     {"term": "dcterms:spatial"},
     "source_type": {"term": "dcterms:provenance", "note": "acquisition, not derivation"},
     "source_detail": {"term": "dcterms:provenance"},
-    "derived_from":  {"term": "dcterms:source", "also": "prov:wasDerivedFrom"},
+    "derived_from":  {"term": "dcterms:source", "also": "prov:wasDerivedFrom", "note": "list of references (r8); a dataset reference renders as the parent's identifier (UUID when known), an external one as its url or citation"},
+    "provenance":    {"term": "prov:wasGeneratedBy", "note": "one prov:Activity per entry: prov:used, prov:wasAssociatedWith (tool as prov:SoftwareAgent, agent as prov:Person), prov:startedAtTime, prov:endedAtTime, crsw:activityKind"},
     "strand":      {"term": "crsw:strand", "local": true},
     "project":     {"term": "crsw:project", "local": true},
     "dataset":     {"term": "crsw:dataset", "local": true},

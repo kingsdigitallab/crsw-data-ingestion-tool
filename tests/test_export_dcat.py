@@ -97,10 +97,11 @@ class TestDcatShape(unittest.TestCase):
         # dcterms:source means derivation; acquisition narrative is
         # provenance (r6 §3.2) - here both exist and must not blur.
         self.assertIn("archive", self.out["dcterms:provenance"])
-        self.assertEqual(self.out["dcterms:source"],
-                         "rs2/csac/amber/1_interim/csac-clean")
-        self.assertEqual(self.out["prov:wasDerivedFrom"],
-                         "rs2/csac/amber/1_interim/csac-clean")
+        # Step 1 of r8: the reference list passes through as data; step 2
+        # renders it per kind.
+        self.assertEqual(self.out["dcterms:source"], [
+            {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/csac-clean"}])
+        self.assertEqual(self.out["prov:wasDerivedFrom"], self.out["dcterms:source"])
 
     def test_locals_stay_in_crsw_namespace(self):
         self.assertEqual(self.out["crsw:strand"], "rs2")

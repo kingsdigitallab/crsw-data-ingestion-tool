@@ -12,10 +12,15 @@ import mimetypes
 import re
 import uuid
 from typing import List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 from . import keys
 
-SCHEMA_VERSION = "0.5"
+# Every tool writes SCHEMA_VERSION. parse_record also reads the older
+# versions in ACCEPTED_SCHEMA_VERSIONS and upgrades them on the way in
+# (r8 §5): nobody converts a record by hand.
+SCHEMA_VERSION = "0.6"
+ACCEPTED_SCHEMA_VERSIONS = ("0.5", "0.6")
 
 REQUIRED_FIELDS = (
     "schema_version", "dataset_uuid", "identifier", "strand", "domain",
@@ -26,16 +31,29 @@ RECOMMENDED_FIELDS = (
     "vocabulary_version", "creator", "source_type", "source_detail",
     "license", "steward", "depositors",
 )
-OPTIONAL_FIELDS = ("derived_from", "language", "ethics_ref", "spatial", "notes")
+OPTIONAL_FIELDS = ("derived_from", "provenance", "language", "ethics_ref",
+                   "spatial", "notes")
 
 MANIFEST_REQUIRED = ("path", "checksum_sha256", "bytes")
 MANIFEST_OPTIONAL = ("temporal", "format", "derived_from", "notes")
+
+# r8 §1: a derived_from reference is a dataset in the store or something
+# outside it. r8 §2: an activity is one transformation step; the kinds
+# are vocabulary-managed (vocab.activity_codes) with this fallback.
+REFERENCE_KINDS = ("dataset", "external")
+ACTIVITY_KINDS = ("convert", "clean", "harmonise", "aggregate", "geocode",
+                  "anonymise", "merge", "subset", "manual", "other")
+_URL_SCHEMES = ("http", "https")
 
 _VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
 _YEAR_RE = re.compile(r"^\d{4}$")
 _UUID4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_IDENTIFIER_RE = re.compile("^(%s)/[a-z0-9-]+/(%s)/(%s)/[a-z0-9-]+$" % (
+    "|".join(keys.STRANDS), "|".join(keys.SENSITIVITIES), "|".join(keys.STATES)))
+_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 ABSTRACT_MIN_WORDS = 50
 
@@ -254,6 +272,153 @@ def append_depositor(depositors: Optional[List[str]], name: str) -> List[str]:
     return out
 
 
+# --- provenance: references and activities (r8) ------------------------
+
+def reference_from_text(text: str) -> dict:
+    """The one rule that turns what a person typed into a derived_from
+    reference (r8 §1, decided). A five-part identifier is a `dataset`
+    reference; anything that parses as an http(s) URL or a doi: is
+    `external` with `url`; anything else is `external` with `citation`.
+    Used by the CLI interview, the web form and the 0.5 upgrade path."""
+    value = (text or "").strip()
+    if _IDENTIFIER_RE.match(value):
+        return {"kind": "dataset", "identifier": value}
+    parts = urlsplit(value)
+    if (parts.scheme in _URL_SCHEMES and parts.netloc) or (
+            parts.scheme == "doi" and parts.path):
+        return {"kind": "external", "url": value}
+    return {"kind": "external", "citation": value}
+
+
+def validate_reference(ref, label: str,
+                       own_identifier: Optional[str] = None) -> List[str]:
+    """Errors for one derived_from reference; `label` names it in
+    messages (e.g. 'derived_from[2]')."""
+    errors = []
+    if not isinstance(ref, dict):
+        errors.append("%s is not an object" % label)
+        return errors
+    kind = ref.get("kind")
+    if kind not in REFERENCE_KINDS:
+        errors.append("%s: kind %r is not one of %s"
+                      % (label, kind, "/".join(REFERENCE_KINDS)))
+        return errors
+    if kind == "dataset":
+        identifier = ref.get("identifier")
+        if not isinstance(identifier, str) or not _IDENTIFIER_RE.match(identifier):
+            errors.append("%s: identifier %r is not a five-part dataset "
+                          "identifier (strand/project/sensitivity/state/dataset)"
+                          % (label, identifier))
+        elif own_identifier and identifier == own_identifier:
+            errors.append("%s: a dataset cannot be derived from itself" % label)
+        ds_uuid = ref.get("dataset_uuid")
+        if ds_uuid is not None and not _UUID4_RE.match(str(ds_uuid)):
+            errors.append("%s: dataset_uuid %r is not a UUID4" % (label, ds_uuid))
+        version = ref.get("version")
+        if version is not None and normalise_version(str(version)) != version:
+            errors.append("%s: version %r is not two integers like 1-0"
+                          % (label, version))
+    else:
+        url = ref.get("url")
+        citation = ref.get("citation")
+        if not (isinstance(url, str) and url) and not (
+                isinstance(citation, str) and citation):
+            errors.append("%s: an external reference needs a url or a "
+                          "citation" % label)
+        retrieved = ref.get("retrieved")
+        if retrieved is not None:
+            err = coverage_error(str(retrieved))
+            if err or _YEAR_RE.match(str(retrieved)):
+                errors.append("%s: retrieved %r is not an ISO date"
+                              % (label, retrieved))
+    return errors
+
+
+def validate_activity(act, label: str, manifest_paths: Set[str],
+                      activity_codes: Optional[List[str]] = None
+                      ) -> Tuple[List[str], List[str]]:
+    """(errors, warnings) for one provenance activity (r8 §2). Outputs
+    and bare-path inputs must be members of this dataset; a commit that
+    is not 7-40 hex characters is a warning, nothing more."""
+    errors = []
+    warnings = []
+    if not isinstance(act, dict):
+        errors.append("%s is not an object" % label)
+        return errors, warnings
+    codes = list(activity_codes) if activity_codes else list(ACTIVITY_KINDS)
+    if act.get("activity") not in codes:
+        errors.append("%s: activity %r is not one of %s"
+                      % (label, act.get("activity"), "/".join(codes)))
+    for field in ("description", "agent"):
+        if field in act and not isinstance(act[field], str):
+            errors.append("%s: %s must be a string" % (label, field))
+    tool = act.get("tool")
+    if tool is not None:
+        if not isinstance(tool, dict) or not tool.get("name"):
+            errors.append("%s: tool must be an object with a name" % label)
+        else:
+            for field in ("name", "repo", "commit", "version", "command", "notebook"):
+                if field in tool and not isinstance(tool[field], str):
+                    errors.append("%s: tool.%s must be a string" % (label, field))
+            commit = tool.get("commit")
+            if isinstance(commit, str) and not _COMMIT_RE.match(commit):
+                warnings.append("%s: tool.commit %r does not look like a "
+                                "commit hash (7-40 hex characters)" % (label, commit))
+    inputs = act.get("inputs")
+    if inputs is not None:
+        if not isinstance(inputs, list):
+            errors.append("%s: inputs must be a list" % label)
+        else:
+            for i, item in enumerate(inputs):
+                if isinstance(item, str):
+                    if item not in manifest_paths:
+                        errors.append("%s: input %r is not a member of this "
+                                      "dataset" % (label, item))
+                else:
+                    errors.extend(validate_reference(
+                        item, "%s inputs[%d]" % (label, i + 1)))
+    outputs = act.get("outputs")
+    if outputs is not None:
+        if not isinstance(outputs, list):
+            errors.append("%s: outputs must be a list" % label)
+        else:
+            for item in outputs:
+                if not isinstance(item, str) or item not in manifest_paths:
+                    errors.append("%s: output %r is not a member of this "
+                                  "dataset" % (label, item))
+    for field in ("started", "ended"):
+        value = act.get(field)
+        if value is not None and not (isinstance(value, str)
+                                      and _TIMESTAMP_RE.match(value)):
+            errors.append("%s: %s %r is not a UTC timestamp like "
+                          "2026-09-17T08:40:00Z" % (label, field, value))
+    return errors, warnings
+
+
+def upgrade_record(rec: dict) -> Tuple[dict, bool]:
+    """Bring a record read from storage up to SCHEMA_VERSION in place.
+    Returns (record, upgraded). A current record is returned untouched,
+    which the write-then-read-back checks rely on. 0.5 -> 0.6: the
+    string derived_from becomes one reference (r8 §5); files[].derived_from
+    stays a string. Anything else raises RecordParseError."""
+    version = rec.get("schema_version")
+    if version == SCHEMA_VERSION:
+        return rec, False
+    if version not in ACCEPTED_SCHEMA_VERSIONS:
+        raise RecordParseError(
+            "schema_version %r is not one of %s; refusing to modify a record "
+            "this version of the tool does not understand"
+            % (version, "/".join(ACCEPTED_SCHEMA_VERSIONS)))
+    if version == "0.5":
+        derived = rec.get("derived_from")
+        if isinstance(derived, str):
+            rec["derived_from"] = [reference_from_text(derived)] if derived.strip() else []
+            if not rec["derived_from"]:
+                del rec["derived_from"]
+        rec["schema_version"] = "0.6"
+    return rec, True
+
+
 # --- record assembly and validation ------------------------------------
 
 def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
@@ -261,12 +426,13 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
                  subject, files, created, modified, vocabulary_version=None,
                  creator=None, source_type=None, source_detail=None,
                  license=None, steward=None, depositors=None,
-                 derived_from=None, language=None, ethics_ref=None,
-                 spatial=None, notes=None) -> dict:
-    """Assemble the v0.5 dataset record in field order.
+                 derived_from=None, provenance=None, language=None,
+                 ethics_ref=None, spatial=None, notes=None) -> dict:
+    """Assemble the dataset record in field order.
     Recommended/optional fields that are None or empty are omitted.
     `temporal` is the nested {"start", "end"} object; `subject` and
-    `license` carry the Dublin Core spellings (r6 §3.1)."""
+    `license` carry the Dublin Core spellings (r6 §3.1). `derived_from`
+    is a list of references and `provenance` a list of activities (r8)."""
     rec = {
         "schema_version": SCHEMA_VERSION,
         "dataset_uuid": dataset_uuid,
@@ -293,9 +459,9 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
     rec["created"] = created
     rec["modified"] = modified
     for name, value in (
-            ("derived_from", derived_from), ("language", language),
-            ("ethics_ref", ethics_ref), ("spatial", spatial),
-            ("notes", notes)):
+            ("derived_from", derived_from), ("provenance", provenance),
+            ("language", language), ("ethics_ref", ethics_ref),
+            ("spatial", spatial), ("notes", notes)):
         if value:
             rec[name] = value
     rec["files"] = list(files)
@@ -303,14 +469,15 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
 
 
 def validate_record(rec: dict, vocab_terms: Set[str],
-                    domain_codes: Optional[List[str]] = None
+                    domain_codes: Optional[List[str]] = None,
+                    activity_codes: Optional[List[str]] = None
                     ) -> Tuple[List[str], List[str]]:
     """Return (errors, warnings). Errors block a deposit; warnings do not.
     Hand-rolled on purpose: the shipped tool cannot use jsonschema (stdlib
     constraint) — dataset.schema.json is the contract artefact for CI and
     the gateway, this function is the runtime check (r5 §7).
-    domain_codes: valid codes from the fetched vocabulary; None falls back
-    to the built-in list (r2 §2 - domains are fetched, not hardcoded)."""
+    domain_codes / activity_codes: valid codes from the fetched vocabulary;
+    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded)."""
     errors = []
     warnings = []
     for field in REQUIRED_FIELDS:
@@ -381,6 +548,24 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         errors.append("'licence' was renamed 'license' in v0.5 (the "
                       "Dublin Core spelling)")
 
+    # r8 §1: derived_from is a list of references. A bare string is the
+    # 0.5 shape arriving unupgraded (parse_record would have converted it).
+    if "derived_from" in rec:
+        derived = rec["derived_from"]
+        if isinstance(derived, str):
+            errors.append("derived_from is a string (the 0.5 form); records "
+                          "read through parse_record are upgraded to a list "
+                          "of references")
+        elif not isinstance(derived, list):
+            errors.append("derived_from must be a list of references")
+        else:
+            for i, ref in enumerate(derived):
+                errors.extend(validate_reference(
+                    ref, "derived_from[%d]" % (i + 1), rec["identifier"]))
+    if rec.get("source_type") == "derived" and not rec.get("derived_from"):
+        warnings.append("source type is 'derived' but derived_from is empty "
+                        "- derived from what?")
+
     if not isinstance(rec["files"], list):
         errors.append("'files' must be a list of manifest entries")
         return errors, warnings
@@ -426,6 +611,17 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                         errors.append("file %s temporal %s: %s"
                                       % (name, part, err))
     errors.extend(envelope_errors(rec))
+
+    # r8 §2: provenance activities, checked against the manifest paths.
+    if "provenance" in rec:
+        if not isinstance(rec["provenance"], list):
+            errors.append("provenance must be a list of activities")
+        else:
+            for i, act in enumerate(rec["provenance"]):
+                act_errors, act_warnings = validate_activity(
+                    act, "provenance[%d]" % (i + 1), seen_paths, activity_codes)
+                errors.extend(act_errors)
+                warnings.extend(act_warnings)
     return errors, warnings
 
 
@@ -433,25 +629,28 @@ def record_json(rec: dict) -> str:
     return json.dumps(rec, indent=2, ensure_ascii=False) + "\n"
 
 
-def parse_record(text: str) -> dict:
-    """Parse an existing dataset.meta.json fetched from storage.
-    Raises RecordParseError for anything the tool must not build on:
-    invalid JSON, a non-object, a schema_version it does not understand
-    (including newer ones — never blind-overwrite the future), or a
-    missing/empty files manifest. Absence-vs-fetch-error is the transfer
-    layer's distinction, not this function's."""
+def parse_record_with_status(text: str) -> Tuple[dict, bool]:
+    """Parse an existing dataset record fetched from storage and bring it
+    up to SCHEMA_VERSION; returns (record, upgraded) so callers that log
+    can say a 0.5 record was converted. Raises RecordParseError for
+    anything the tool must not build on: invalid JSON, a non-object, a
+    schema_version it does not understand (including newer ones — never
+    blind-overwrite the future), or a missing/empty files manifest.
+    Absence-vs-fetch-error is the transfer layer's distinction, not this
+    function's."""
     try:
         rec = json.loads(text)
     except ValueError as e:
         raise RecordParseError("not valid JSON: %s" % e)
     if not isinstance(rec, dict):
         raise RecordParseError("not a JSON object")
-    if rec.get("schema_version") != SCHEMA_VERSION:
-        raise RecordParseError(
-            "schema_version %r is not %r; refusing to modify a record this "
-            "version of the tool does not understand"
-            % (rec.get("schema_version"), SCHEMA_VERSION))
+    rec, upgraded = upgrade_record(rec)
     files = rec.get("files")
     if not isinstance(files, list) or not files:
         raise RecordParseError("the files manifest is missing or empty")
-    return rec
+    return rec, upgraded
+
+
+def parse_record(text: str) -> dict:
+    """parse_record_with_status without the flag; the common call."""
+    return parse_record_with_status(text)[0]

@@ -110,5 +110,29 @@ class TestDomains(unittest.TestCase):
         self.assertEqual(codes, ["quant", "geo", "pol", "narr", "parti"])
 
 
+class TestActivities(unittest.TestCase):
+    """r8 §2: activity kinds are vocabulary-managed like domains."""
+
+    WITH = {"vocabulary_version": "x", "facets": {"practices": ["forced-labour"]},
+            "activities": [{"code": "reproject", "label": "Reproject"},
+                           "garbage", {"label": "no code"}]}
+
+    def test_well_formed_entries_returned(self):
+        self.assertEqual(vocab.activities(self.WITH),
+                         [{"code": "reproject", "label": "Reproject"}])
+        self.assertEqual(vocab.activity_codes(self.WITH), ["reproject"])
+
+    def test_missing_activities_falls_back_to_builtin(self):
+        from crsw_deposit import record
+        self.assertEqual(vocab.activity_codes(GOOD), list(record.ACTIVITY_KINDS))
+
+    def test_bundled_vocab_has_activities(self):
+        from crsw_deposit import record
+        data = json.loads(vocab.bundled_vocab_path().read_text(encoding="utf-8"))
+        codes = [a["code"] for a in data["activities"]]
+        self.assertEqual(codes, list(record.ACTIVITY_KINDS))
+        self.assertTrue(all(a["label"] for a in data["activities"]))
+
+
 if __name__ == "__main__":
     unittest.main()

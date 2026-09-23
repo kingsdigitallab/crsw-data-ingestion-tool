@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crsw-deposit"
-version = "0.5.0"
+version = "0.6.0"
 description = "CRSW deposit conventions, command-line tool and web deposit service"
 requires-python = ">=3.8"
 # crsw_deposit itself has NO runtime dependencies: the CLI runs from a

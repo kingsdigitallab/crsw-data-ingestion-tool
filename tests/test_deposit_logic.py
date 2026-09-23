@@ -101,6 +101,48 @@ class TestAssembleRecord(unittest.TestCase):
             META, existing, [entry("a.csv")], "d", LATER, UUID, created=NOW)
         self.assertEqual(rec["created"], "2020-01-01T00:00:00Z")
 
+    # r8 §3 (decided): the provenance merge rule lives here for every route.
+    REF_A = {"kind": "external", "url": "https://a.example"}
+    REF_B = {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/b"}
+    ACT_1 = {"activity": "clean", "tool": {"name": "t1"}}
+    ACT_2 = {"activity": "convert", "tool": {"name": "t2"}}
+
+    def _existing(self, **more):
+        base = {"dataset_uuid": UUID, "created": NOW,
+                "temporal": {"start": "2020", "end": "2021"},
+                "files": [entry("old.csv")]}
+        base.update(more)
+        return base
+
+    def test_activities_append_to_existing(self):
+        existing = self._existing(provenance=[self.ACT_1])
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, provenance=[self.ACT_2]), existing, [entry("a.csv")], "d", LATER, UUID)
+        self.assertEqual(rec["provenance"], [self.ACT_1, self.ACT_2])
+        # The same pipeline run twice is two activities; nothing is de-duplicated.
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, provenance=[self.ACT_1]), existing, [entry("a.csv")], "d", LATER, UUID)
+        self.assertEqual(rec["provenance"], [self.ACT_1, self.ACT_1])
+
+    def test_existing_activities_carry_over_when_none_supplied(self):
+        rec, _, _, _ = deposit_logic.assemble_record(
+            META, self._existing(provenance=[self.ACT_1]), [entry("a.csv")], "d", LATER, UUID)
+        self.assertEqual(rec["provenance"], [self.ACT_1])
+        rec, _, _, _ = deposit_logic.assemble_record(META, None, [entry("a.csv")], "d", NOW, UUID)
+        self.assertNotIn("provenance", rec)
+
+    def test_derived_from_replaced_only_when_supplied(self):
+        existing = self._existing(derived_from=[self.REF_A])
+        rec, _, _, _ = deposit_logic.assemble_record(
+            META, existing, [entry("a.csv")], "d", LATER, UUID)
+        self.assertEqual(rec["derived_from"], [self.REF_A])
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, derived_from=[self.REF_B]), existing, [entry("a.csv")], "d", LATER, UUID)
+        self.assertEqual(rec["derived_from"], [self.REF_B])
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, derived_from=[self.REF_B]), None, [entry("a.csv")], "d", NOW, UUID)
+        self.assertEqual(rec["derived_from"], [self.REF_B])
+
     def test_envelope_widens_over_member_coverage(self):
         rec, _, _, _ = deposit_logic.assemble_record(
             META, None,

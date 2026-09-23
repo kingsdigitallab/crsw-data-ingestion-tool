@@ -7,6 +7,18 @@
     {"code": "narr",  "label": "Survivor narratives & qualitative", "steward": "TBC"},
     {"code": "parti", "label": "Visual & participatory", "steward": "TBC"}
   ],
+  "activities": [
+    {"code": "convert",   "label": "Format conversion (e.g. CSV to Parquet)"},
+    {"code": "clean",     "label": "Cleaning and validation"},
+    {"code": "harmonise", "label": "Harmonising to a shared schema"},
+    {"code": "aggregate", "label": "Aggregation or summarisation"},
+    {"code": "geocode",   "label": "Geocoding or georeferencing"},
+    {"code": "anonymise", "label": "Anonymisation or pseudonymisation"},
+    {"code": "merge",     "label": "Merging or linking sources"},
+    {"code": "subset",    "label": "Subsetting or filtering"},
+    {"code": "manual",    "label": "Manual processing"},
+    {"code": "other",     "label": "Other (describe it)"}
+  ],
   "facets": {
     "practices": ["forced-labour", "sexual-slavery", "forced-marriage",
                   "child-soldiering", "debt-bondage", "domestic-servitude",

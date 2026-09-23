@@ -1,0 +1,201 @@
+{
+  "schema_version": "0.5",
+  "dataset_uuid": "d8bcc758-2c85-4511-859c-72e2ed82458b",
+  "identifier": "rs2/cdisaw-harmonised/amber/2_final/icews-conflict",
+  "strand": "rs2",
+  "project": "cdisaw-harmonised",
+  "dataset": "icews-conflict",
+  "sensitivity": "amber",
+  "state": "2_final",
+  "domain": "quant",
+  "version": "1-0",
+  "abstract": "ICEWS Coded Event Data — Conflict Quadrant (1995-2022). General-purpose, machine-coded political event data (CAMEO ontology) derived from global news coverage, 1995-2022 (discontinued 11 April 2023). Restricted to CAMEO's \"Conflict\" quadrant — verbal conflict (demand, disapprove, reject, threaten, protest, exhibit force posture, reduce relations) and material conflict (coerce, assault, fight, unconventional mass violence). This is NOT a slavery/war-curated dataset — it is included as broad supporting/contextual coverage so conflict and slavery records can be cross-referenced against the wider political-conflict landscape at the same place and time. Harmonised copy produced by cdisaw-parquet: the (CD)ISaW ingest script for this source was run unchanged against a Parquet writer instead of PostGIS, giving 5,796,392 event rows in the wide 35-column layout (wide/) and an 18-column crws-nodes projection (crws/). Dataset-level domain: context.",
+  "subject": [
+    "armed-conflict",
+    "forced-labour"
+  ],
+  "temporal": {
+    "start": "1995-01-01",
+    "end": "2022-12-31"
+  },
+  "source_type": "archive",
+  "source_detail": "Lautenschlager, J., Shellman, S., & Ward, M. (2015). ICEWS Coded Event Data. Harvard Dataverse. doi:10.7910/DVN/28075. | https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/28075",
+  "license": "Harvard Dataverse default terms (no separate licence specified)",
+  "depositors": [
+    "neil_"
+  ],
+  "created": "2026-09-17T08:59:10Z",
+  "modified": "2026-09-17T08:59:10Z",
+  "derived_from": "https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/28075",
+  "notes": "TEST DEPOSIT under k1078591:crsw/cdisaw-test/ (a single prefix holding every source); the identifier records where this dataset would live under the Centre's path convention. cdisaw event domain: context. Source script: icews; rows: 5,796,392. cdisaw classification codes without a vocabulary term: child_slavery, civil_war, insurgency. Projection note: Harmonised by cdisaw ingest script via the Parquet shim; source_type=csv_file FLAG: Harvard Dataverse default terms; no separate licence stated.",
+  "files": [
+    {
+      "path": "wide/events/icews-conflict.parquet",
+      "checksum_sha256": "97c6ef234460714a6a2178cec4c83957c9d32e24909962c7feb8cfdc5272047d",
+      "bytes": 680431931,
+      "notes": "35-column shim output (schema.wide_schema)"
+    },
+    {
+      "path": "crws/events/icews-conflict.1995.parquet",
+      "checksum_sha256": "24049c971b9504fb7e0b6634b5ea2786807fbf867295c631f77e00760cd0bd0d",
+      "bytes": 3648042,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.1996.parquet",
+      "checksum_sha256": "6e476f5511d415875a9706c42ba711616ac4347a8144cd8154268df103cc640b",
+      "bytes": 5404937,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.1997.parquet",
+      "checksum_sha256": "9b5f182ffc2871c4d517a88039e5f7f7822a2242cd5704534385eb9d956ff803",
+      "bytes": 5732089,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.1998.parquet",
+      "checksum_sha256": "338ca626f15fa4c5ca0a0b47cbb7db775033474c704f689ceb09f2af0610ce6a",
+      "bytes": 7756719,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.1999.parquet",
+      "checksum_sha256": "f373011b562ac1d1eb45f08981119ad9830d7cd765b8710106602ac0adb19290",
+      "bytes": 11092249,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2000.parquet",
+      "checksum_sha256": "1580c211d75382bfe6aeb9b1280193549217928a16ee6dae3b50e7a43ffba258",
+      "bytes": 13236857,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2001.parquet",
+      "checksum_sha256": "e1787ba1f6648ca0c97609daedf129eb598bdf8aefa192dd6d4a11a7376979c5",
+      "bytes": 16919046,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2002.parquet",
+      "checksum_sha256": "3888d143e88fa6755e9b4f75f36aa9329e81cb794dfc03e3017b79069646c6fe",
+      "bytes": 16225949,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2003.parquet",
+      "checksum_sha256": "6ddf5eb381744b05a2813bf31caa6c0d1cc0c5d7e1ee46e11d7ab2e79e06d2bf",
+      "bytes": 16657203,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2004.parquet",
+      "checksum_sha256": "714a952c2b375d4a2783c243a1dcb4596861e47fa09098165f74fa0bb2e15430",
+      "bytes": 22898221,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2005.parquet",
+      "checksum_sha256": "32b92e3e6e5f7ae952e25c406f53a335f4646797ed0096764e352206d207fb51",
+      "bytes": 24145870,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2006.parquet",
+      "checksum_sha256": "0297b41eea22f3394570a58217365c74a38a6e5118acd17f19ab39f670e50b92",
+      "bytes": 28241749,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2007.parquet",
+      "checksum_sha256": "c0c7b4cb8235207bd2e811135bb94cfe98ec8fa7d1f2ea59e995feaa9fcf980f",
+      "bytes": 24908589,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2008.parquet",
+      "checksum_sha256": "0b42b5a0fec6943925738bc6dcdfcb92cd169171d32dffbd3f56dbf57ad01840",
+      "bytes": 24743491,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2009.parquet",
+      "checksum_sha256": "37c0fd11b12507cbefd39ab43d688b976071251711dc811e1c3d7a83f469d3cd",
+      "bytes": 22621057,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2010.parquet",
+      "checksum_sha256": "735552565f47d043aff5fe4f5dd0246629781af32fc31d11ed010164ce8c5982",
+      "bytes": 20089043,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2011.parquet",
+      "checksum_sha256": "194b3c6c160d156c55eb61b8969a3ab002484ac1ea4c393519093fe9df14c20e",
+      "bytes": 20370603,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2012.parquet",
+      "checksum_sha256": "349d3ab32ba9c3e69d02adf6d0766c71175a5cfccbf9e239aecf58b93454f696",
+      "bytes": 21572958,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2013.parquet",
+      "checksum_sha256": "9b61bcfaa7029100550a51015ad1e74e684743f082571b9e1f81b6949d9353e3",
+      "bytes": 22539045,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2014.parquet",
+      "checksum_sha256": "f06e9aac1850578f899c7156a1e7b04e485dee04fb15b91681552ba2012d191f",
+      "bytes": 26579797,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2015.parquet",
+      "checksum_sha256": "b8e66fed7dfc113137160a81c1aebdb2e5cbf8ced9dc78133b490baa6eaa3508",
+      "bytes": 28166670,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2016.parquet",
+      "checksum_sha256": "09f21640f236c3b3928dc8e46d41f4e784fc4356271a13d2eba8088fd8e55b84",
+      "bytes": 24083516,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2018.parquet",
+      "checksum_sha256": "18f30a7582a46a0d6628a2f7459f0f5ac105d2fefbd5e088bc42315c45c45f31",
+      "bytes": 21587113,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2019.parquet",
+      "checksum_sha256": "ba41f80e0108dc8709c0cd40a61bba41656f7df3d99f762e9d54129775a25b1b",
+      "bytes": 22029281,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2020.parquet",
+      "checksum_sha256": "98d12867c6853e7e96eea8082fcd437e42832819a8d5d5e929e1acadc8312701",
+      "bytes": 28234842,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2021.parquet",
+      "checksum_sha256": "11179247d388b6aba2b4b302909d6c6885c758dd47957148247bd2a85269a7aa",
+      "bytes": 35454428,
+      "notes": "18-column crws-nodes projection"
+    },
+    {
+      "path": "crws/events/icews-conflict.2022.parquet",
+      "checksum_sha256": "61e89c8f6b1cfd06b71097cbc1a1fde9c0ecb643333cdf80b76bec504e4fc410",
+      "bytes": 37545740,
+      "notes": "18-column crws-nodes projection"
+    }
+  ]
+}

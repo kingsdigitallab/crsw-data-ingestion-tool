@@ -42,7 +42,8 @@ def worked_example() -> dict:
         license="CC-BY-4.0", steward="Kevin Fahey",
         depositors=["njakeman"],
         created="2026-07-29T10:15:00Z", modified="2026-07-29T10:15:00Z",
-        derived_from="rs2/csac/amber/1_interim/csac-clean",
+        derived_from=[{"kind": "dataset",
+                       "identifier": "rs2/csac/amber/1_interim/csac-clean"}],
         files=[
             record.manifest_entry("csac-clean-2025.csv", "e3" * 32,
                                   48211023, fmt="text/csv"),
@@ -80,9 +81,12 @@ class TestSchemaInStepWithCode(unittest.TestCase):
         self.assertEqual(SCHEMA["properties"]["source_type"]["enum"],
                          cli_codes)
 
-    def test_schema_version_const_matches_record(self):
-        self.assertEqual(SCHEMA["properties"]["schema_version"]["const"],
-                         record.SCHEMA_VERSION)
+    def test_schema_versions_match_record(self):
+        # r8 §5: the contract lists every version the tool reads; the
+        # one it writes is among them.
+        self.assertEqual(tuple(SCHEMA["properties"]["schema_version"]["enum"]),
+                         record.ACCEPTED_SCHEMA_VERSIONS)
+        self.assertIn(record.SCHEMA_VERSION, record.ACCEPTED_SCHEMA_VERSIONS)
 
     def test_required_matches_record_tiers(self):
         self.assertEqual(set(SCHEMA["required"]), set(record.REQUIRED_FIELDS))
@@ -181,6 +185,13 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
         ("missing created", {"created": None}),
         ("bad dataset slug", {"dataset": "Bad Slug"}),
         ("temporal missing end", {"temporal": {"start": "1989"}}),
+        ("reference without kind", {"derived_from": [{"identifier": "x"}]}),
+        ("dataset reference without identifier",
+         {"derived_from": [{"kind": "dataset"}]}),
+        ("external reference with nothing", {"derived_from": [{"kind": "external"}]}),
+        ("activity without kind", {"provenance": [{"tool": {"name": "x"}}]}),
+        ("tool without name", {"provenance": [{"activity": "clean",
+                                               "tool": {"repo": "r"}}]}),
     )
 
     def test_schema_invalid_is_runtime_invalid(self):

@@ -1,0 +1,46 @@
+{
+  "schema_version": "0.5",
+  "dataset_uuid": "1fed3fd5-c392-48f4-8561-55bfa6d52622",
+  "identifier": "rs2/cdisaw-harmonised/green/2_final/ucdp-deco",
+  "strand": "rs2",
+  "project": "cdisaw-harmonised",
+  "dataset": "ucdp-deco",
+  "sensitivity": "green",
+  "state": "2_final",
+  "domain": "quant",
+  "version": "1-0",
+  "abstract": "UCDP Deadly Electoral Conflict Dataset (DECO) v1.0. Georeferenced events of lethal electoral violence, covering state-based, non-state, and one-sided violence connected to elections. Harmonised copy produced by cdisaw-parquet: the (CD)ISaW ingest script for this source was run unchanged against a Parquet writer instead of PostGIS, giving 4,227 event rows in the wide 35-column layout (wide/) and an 18-column crws-nodes projection (crws/). Dataset-level domain: conflict.",
+  "subject": [
+    "armed-conflict",
+    "forced-labour",
+    "sexual-slavery"
+  ],
+  "temporal": {
+    "start": "1989-01-01",
+    "end": "2017-12-31"
+  },
+  "source_type": "archive",
+  "source_detail": "Uppsala Conflict Data Program (UCDP). Deadly Electoral Conflict Dataset (DECO) v1.0. Uppsala University. | https://ucdp.uu.se/downloads/index.html#armedconflict",
+  "license": "CC BY 4.0",
+  "depositors": [
+    "neil_"
+  ],
+  "created": "2026-09-17T08:59:10Z",
+  "modified": "2026-09-17T08:59:10Z",
+  "derived_from": "https://ucdp.uu.se/downloads/index.html#armedconflict",
+  "notes": "TEST DEPOSIT under k1078591:crsw/cdisaw-test/ (a single prefix holding every source); the identifier records where this dataset would live under the Centre's path convention. cdisaw event domain: conflict. Source script: ucdp_deco; rows: 4,227. cdisaw classification codes without a vocabulary term: child_slavery, civil_war, insurgency. Projection note: Harmonised by cdisaw ingest script via the Parquet shim; source_type=csv_file",
+  "files": [
+    {
+      "path": "wide/events/ucdp-deco.parquet",
+      "checksum_sha256": "0b71d10346c3a39d804dc9d633a41adb5ae66e3f797d6ee5de02b1d8d799bb8f",
+      "bytes": 692366,
+      "notes": "35-column shim output (schema.wide_schema)"
+    },
+    {
+      "path": "crws/events/ucdp-deco.parquet",
+      "checksum_sha256": "65cf6686676c733343a4362bbd07614a38f0f855fa458df31843ed849e175368",
+      "bytes": 539624,
+      "notes": "18-column crws-nodes projection"
+    }
+  ]
+}

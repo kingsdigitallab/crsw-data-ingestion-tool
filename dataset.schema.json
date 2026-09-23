@@ -1,13 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "CRSW dataset record",
+  "description": "Schema 0.6 (r8). Records marked 0.5 are still accepted: their derived_from is a string, which every tool upgrades to a list of references on read. Tools write 0.6.",
   "type": "object",
   "required": ["schema_version", "dataset_uuid", "identifier", "strand",
                "domain", "project", "dataset", "state", "sensitivity",
                "temporal", "version", "abstract", "subject",
                "created", "modified", "files"],
   "properties": {
-    "schema_version": {"const": "0.5"},
+    "schema_version": {"enum": ["0.5", "0.6"]},
     "dataset_uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
     "identifier": {"type": "string", "pattern": "^(rs1|rs2|rs3|rs4)/[a-z0-9-]+/(green|amber)/(0_raw|1_interim|2_final)/[a-z0-9-]+$"},
     "strand": {"enum": ["rs1", "rs2", "rs3", "rs4"]},
@@ -36,7 +37,13 @@
     "depositors": {"type": "array", "items": {"type": "string"}},
     "created": {"type": "string"},
     "modified": {"type": "string"},
-    "derived_from": {"type": "string"},
+    "derived_from": {
+      "oneOf": [
+        {"type": "string", "description": "0.5 form, read and upgraded, never written"},
+        {"type": "array", "items": {"$ref": "#/definitions/reference"}}
+      ]
+    },
+    "provenance": {"type": "array", "items": {"$ref": "#/definitions/activity"}},
     "language": {"type": "array", "items": {"type": "string"}},
     "ethics_ref": {"type": "string"},
     "spatial": {},
@@ -64,6 +71,50 @@
           "derived_from": {"type": "string"},
           "notes": {"type": "string"}
         }
+      }
+    }
+  },
+  "definitions": {
+    "reference": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["dataset", "external"]},
+        "identifier": {"type": "string", "pattern": "^(rs1|rs2|rs3|rs4)/[a-z0-9-]+/(green|amber)/(0_raw|1_interim|2_final)/[a-z0-9-]+$"},
+        "dataset_uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+-[0-9]+$"},
+        "url": {"type": "string"},
+        "citation": {"type": "string"},
+        "retrieved": {"type": "string"}
+      },
+      "oneOf": [
+        {"properties": {"kind": {"const": "dataset"}}, "required": ["identifier"]},
+        {"properties": {"kind": {"const": "external"}}, "anyOf": [{"required": ["url"]}, {"required": ["citation"]}]}
+      ]
+    },
+    "activity": {
+      "type": "object",
+      "required": ["activity"],
+      "properties": {
+        "activity": {"type": "string"},
+        "description": {"type": "string"},
+        "tool": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {"type": "string"},
+            "repo": {"type": "string"},
+            "commit": {"type": "string"},
+            "version": {"type": "string"},
+            "command": {"type": "string"},
+            "notebook": {"type": "string"}
+          }
+        },
+        "inputs": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"$ref": "#/definitions/reference"}]}},
+        "outputs": {"type": "array", "items": {"type": "string"}},
+        "agent": {"type": "string"},
+        "started": {"type": "string"},
+        "ended": {"type": "string"}
       }
     }
   }
