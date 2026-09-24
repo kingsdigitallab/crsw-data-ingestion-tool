@@ -1346,3 +1346,131 @@ class TestChoiceLines(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleSubjectsDefault(TestExistingRecordFlow):
+    """r9 step D: an existing record whose subjects the vocabulary has
+    since changed gets the mapped terms as the default."""
+
+    def _vocab(self):
+        from crsw_deposit import authority
+        base = {"vocabulary_version": "2026-07-23",
+                "domains": [{"code": "quant", "label": "Quantitative",
+                             "steward": "Tester"}],
+                "terms": [{"slug": "armed-conflict", "facet": "themes",
+                           "label": "Armed conflict", "status": "current",
+                           "since": "2026-07-23"},
+                          {"slug": "civil-war", "facet": "themes",
+                           "label": "Civil war", "status": "current",
+                           "since": "2026-07-23"},
+                          {"slug": "survey", "facet": "methods",
+                           "label": "Survey", "status": "current",
+                           "since": "2026-07-23"}],
+                "changes": []}
+        base["facets"] = authority.facets_from_terms(base)
+        return base
+
+    def test_enter_keeps_the_mapped_default(self):
+        import json
+        from crsw_deposit import authority
+        v = authority.apply_change(self._vocab(), {
+            "kind": "merge", "from": ["civil-war"], "to": ["armed-conflict"],
+            "date": "2026-10-01", "by": "k1"})
+        fetch = self._fetcher((json.dumps(self._existing(
+            subject=["civil-war", "survey"])), None))
+        said = []
+        # version, coverage x2, subjects (Enter = mapped default), abstract n
+        with mock.patch("builtins.input", side_effect=["", "", "", "", "n"]), \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn") as warned:
+            meta, _ = deposit.prompt_metadata(_flagged_args(), v, None, None, fetch)
+        self.assertEqual(meta["subject"], ["armed-conflict", "survey"])
+        self.assertTrue(any("civil-war -> armed-conflict" in s for s in said), said)
+        warned.assert_not_called()
+
+    def test_typed_answer_overrides_the_default(self):
+        import json
+        from crsw_deposit import authority
+        v = authority.apply_change(self._vocab(), {
+            "kind": "merge", "from": ["civil-war"], "to": ["armed-conflict"],
+            "date": "2026-10-01", "by": "k1"})
+        fetch = self._fetcher((json.dumps(self._existing(subject=["civil-war"])), None))
+        with mock.patch("builtins.input", side_effect=["", "", "", "survey", "n"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            meta, _ = deposit.prompt_metadata(_flagged_args(), v, None, None, fetch)
+        self.assertEqual(meta["subject"], ["survey"])
+
+    def test_split_is_offered_with_a_check_note(self):
+        import json
+        from crsw_deposit import authority
+        v = self._vocab()
+        v = authority.apply_change(v, {"kind": "add", "to": ["survey-online"],
+                                       "facet": "methods", "label": "Online",
+                                       "date": "2026-10-01", "by": "k1"})
+        v = authority.apply_change(v, {"kind": "add", "to": ["survey-household"],
+                                       "facet": "methods", "label": "Household",
+                                       "date": "2026-10-01", "by": "k1"})
+        v = authority.apply_change(v, {"kind": "split", "from": ["survey"],
+                                       "to": ["survey-online", "survey-household"],
+                                       "date": "2026-10-02", "by": "k1"})
+        fetch = self._fetcher((json.dumps(self._existing(subject=["survey"])), None))
+        said = []
+        with mock.patch("builtins.input", side_effect=["", "", "", "", "n"]), \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn"):
+            meta, _ = deposit.prompt_metadata(_flagged_args(), v, None, None, fetch)
+        self.assertEqual(meta["subject"], ["survey-online", "survey-household"])
+        self.assertTrue(any("a split - check which apply" in s for s in said), said)
+
+    def test_nothing_maps_falls_back_to_the_old_warning(self):
+        import json
+        from crsw_deposit import authority
+        v = authority.apply_change(self._vocab(), {
+            "kind": "retire", "from": ["civil-war"], "date": "2026-10-01", "by": "k1"})
+        fetch = self._fetcher((json.dumps(self._existing(subject=["civil-war"])), None))
+        with mock.patch("builtins.input", side_effect=["", "", "", "1", "n"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn") as warned:
+            meta, _ = deposit.prompt_metadata(_flagged_args(), v, None, None, fetch)
+        self.assertEqual(meta["subject"], ["armed-conflict"])
+        self.assertTrue(any("choose again" in str(c) for c in warned.call_args_list))
+
+
+class TestHierarchyListing(unittest.TestCase):
+    """r9 §1.8: the listing indents narrower terms; a flat vocabulary
+    prints byte-identically."""
+
+    def _vocab(self, with_child):
+        from crsw_deposit import authority
+        v = {"vocabulary_version": "2026-07-23",
+             "terms": [{"slug": "osint", "facet": "methods", "label": "OSINT",
+                        "status": "current", "since": "2026-07-23"},
+                       {"slug": "survey", "facet": "methods", "label": "Survey",
+                        "status": "current", "since": "2026-07-23"}],
+             "changes": []}
+        if with_child:
+            v["terms"].insert(1, {"slug": "osint-social", "facet": "methods",
+                                  "label": "Social", "status": "current",
+                                  "since": "2026-07-23", "broader": "osint"})
+        v["facets"] = authority.facets_from_terms(v)
+        return v
+
+    def test_flat_vocabulary_lists_as_before(self):
+        v = self._vocab(with_child=False)
+        entries = deposit.subject_entries(v)
+        self.assertEqual(deposit.subject_depths(v), {"osint": 0, "survey": 0})
+        self.assertEqual(deposit.subject_listing_lines(entries, 80),
+                         deposit.subject_listing_lines(entries, 80,
+                                                       deposit.subject_depths(v)))
+        bundled = deposit.vocab.load_vocabulary(opener=lambda u, t: (_ for _ in ()).throw(OSError()))[0]
+        self.assertTrue(all(d == 0 for d in deposit.subject_depths(bundled).values()))
+
+    def test_child_is_indented_and_numbered_in_order(self):
+        v = self._vocab(with_child=True)
+        entries = deposit.subject_entries(v)
+        self.assertEqual([t for _n, t, _f in entries], ["osint", "osint-social", "survey"])
+        lines = deposit.subject_listing_lines(entries, 80, deposit.subject_depths(v))
+        body = [l for l in lines if "[" in l]
+        self.assertIn("  osint-social", body[1])
+        self.assertNotIn("  osint ", body[0].replace("[1] osint", "[1]osint"))
+        resolved, _ = deposit.resolve_subjects("2", entries)
+        self.assertEqual(resolved, ["osint-social"])

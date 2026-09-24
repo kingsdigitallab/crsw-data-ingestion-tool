@@ -270,11 +270,24 @@ def subject_entries(vocab_dict):
     return entries
 
 
-def subject_listing_lines(entries, width):
-    """Grouped-by-facet listing. Two columns at >=100 chars (r2 §4)."""
+def subject_depths(vocab_dict):
+    """term -> depth under its broader term (r9 §1.8). Every depth is 0
+    for a flat vocabulary, so the listing prints exactly as before."""
+    from crsw_deposit import authority
+    depths = {}
+    for facet in vocab.facets(vocab_dict):
+        for term, depth in authority.tree(vocab_dict, facet):
+            depths[term] = depth
+    return depths
+
+
+def subject_listing_lines(entries, width, depths=None):
+    """Grouped-by-facet listing. Two columns at >=100 chars (r2 §4).
+    With `depths`, a term sits indented under its broader term."""
+    depths = depths or {}
     columns = 2 if width >= 100 else 1
     num_w = max(len(n) for n, _t, _f in entries)
-    term_w = max(len(t) for _n, t, _f in entries)
+    term_w = max(len(t) + 2 * depths.get(t, 0) for _n, t, _f in entries)
     lines = []
     facet = None
     row = []
@@ -286,7 +299,8 @@ def subject_listing_lines(entries, width):
             facet = f
             lines.append("")
             lines.append("  " + style(facet, "bold"))
-        cell = "%s %-*s  " % (style("[%*s]" % (num_w, n), "dim"), term_w, term)
+        shown = "  " * depths.get(term, 0) + term
+        cell = "%s %-*s  " % (style("[%*s]" % (num_w, n), "dim"), term_w, shown)
         row.append(cell)
         if len(row) == columns:
             lines.append("    " + "".join(row))
@@ -1077,17 +1091,42 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             existing_subjects, vocab.all_terms(vocab_dict)):
         meta["subject"] = existing_subjects
     else:
+        # r9 §1.10: stale terms are mapped through the vocabulary's own
+        # changes and offered as the default, instead of a full re-pick.
+        default = []
         if existing_subjects:
-            warn("the existing record's subjects are no longer all in the "
-                 "vocabulary - please choose again.")
+            from crsw_deposit import authority
+            mapped, applied = authority.map_subjects(existing_subjects, vocab_dict)
+            default = [t for t in mapped
+                       if t in vocab.all_terms(vocab_dict)]
+            if default and applied:
+                for a in applied:
+                    say("The vocabulary changed since this dataset was "
+                        "described: %s -> %s%s" % (
+                            ", ".join(a["from"]),
+                            ", ".join(a["to"]) or "(removed)",
+                            " (a split - check which apply)"
+                            if a["kind"] == "split_review" else ""))
+            else:
+                warn("the existing record's subjects are no longer all in the "
+                     "vocabulary - please choose again.")
         entries = subject_entries(vocab_dict)
         width = shutil.get_terminal_size().columns
-        for line in subject_listing_lines(entries, width):
+        for line in subject_listing_lines(entries, width,
+                                          subject_depths(vocab_dict)):
             say(line)
         say("")
         while True:
-            raw = input(style("Subjects - select one or more "
-                              "(comma-separated numbers or terms): ", "bold"))
+            if default:
+                raw = input(style("Subjects - select one or more "
+                                  "(comma-separated numbers or terms) "
+                                  "[Enter keeps %s]: " % ", ".join(default),
+                                  "bold"))
+                if not raw.strip():
+                    raw = ", ".join(default)
+            else:
+                raw = input(style("Subjects - select one or more "
+                                  "(comma-separated numbers or terms): ", "bold"))
             subjects, unknown = resolve_subjects(raw, entries)
             if unknown:
                 say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))

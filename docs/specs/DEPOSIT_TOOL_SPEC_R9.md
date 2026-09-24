@@ -259,7 +259,7 @@ Stop at each and wait for review.
   merge | split | retire | move | tree`.
 - **C. Promoter** (*built*): dataset listing, `recategorise` (dry-run, change file,
   logging), stale-term mapping at promotion time.
-- **D. CLI**: mapped terms as the default on re-deposit; indented listing
+- **D. CLI** (*built*): mapped terms as the default on re-deposit; indented listing
   when the vocabulary has a hierarchy.
 - **E. Vocabulary repo starter kit**: README, CODEOWNERS, issue forms,
   validation workflow, apply-issue workflow, delivered in this repo under
