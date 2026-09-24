@@ -98,8 +98,17 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
         # (the moment the researcher finalised), unless the destination
         # already has one. Promotion time is `modified`.
         staged_created = (rep.staged_record or {}).get("created") or dep.finalised
+        meta = dict(dep.meta)
+        if rep.mapped_subjects is not None:
+            # r9: the checks mapped stale terms; the record says so.
+            meta["subject"] = rep.mapped_subjects
+            meta["category_history"] = rep.mapping_entries
+            if rep.mapped_vocabulary_version:
+                meta["vocabulary_version"] = rep.mapped_vocabulary_version
+            log.write("stale_terms_mapped", dep, before=list(dep.meta["subject"]),
+                      after=rep.mapped_subjects)
         rec, union, added, updated = deposit_logic.assemble_record(
-            dep.meta, existing, dep.entries, dep.user, record.utc_now_iso(),
+            meta, existing, dep.entries, dep.user, record.utc_now_iso(),
             dataset_uuid, created=staged_created)
         errors, _ = record.validate_record(rec, vocab_terms, domain_codes)
         if errors:

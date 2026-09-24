@@ -87,6 +87,10 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
     provenance = list(existing.get("provenance") or []) + list(
         meta.get("provenance") or [])
     derived_from = meta.get("derived_from") or existing.get("derived_from")
+    # r9: category history accumulates the same way (the promoter adds
+    # entries when it maps a staged record's stale terms).
+    category_history = list(existing.get("category_history") or []) + list(
+        meta.get("category_history") or [])
     union, added, updated = record.merge_manifest(existing_files, entries)
     pairs = [record.temporal_pair(e.get("temporal")) for e in union]
     if existing:
@@ -111,7 +115,8 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         license=meta.get("license"), steward=meta.get("steward"),
         depositors=record.append_depositor(
             existing.get("depositors"), depositor),
-        derived_from=derived_from, provenance=provenance)
+        derived_from=derived_from, provenance=provenance,
+        category_history=category_history)
     return rec, union, added, updated
 
 

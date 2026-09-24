@@ -99,3 +99,62 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
 - **Check the service key's scope** after any policy change: `CRSW_INTEGRATION=1 .venv/Scripts/python -m pytest tests/test_integration_cluster.py` from a laptop on the VPN.
+
+## 5. Categories after deposit (recategorise)
+
+Subject terms and domains can change after a dataset is in place (r9,
+`docs/specs/DEPOSIT_TOOL_SPEC_R9.md`). The promoter is the only thing
+that rewrites a record, and it only ever rewrites the record: files,
+labels, keys and the UUID never change. Every rewrite is a new object
+version in the bucket and a `record_rewritten` line in the log.
+
+Two sources of change:
+
+- **The vocabulary's own changes** (a term renamed, merged, split or
+  retired in the vocabulary repository). Applied to every record that
+  carries an affected term, and written into the record's
+  `category_history` by the actor `vocabulary`. A split gives the
+  dataset every successor term and marks the entry `split_review`; a
+  steward then removes the wrong ones with a change file.
+- **A change file**: a steward's decisions about particular datasets.
+
+Always dry-run first, on the internal VM (or from a laptop with the
+promoter key, see the interim note above):
+
+```
+python -m promoter recategorise --dry-run
+python -m promoter recategorise --dry-run --changes changes.json --by k1078591
+```
+
+The dry-run prints one `recategorise_planned` line per record that
+would change (subjects and domain before and after, and each change),
+`recategorise_refused` for anything it will not do, and a `finish` line
+with `would_rewrite`. Run it again without `--dry-run` to write. A second
+run then finds nothing to do. `--dataset <identifier or uuid>` limits a
+run to one dataset. The promoter also maps stale terms on a staged
+deposit at promotion time (a `stale_terms_mapped` log line); a staged
+deposit whose term was split is refused with the successors named, and
+the depositor re-finalises with the right one.
+
+Change file format, one entry per dataset, any of `add`, `remove`,
+`set_domain`:
+
+```json
+[
+  {"dataset": "rs2/csac/green/2_final/csac-clean",
+   "add": ["prevalence"], "remove": ["survey-online"],
+   "reason": "steward review after the survey split, issue #31"},
+  {"dataset": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
+   "set_domain": "geo", "reason": "reassigned to the geospatial steward"}
+]
+```
+
+A change naming an unknown term, an unknown dataset, a term the record
+does not have, or leaving a dataset with no subject at all is refused
+and nothing is written for that dataset. Exit codes: 0 all rewritten or
+nothing to do; 1 something refused or failed; 2 configuration error or
+an unusable change file.
+
+**Deferred**: a form in the web service for stewards to file a change
+request into `staging/` for the promoter to pick up (r9 §1.4 B). Not
+built; the change file is the route until a steward asks.

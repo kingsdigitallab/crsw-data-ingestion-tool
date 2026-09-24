@@ -326,3 +326,212 @@ class TestConfig(unittest.TestCase):
             PromoterConfig.from_env(dict(base, PROMOTER_AUTHORISED="nope"))
         with self.assertRaises(ConfigError):
             PromoterConfig.from_env(dict(base, PROMOTER_MAX_OBJECT_BYTES="big"))
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestRecategorise(PromoterBase):
+    """r9 step C: records in place are brought up to the vocabulary's
+    changes and a steward's change file; stale staged records are mapped
+    at promotion time."""
+
+    NOW = "2026-10-05T10:00:00Z"
+
+    def evolved(self):
+        from crsw_deposit import authority
+        d = authority.apply_change(VOCAB, {"kind": "merge", "from": ["debt-bondage"],
+                                           "to": ["forced-labour"],
+                                           "date": "2026-10-01", "by": "k1"})
+        d = authority.apply_change(d, {"kind": "add", "to": ["survey-household"],
+                                       "facet": "methods", "label": "Household",
+                                       "date": "2026-10-02", "by": "k1"})
+        d = authority.apply_change(d, {"kind": "add", "to": ["survey-online"],
+                                       "facet": "methods", "label": "Online",
+                                       "date": "2026-10-02", "by": "k1"})
+        d = authority.apply_change(d, {"kind": "split", "from": ["survey"],
+                                       "to": ["survey-household", "survey-online"],
+                                       "date": "2026-10-03", "by": "k1"})
+        return d
+
+    def place(self, dataset, subject, domain="quant", uuid=None):
+        """A dataset record in place, as promotion would have written it."""
+        from tests.test_schema import worked_example
+        rec = worked_example()
+        rec.update(identifier="rs2/csac/green/2_final/%s" % dataset, dataset=dataset,
+                   subject=list(subject), domain=domain,
+                   dataset_uuid=uuid or record.mint_uuid())
+        rec.pop("category_history", None)
+        key = "rs2/csac/green/2_final/%s/dataset.%s.json" % (dataset, dataset)
+        data = deposit_logic.record_bytes(rec)
+        self.s3.put_object(Bucket="crsw", Key=key, Body=data,
+                           Metadata=labels_mod.object_labels(
+                               rec["dataset_uuid"], hashlib.sha256(data).hexdigest(),
+                               "green", "k1078591"))
+        return key, data, rec
+
+    def read(self, key):
+        return json.loads(self.s3.get_object(Bucket="crsw", Key=key)["Body"].read())
+
+    def run_cli(self, command, vocab_doc, *extra):
+        env = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
+               "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",
+               "PROMOTER_STAGING_PREFIX": "staging/_test", "PROMOTER_LOG_PATH": ""}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
+             mock.patch("promoter.__main__.vocab.load_vocabulary",
+                        return_value=(vocab_doc, "remote")), \
+             mock.patch("builtins.print") as printed:
+            code = cli.main([command, "--env-file", os.devnull] + list(extra))
+        lines = [json.loads(c.args[0]) for c in printed.call_args_list
+                 if c.args and isinstance(c.args[0], str) and c.args[0].startswith("{")]
+        return code, lines
+
+    def test_list_datasets_walks_strand_prefixes_only(self):
+        from promoter.scan import list_datasets
+        self.place("b", ["forced-labour"])
+        self.place("a", ["forced-labour"])
+        self.s3.put_object(Bucket="crsw", Key="rs2/csac/green/2_final/a/notes.json", Body=b"{}")
+        self.s3.put_object(Bucket="crsw", Key="staging/_test/k/x/rs2/csac/green/2_final/c/dataset.c.json", Body=b"{}")
+        self.s3.put_object(Bucket="crsw", Key="rs2/csac/green/2_final/d/dataset.e.json", Body=b"{}")
+        refs = list(list_datasets(self.s3, "crsw"))
+        self.assertEqual([r.prefix for r in refs],
+                         ["rs2/csac/green/2_final/a", "rs2/csac/green/2_final/b"])
+
+    def test_vocabulary_merge_rewrites_affected_records_only(self):
+        k1, d1, _ = self.place("one", ["debt-bondage", "armed-conflict"])
+        k2, d2, _ = self.place("two", ["forced-labour", "debt-bondage"])
+        k3, d3, _ = self.place("three", ["armed-conflict"])
+        code, lines = self.run_cli("recategorise", self.evolved(), "--by", "k1078591")
+        self.assertEqual(code, 0, lines)
+        finish = lines[-1]
+        self.assertEqual((finish["seen"], finish["rewritten"], finish["refused_or_failed"]),
+                         (3, 2, 0))
+        one = self.read(k1)
+        self.assertEqual(one["subject"], ["forced-labour", "armed-conflict"])
+        self.assertEqual(one["vocabulary_version"], "2026-10-03")
+        self.assertEqual(one["category_history"][-1]["by"], "vocabulary")
+        self.assertEqual(one["category_history"][-1]["kind"], "replaced")
+        self.assertEqual(self.read(k2)["subject"], ["forced-labour"])
+        # the third record has the same bytes: never rewritten
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k3)["Body"].read(), d3)
+        # rewritten records keep their uuid and created, change modified
+        self.assertEqual(one["dataset_uuid"], json.loads(d1)["dataset_uuid"])
+        self.assertEqual(one["created"], json.loads(d1)["created"])
+        self.assertNotEqual(one["modified"], json.loads(d1)["modified"])
+        # record object labels are fresh
+        head = self.s3.head_object(Bucket="crsw", Key=k1)["Metadata"]
+        self.assertEqual(head["checksum-sha256"],
+                         hashlib.sha256(deposit_logic.record_bytes(one)).hexdigest())
+        # second run: nothing to do
+        code, lines = self.run_cli("recategorise", self.evolved())
+        self.assertEqual(code, 0)
+        self.assertEqual((lines[-1]["seen"], lines[-1]["rewritten"]), (3, 0))
+
+    def test_split_gives_all_successors_with_review_entry(self):
+        k, _, _ = self.place("s", ["survey", "armed-conflict"])
+        code, lines = self.run_cli("recategorise", self.evolved())
+        self.assertEqual(code, 0)
+        rec = self.read(k)
+        self.assertEqual(rec["subject"], ["survey-household", "survey-online", "armed-conflict"])
+        entry = rec["category_history"][-1]
+        self.assertEqual((entry["kind"], entry["from"], entry["to"]),
+                         ("split_review", ["survey"], ["survey-household", "survey-online"]))
+
+    def test_change_file_add_remove_domain(self):
+        k, _, rec = self.place("c", ["forced-labour", "survey-household"], domain="quant")
+        self.place("other", ["forced-labour"])
+        changes = [{"dataset": rec["dataset_uuid"], "add": ["prevalence"],
+                    "remove": ["survey-household"], "set_domain": "geo",
+                    "reason": "steward review"}]
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "changes.json"
+            path.write_text(json.dumps(changes), encoding="utf-8")
+            code, lines = self.run_cli("recategorise", self.evolved(),
+                                       "--changes", str(path), "--by", "k1078591")
+        self.assertEqual(code, 0, lines)
+        out = self.read(k)
+        self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
+        self.assertEqual(out["domain"], "geo")
+        kinds = [e["kind"] for e in out["category_history"]]
+        self.assertEqual(kinds, ["removed", "added", "domain_changed"])
+        self.assertTrue(all(e["by"] == "k1078591" and e["reason"] == "steward review"
+                            for e in out["category_history"]))
+        self.assertEqual(lines[-1]["rewritten"], 1)
+        planned = [l for l in lines if l["action"] == "recategorise_planned"]
+        self.assertEqual(planned[0]["subject_before"], ["forced-labour", "survey-household"])
+
+    def test_change_file_refusals_write_nothing(self):
+        k, data, rec = self.place("r", ["forced-labour"])
+        cases = [
+            ([{"dataset": rec["identifier"], "add": ["made-up"]}], "not in the vocabulary"),
+            ([{"dataset": "rs2/csac/green/2_final/nope", "add": ["prevalence"]}],
+             "no dataset with that identifier"),
+            ([{"dataset": rec["identifier"], "remove": ["forced-labour"]}],
+             "at least one subject"),
+        ]
+        for changes, fragment in cases:
+            with tempfile.TemporaryDirectory() as d:
+                path = Path(d) / "changes.json"
+                path.write_text(json.dumps(changes), encoding="utf-8")
+                code, lines = self.run_cli("recategorise", self.evolved(),
+                                           "--changes", str(path))
+            self.assertEqual(code, 1, fragment)
+            refused = [l for l in lines if l["action"] == "recategorise_refused"]
+            self.assertTrue(any(fragment in json.dumps(l) for l in refused), (fragment, lines))
+            self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), data)
+
+    def test_bad_change_file_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "changes.json"
+            path.write_text('[{"dataset": "x"}]', encoding="utf-8")
+            code, _ = self.run_cli("recategorise", self.evolved(), "--changes", str(path))
+        self.assertEqual(code, 2)
+
+    def test_dry_run_plans_and_writes_nothing(self):
+        k, data, _ = self.place("dry", ["debt-bondage"])
+        code, lines = self.run_cli("recategorise", self.evolved(), "--dry-run")
+        self.assertEqual(code, 0)
+        planned = [l for l in lines if l["action"] == "recategorise_planned"]
+        self.assertEqual(planned[0]["subject_after"], ["forced-labour"])
+        self.assertEqual(lines[-1]["would_rewrite"], 1)
+        self.assertEqual(lines[-1]["rewritten"], 0)
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), data)
+
+    def test_only_one_dataset(self):
+        k1, _, _ = self.place("p", ["debt-bondage"])
+        k2, d2, _ = self.place("q", ["debt-bondage"])
+        code, lines = self.run_cli("recategorise", self.evolved(),
+                                   "--dataset", "rs2/csac/green/2_final/p")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.read(k1)["subject"], ["forced-labour"])
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k2)["Body"].read(), d2)
+
+    def test_stale_staged_record_is_mapped_at_promotion(self):
+        dep = self.stage(subject=["debt-bondage", "armed-conflict"])
+        code, lines = self.run_cli("run", self.evolved())
+        self.assertEqual(code, 0, lines)
+        self.assertTrue(any(l["action"] == "stale_terms_mapped" for l in lines))
+        checked = [l for l in lines if l["action"] == "checked"][0]
+        self.assertTrue(any("stale subject terms mapped" in w for w in checked["warnings"]))
+        rec = self.read(DEST + "/dataset.promo.json")
+        self.assertEqual(rec["subject"], ["forced-labour", "armed-conflict"])
+        self.assertEqual(rec["category_history"][0]["by"], "vocabulary")
+        self.assertEqual(rec["vocabulary_version"], "2026-10-03")
+        errors, _ = record.validate_record(rec, vocab.all_terms(self.evolved()))
+        self.assertEqual(errors, [])
+
+    def test_staged_record_needing_a_split_decision_is_refused(self):
+        dep = self.stage(subject=["survey"])
+        code, lines = self.run_cli("run", self.evolved())
+        self.assertEqual(code, 1)
+        checked = [l for l in lines if l["action"] == "checked"][0]
+        self.assertTrue(any("a person must choose" in p for p in checked["problems"]),
+                        checked)
+        self.assertEqual(self.keys_under("rs2/"), [])
+
+    def test_current_staged_record_is_untouched_by_the_mapping(self):
+        dep = self.stage()
+        code, lines = self.run_cli("run", self.evolved())
+        self.assertEqual(code, 0)
+        self.assertFalse(any(l["action"] == "stale_terms_mapped" for l in lines))
+        rec = self.read(DEST + "/dataset.promo.json")
+        self.assertNotIn("category_history", rec)

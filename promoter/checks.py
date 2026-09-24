@@ -23,6 +23,11 @@ class Report:
     existing_record: Optional[Dict] = None
     staged_record: Optional[Dict] = None
     total_bytes: int = 0
+    # r9: set when the staged record's subject terms were stale and mapped
+    # cleanly (rename/merge/retire) to the current vocabulary.
+    mapped_subjects: Optional[List[str]] = None
+    mapping_entries: List[Dict] = field(default_factory=list)
+    mapped_vocabulary_version: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -51,7 +56,12 @@ def _sha256_of_object(client, bucket, key) -> str:
 
 def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
           vocab_terms: Set[str], domain_codes: List[str],
-          verify_checksums: bool = True) -> Report:
+          verify_checksums: bool = True,
+          vocab_doc: Optional[Dict] = None) -> Report:
+    """`vocab_doc`, when given, is the whole vocabulary (r9 authority
+    file): a staged record whose subject terms have since been renamed,
+    merged or retired is mapped and promoted with the mapping in its
+    history; one whose term was split needs a person and is refused."""
     rep = Report()
     client, bucket = store.client, store.bucket
     p = rep.problems
@@ -86,6 +96,25 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             if upgraded:
                 rep.warnings.append("staged record was schema 0.5; it will be "
                                     "written as %s" % record.SCHEMA_VERSION)
+    if staged_rec and vocab_doc:
+        mapped, entries = record.apply_vocabulary_mapping(
+            staged_rec, vocab_doc, record.utc_now_iso())
+        splits = [e for e in entries if e["kind"] == "split_review"]
+        if splits:
+            for e in splits:
+                p.append("subject %s was split into %s; a person must choose "
+                         "(re-finalise the deposit with the right term(s))"
+                         % (", ".join(e["from"]), ", ".join(e["to"])))
+        elif entries:
+            rep.warnings.append("stale subject terms mapped to the current "
+                                "vocabulary: %s" % "; ".join(
+                                    "%s -> %s" % (", ".join(e.get("from") or []),
+                                                  ", ".join(e.get("to") or []) or "(removed)")
+                                    for e in entries))
+            rep.mapped_subjects = list(mapped["subject"])
+            rep.mapping_entries = entries
+            rep.mapped_vocabulary_version = mapped.get("vocabulary_version")
+            staged_rec = mapped
     rep.staged_record = staged_rec
     if staged_rec:
         errors, _ = record.validate_record(staged_rec, vocab_terms, domain_codes)

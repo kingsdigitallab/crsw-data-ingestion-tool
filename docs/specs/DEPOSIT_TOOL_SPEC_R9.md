@@ -257,7 +257,7 @@ Stop at each and wait for review.
   output unchanged.*
 - **B. Vocabulary command line** (*built*): `crsw-vocab validate | add | rename |
   merge | split | retire | move | tree`.
-- **C. Promoter**: dataset listing, `recategorise` (dry-run, change file,
+- **C. Promoter** (*built*): dataset listing, `recategorise` (dry-run, change file,
   logging), stale-term mapping at promotion time.
 - **D. CLI**: mapped terms as the default on re-deposit; indented listing
   when the vocabulary has a hierarchy.

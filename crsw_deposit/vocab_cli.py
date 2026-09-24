@@ -199,9 +199,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the authority file (default: ./%s)" % DEFAULT_FILE)
     sub = p.add_subparsers(dest="command", required=True)
 
+    try:
+        login = getpass.getuser()
+    except Exception:
+        login = "unknown"
+
     def editing(name, help_):
         s = sub.add_parser(name, help=help_)
-        s.add_argument("--by", default=getpass.getuser(),
+        s.add_argument("--by", default=login,
                        help="who decided (default: your login)")
         s.add_argument("--date", default=datetime.date.today().isoformat(),
                        help="effective date, YYYY-MM-DD (default: today)")
