@@ -1,0 +1,5 @@
+# The vocabulary stewards. A pull request that touches vocab.json needs a
+# review from one of these people (other than its author) before merge.
+# One GitHub username per steward; edit when the stewards change.
+vocab.json @njakeman
+.github/ @njakeman

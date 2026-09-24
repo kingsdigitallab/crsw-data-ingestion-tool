@@ -1,0 +1,22 @@
+name: Retire a term
+description: A term nobody should use any more, with no successor. It is removed from every dataset carrying it.
+title: "Retire term: "
+labels: ["change:retire"]
+body:
+  - type: input
+    id: old
+    attributes:
+      label: Term to retire
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: Effective date (optional)
+      description: YYYY-MM-DD. Leave blank for today.

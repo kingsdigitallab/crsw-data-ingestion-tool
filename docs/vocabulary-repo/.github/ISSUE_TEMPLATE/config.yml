@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Something else
+    url: https://github.com/kingsdigitallab/crsw-data-ingestion-tool/issues
+    about: Questions about the deposit tool itself go to its own repository.

@@ -1,0 +1,28 @@
+name: validate
+
+on:
+  pull_request:
+    paths: ["vocab.json", ".github/**", "scripts/**"]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the deposit tool (the validator lives there)
+        run: pip install "git+https://github.com/kingsdigitallab/crsw-data-ingestion-tool@${{ vars.TOOL_REF || 'main' }}"
+      - name: Every rule
+        run: crsw-vocab --file vocab.json validate
+      - name: Changes are append-only
+        if: github.event_name == 'pull_request'
+        run: python scripts/check_append_only.py origin/${{ github.base_ref }} vocab.json

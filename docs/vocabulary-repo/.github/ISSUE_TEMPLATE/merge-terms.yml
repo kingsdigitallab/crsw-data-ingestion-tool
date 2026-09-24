@@ -1,0 +1,34 @@
+name: Merge terms
+description: Two or more terms become one. The others are retired and point to the target; every dataset carrying them gets the target.
+title: "Merge terms: "
+labels: ["change:merge"]
+body:
+  - type: textarea
+    id: old
+    attributes:
+      label: Terms to merge (one per line)
+      description: The slugs that will be retired.
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target term
+      description: The slug they merge into. An existing term, or a new one if you give a label below.
+    validations:
+      required: true
+  - type: input
+    id: target_label
+    attributes:
+      label: Target label (only if the target is new)
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: Effective date (optional)
+      description: YYYY-MM-DD. Leave blank for today.

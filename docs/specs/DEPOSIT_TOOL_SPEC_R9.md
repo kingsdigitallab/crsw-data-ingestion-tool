@@ -261,7 +261,7 @@ Stop at each and wait for review.
   logging), stale-term mapping at promotion time.
 - **D. CLI** (*built*): mapped terms as the default on re-deposit; indented listing
   when the vocabulary has a hierarchy.
-- **E. Vocabulary repo starter kit**: README, CODEOWNERS, issue forms,
+- **E. Vocabulary repo starter kit** (*built*): README, CODEOWNERS, issue forms,
   validation workflow, apply-issue workflow, delivered in this repo under
   `docs/vocabulary-repo/` for when `crsw-vocabulary` is created.
 - **F. Docs**: README, runbook, the deferred web route.

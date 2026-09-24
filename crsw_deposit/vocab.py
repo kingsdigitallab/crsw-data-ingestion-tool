@@ -17,7 +17,7 @@ from . import record
 
 # Single line to update once the vocabulary repo is created.
 VOCAB_URL = ("https://raw.githubusercontent.com/"
-             "crsw-kcl/crsw-vocabulary/main/vocab.json")
+             "kingsdigitallab/crsw-vocabulary/main/vocab.json")
 FETCH_TIMEOUT = 4  # seconds
 
 

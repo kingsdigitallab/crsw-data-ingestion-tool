@@ -1,0 +1,34 @@
+name: Split a term
+description: One term becomes several. It is retired and points to all its successors; every dataset carrying it gets all of them, marked for review.
+title: "Split term: "
+labels: ["change:split"]
+body:
+  - type: input
+    id: old
+    attributes:
+      label: Term to split
+      description: The slug that will be retired.
+    validations:
+      required: true
+  - type: textarea
+    id: new
+    attributes:
+      label: New terms (one per line, as slug = Label)
+      description: |
+        Each successor on its own line. A new term needs its label after an equals sign; an existing term needs only its slug.
+      placeholder: |
+        survey-household = Household survey
+        survey-online = Online survey
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: Effective date (optional)
+      description: YYYY-MM-DD. Leave blank for today.

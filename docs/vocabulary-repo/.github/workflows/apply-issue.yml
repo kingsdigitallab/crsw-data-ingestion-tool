@@ -1,0 +1,61 @@
+name: apply change request
+
+# A submitted issue form (label change:*) becomes a pull request with
+# the change applied to vocab.json. The steward reviews the diff and
+# merges. Nothing here writes to main.
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  apply:
+    if: contains(join(github.event.issue.labels.*.name, ','), 'change:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the deposit tool
+        run: pip install "git+https://github.com/kingsdigitallab/crsw-data-ingestion-tool@${{ vars.TOOL_REF || 'main' }}"
+      - name: Apply the change
+        id: apply
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: python scripts/apply_issue.py >> "$GITHUB_OUTPUT"
+      - name: Report a refusal on the issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "The change could not be applied. See the workflow run for the reason, edit the issue to fix it, and it will be tried again."
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          branch="change/issue-${{ github.event.issue.number }}"
+          git config user.name "vocabulary-bot"
+          git config user.email "vocabulary-bot@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add vocab.json
+          git commit -m "${{ steps.apply.outputs.title }}" -m "Closes #${{ github.event.issue.number }}. Requested by @${{ github.event.issue.user.login }}."
+          git push --force origin "$branch"
+          if gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr comment "$branch" --body "Updated from the edited issue."
+          else
+            gh pr create --base main --head "$branch" \
+              --title "${{ steps.apply.outputs.title }}" \
+              --body "Closes #${{ github.event.issue.number }}. Requested by @${{ github.event.issue.user.login }}.
+
+Review the diff: it should touch only the term(s) named, the changes list and the version date. Approve to accept the change; it applies to existing datasets on the promoter's next run."
+          fi

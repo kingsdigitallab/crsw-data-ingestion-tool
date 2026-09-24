@@ -1,0 +1,49 @@
+name: Add a term
+description: Propose a new subject term.
+title: "Add term: "
+labels: ["change:add"]
+body:
+  - type: input
+    id: slug
+    attributes:
+      label: Slug
+      description: Lower-case words joined by hyphens, e.g. bonded-labour-agriculture
+      placeholder: bonded-labour-agriculture
+    validations:
+      required: true
+  - type: dropdown
+    id: facet
+    attributes:
+      label: Facet
+      options:
+        - practices
+        - themes
+        - methods
+        - contexts
+    validations:
+      required: true
+  - type: input
+    id: label
+    attributes:
+      label: Label
+      description: How the term reads to a person.
+      placeholder: Bonded labour in agriculture
+    validations:
+      required: true
+  - type: input
+    id: broader
+    attributes:
+      label: Broader term (optional)
+      description: The slug of an existing term in the same facet this one sits under. Leave blank for a top-level term.
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+      description: Why this term is needed and what datasets would use it.
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: Effective date (optional)
+      description: YYYY-MM-DD. Leave blank for today.
