@@ -37,6 +37,8 @@ cd /opt/crsw-deposit && git checkout <tag>
 
 Security group: web VM allows TCP `CRSW_HTTP_PORT` from the proxy ranges only, plus SSH from the admin range. Internal VM allows SSH from the admin range only.
 
+Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githubusercontent.com` (the vocabulary, fetched on every promoter run and every ten minutes by the web service), plus `github.com`, Docker Hub and PyPI for the clone and the image build. Neither VM needs any other egress.
+
 ## 2. Web VM
 
 ```
@@ -81,9 +83,10 @@ The timer runs every five minutes with a lock, so runs never overlap. Exit code 
 
 ### Interim: promoter from a laptop
 
-Until the internal VM exists, the web VM can run alone. Finalised deposits wait in `staging/`; nothing expires and nothing breaks, and each user's quota is freed when their deposits are promoted. Promote from an admin laptop on the VPN, from a checkout at the same tag as the web VM, with `.env.promoter` in the repo root:
+Until the internal VM exists, the web VM can run alone. Finalised deposits wait in `staging/`; nothing expires and nothing breaks, and each user's quota is freed when their deposits are promoted. Promote from an admin laptop on the VPN, from a checkout at the same tag as the web VM, with `.env.promoter` in the repo root. Use the checkout's own virtual environment: the system Python lacks boto3.
 
 ```
+.venv/Scripts/pip install -e ".[web,dev]"           # once, and after each pull
 .venv/Scripts/python -m promoter run --dry-run      # review
 .venv/Scripts/python -m promoter run                # promote, log to promoter.log
 ```
@@ -130,6 +133,14 @@ promoter key, see the interim note above):
 ```
 python -m promoter recategorise --dry-run
 python -m promoter recategorise --dry-run --changes changes.json --by k1078591
+```
+
+On the internal VM the same commands run in the promoter container. The container is read-only and has no volumes, so a change file is mounted in for the run:
+
+```
+cd /opt/crsw-deposit
+docker compose -f deploy/compose.yaml --profile internal run --rm promoter \n  python -m promoter recategorise --dry-run --env-file /dev/null
+docker compose -f deploy/compose.yaml --profile internal run --rm \n  -v "$PWD/changes.json:/app/changes.json:ro" promoter \n  python -m promoter recategorise --dry-run --changes /app/changes.json --by k1078591 --env-file /dev/null
 ```
 
 The dry-run prints one `recategorise_planned` line per record that
