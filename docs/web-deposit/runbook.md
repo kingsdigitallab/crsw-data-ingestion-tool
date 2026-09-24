@@ -28,11 +28,20 @@ Note the proxy's load-balancer address ranges; they go into the security group a
 
 ## 1. Host preparation (both VMs)
 
+Both VMs run the same repository; the role is chosen by the compose command and the env file present. The checkout lives under `/opt`, named for the role, with a symlink in the admin's home so it is easy to find:
+
+| | Web VM | Internal VM |
+|---|---|---|
+| Checkout | `/opt/crsw-deposit-web` | `/opt/crsw-data-promoter` |
+
 ```
 sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 git   # or Podman + podman-compose if eResearch prefer
-sudo mkdir -p /opt/crsw-deposit && sudo chown $USER /opt/crsw-deposit
-git clone https://github.com/kingsdigitallab/crsw-data-ingestion-tool /opt/crsw-deposit
-cd /opt/crsw-deposit && git checkout <tag>
+sudo usermod -aG docker $USER                    # log out and in again
+DIR=/opt/crsw-data-promoter                      # or /opt/crsw-deposit-web
+sudo mkdir -p $DIR && sudo chown $USER $DIR
+git clone https://github.com/kingsdigitallab/crsw-data-ingestion-tool $DIR
+mkdir -p ~/repos && ln -s $DIR ~/repos/$(basename $DIR)
+cd $DIR && git checkout <tag>
 ```
 
 Security group: web VM allows TCP `CRSW_HTTP_PORT` from the proxy ranges only, plus SSH from the admin range. Internal VM allows SSH from the admin range only.
@@ -42,7 +51,7 @@ Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githu
 ## 2. Web VM
 
 ```
-cd /opt/crsw-deposit
+cd /opt/crsw-deposit-web
 cp .env.example .env            # fill in: staging key, CRSW_AUTH_MODE=proxy, CRSW_TRUSTED_PROXY_CIDRS
 chmod 600 .env
 export CRSW_HTTP_PORT=8080 CRSW_TRUSTED_PROXY_CIDRS=<ranges>   # also read by the nginx sidecar
@@ -68,18 +77,18 @@ Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per
 ## 3. Internal VM
 
 ```
-cd /opt/crsw-deposit
+cd /opt/crsw-data-promoter
 cp .env.promoter.example .env.promoter     # fill in the promoter key; set PROMOTER_AUTHORISED when known
 chmod 600 .env.promoter
 docker compose -f deploy/compose.yaml --profile internal build promoter
 docker compose -f deploy/compose.yaml --profile internal run --rm promoter python -m promoter run --dry-run --env-file /dev/null
-sed "s#/opt/crsw-deposit#$PWD#" deploy/promoter.service | sudo tee /etc/systemd/system/crsw-promoter.service >/dev/null
+sudo cp deploy/promoter.service /etc/systemd/system/crsw-promoter.service   # WorkingDirectory=/opt/crsw-data-promoter
 sudo cp deploy/promoter.timer   /etc/systemd/system/crsw-promoter.timer
 sudo systemctl daemon-reload && sudo systemctl enable --now crsw-promoter.timer
 journalctl -u crsw-promoter.service -f        # one JSON line per action
 ```
 
-The unit's `WorkingDirectory` must be the checkout (the `sed` above sets it; `/opt/crsw-deposit` is only the example path, a checkout under a home directory such as `~/repos/crsw-deposit` is fine). The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
+The unit's `WorkingDirectory` must be the checkout; edit the copied unit if it is anywhere other than `/opt/crsw-data-promoter`. The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
 
 ### Interim: promoter from a laptop
 
@@ -138,7 +147,7 @@ python -m promoter recategorise --dry-run --changes changes.json --by k1078591
 On the internal VM the same commands run in the promoter container. The container is read-only and has no volumes, so a change file is mounted in for the run:
 
 ```
-cd /opt/crsw-deposit
+cd /opt/crsw-data-promoter
 docker compose -f deploy/compose.yaml --profile internal run --rm promoter \n  python -m promoter recategorise --dry-run --env-file /dev/null
 docker compose -f deploy/compose.yaml --profile internal run --rm \n  -v "$PWD/changes.json:/app/changes.json:ro" promoter \n  python -m promoter recategorise --dry-run --changes /app/changes.json --by k1078591 --env-file /dev/null
 ```
