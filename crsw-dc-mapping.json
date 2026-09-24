@@ -45,5 +45,33 @@
     "temporal":        {"term": "dcterms:temporal"},
     "derived_from":    {"term": "dcterms:source", "also": "prov:wasDerivedFrom"},
     "notes":           {"term": "crsw:notes", "local": true}
+  },
+  "reference_fields": {
+    "_note":         "a derived_from reference or an activity input (r8 §1); a dataset reference is a dcat:Dataset node, an external one a node named by its URL or carrying its citation",
+    "identifier":    {"term": "dcterms:identifier"},
+    "dataset_uuid":  {"term": "dcterms:identifier", "note": "listed before the readable identifier, as on the dataset itself"},
+    "version":       {"term": "crsw:version", "local": true},
+    "url":           {"term": "@id"},
+    "citation":      {"term": "dcterms:bibliographicCitation"},
+    "retrieved":     {"term": "crsw:retrieved", "local": true}
+  },
+  "activity_fields": {
+    "_note":         "one prov:Activity per provenance entry (r8 §2); tool and agent both sit under prov:wasAssociatedWith",
+    "activity":      {"term": "crsw:activityKind", "local": true},
+    "description":   {"term": "dcterms:description"},
+    "tool":          {"term": "prov:wasAssociatedWith", "type": "prov:SoftwareAgent"},
+    "agent":         {"term": "prov:wasAssociatedWith", "type": "prov:Person"},
+    "inputs":        {"term": "prov:used", "note": "a bare member path renders as the dcat:Distribution it names; a reference renders per reference_fields"},
+    "outputs":       {"term": "prov:generated", "note": "member paths as dcat:Distribution nodes"},
+    "started":       {"term": "prov:startedAtTime"},
+    "ended":         {"term": "prov:endedAtTime"}
+  },
+  "tool_fields": {
+    "name":          {"term": "dcterms:title"},
+    "repo":          {"term": "crsw:repo", "local": true},
+    "commit":        {"term": "crsw:commit", "local": true},
+    "version":       {"term": "crsw:version", "local": true},
+    "command":       {"term": "crsw:command", "local": true},
+    "notebook":      {"term": "crsw:notebook", "local": true}
   }
 }

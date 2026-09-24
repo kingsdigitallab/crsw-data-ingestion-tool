@@ -24,6 +24,9 @@ MAPPING = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))
 
 DATASET_FIELDS = MAPPING["dataset_fields"]
 FILE_FIELDS = MAPPING["file_fields"]
+REFERENCE_FIELDS = MAPPING["reference_fields"]
+ACTIVITY_FIELDS = MAPPING["activity_fields"]
+TOOL_FIELDS = MAPPING["tool_fields"]
 
 
 def unmapped_fields(rec: dict) -> List[str]:
@@ -64,12 +67,74 @@ def _distribution(entry: dict) -> dict:
     return dist
 
 
+def _member(path: str) -> dict:
+    """A manifest member named from inside an activity, as the same
+    dcat:Distribution node _distribution builds for it."""
+    return {"@type": "dcat:Distribution", FILE_FIELDS["path"]["term"]: path}
+
+
+def _reference(ref: dict) -> dict:
+    """A derived_from reference or activity input (r8 §1) as a node. A
+    dataset reference is a dcat:Dataset carrying the parent's identifier,
+    the UUID first when known; an external one is named by its URL, or
+    carries its citation when there is no URL."""
+    if ref.get("kind") == "dataset":
+        ids = [ref[k] for k in ("dataset_uuid", "identifier") if ref.get(k)]
+        node = {"@type": "dcat:Dataset",
+                REFERENCE_FIELDS["identifier"]["term"]: ids}
+        if ref.get("version"):
+            node[REFERENCE_FIELDS["version"]["term"]] = ref["version"]
+        return node
+    node = {}
+    if ref.get("url"):
+        node[REFERENCE_FIELDS["url"]["term"]] = ref["url"]
+    if ref.get("citation"):
+        node[REFERENCE_FIELDS["citation"]["term"]] = ref["citation"]
+    if ref.get("retrieved"):
+        node[REFERENCE_FIELDS["retrieved"]["term"]] = ref["retrieved"]
+    return node
+
+
+def _activity(act: dict) -> dict:
+    """One provenance entry as a prov:Activity (r8 §5). The tool and the
+    agent both hang off prov:wasAssociatedWith, typed apart."""
+    node = {"@type": "prov:Activity",
+            ACTIVITY_FIELDS["activity"]["term"]: act["activity"]}
+    if act.get("description"):
+        node[ACTIVITY_FIELDS["description"]["term"]] = act["description"]
+    associated = []
+    tool = act.get("tool")
+    if tool:
+        agent_node = {"@type": ACTIVITY_FIELDS["tool"]["type"]}
+        for field, spec in TOOL_FIELDS.items():
+            if tool.get(field):
+                agent_node[spec["term"]] = tool[field]
+        associated.append(agent_node)
+    if act.get("agent"):
+        associated.append({"@type": ACTIVITY_FIELDS["agent"]["type"],
+                           DATASET_FIELDS["identifier"]["term"]: act["agent"]})
+    if associated:
+        node[ACTIVITY_FIELDS["tool"]["term"]] = associated
+    if act.get("inputs"):
+        node[ACTIVITY_FIELDS["inputs"]["term"]] = [
+            _member(item) if isinstance(item, str) else _reference(item)
+            for item in act["inputs"]]
+    if act.get("outputs"):
+        node[ACTIVITY_FIELDS["outputs"]["term"]] = [
+            _member(path) for path in act["outputs"]]
+    for field in ("started", "ended"):
+        if act.get(field):
+            node[ACTIVITY_FIELDS[field]["term"]] = act[field]
+    return node
+
+
 def dcat_dataset(rec: dict) -> dict:
     """The record as a dcat:Dataset (JSON-LD), terms from the mapping.
     Structured shapes (temporal, the license/rights branch, sensitivity
-    value translation, combined identifiers, the provenance join) are
-    keyed by field name; everything marked local renders under its
-    mapped crsw:* term."""
+    value translation, combined identifiers, the provenance join, the
+    derived_from references and the PROV activity graph) are keyed by
+    field name; everything marked local renders under its mapped
+    crsw:* term."""
     out = {
         "@context": dict(MAPPING["namespaces"]),
         "@type": "dcat:Dataset",
@@ -101,10 +166,14 @@ def dcat_dataset(rec: dict) -> dict:
             part for part in (rec.get("source_type"),
                               rec.get("source_detail")) if part)
     if rec.get("derived_from"):
-        out[DATASET_FIELDS["derived_from"]["term"]] = rec["derived_from"]
+        sources = [_reference(ref) for ref in rec["derived_from"]]
+        out[DATASET_FIELDS["derived_from"]["term"]] = sources
         also = DATASET_FIELDS["derived_from"].get("also")
         if also:
-            out[also] = rec["derived_from"]
+            out[also] = sources
+    if rec.get("provenance"):
+        out[DATASET_FIELDS["provenance"]["term"]] = [
+            _activity(act) for act in rec["provenance"]]
     if rec.get("language"):
         out[DATASET_FIELDS["language"]["term"]] = list(rec["language"])
     if rec.get("spatial"):

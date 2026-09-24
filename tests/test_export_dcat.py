@@ -47,14 +47,37 @@ class TestMappingCompleteness(unittest.TestCase):
         # A term whose prefix isn't in "namespaces" makes the exported
         # @context unresolvable JSON-LD - catches the spdx:checksum gap.
         namespaces = export_dcat.MAPPING["namespaces"]
-        for fields in (export_dcat.DATASET_FIELDS, export_dcat.FILE_FIELDS):
+        for fields in (export_dcat.DATASET_FIELDS, export_dcat.FILE_FIELDS,
+                       export_dcat.REFERENCE_FIELDS,
+                       export_dcat.ACTIVITY_FIELDS, export_dcat.TOOL_FIELDS):
             for name, entry in fields.items():
-                for term in [entry["term"]] + (
-                        [entry["also"]] if "also" in entry else []):
+                if name.startswith("_"):
+                    continue
+                terms = [entry["term"]] + (
+                    [entry["also"]] if "also" in entry else []) + (
+                    [entry["type"]] if "type" in entry else [])
+                for term in terms:
+                    if term.startswith("@"):
+                        continue  # JSON-LD keyword, not a prefixed term
                     prefix = term.split(":", 1)[0]
                     self.assertIn(prefix, namespaces,
                                  "%s: %s uses undeclared prefix %r"
                                  % (name, term, prefix))
+
+    def test_reference_and_activity_fields_cover_the_validator(self):
+        # r8 §5: every key validate_reference / validate_activity accepts
+        # has a place in the export, or the PROV claim is not mechanical.
+        self.assertEqual(set(k for k in export_dcat.REFERENCE_FIELDS
+                             if not k.startswith("_")),
+                         {"identifier", "dataset_uuid", "version",
+                          "url", "citation", "retrieved"})
+        self.assertEqual(set(k for k in export_dcat.ACTIVITY_FIELDS
+                             if not k.startswith("_")),
+                         {"activity", "description", "tool", "agent",
+                          "inputs", "outputs", "started", "ended"})
+        self.assertEqual(set(export_dcat.TOOL_FIELDS),
+                         {"name", "repo", "commit", "version", "command",
+                          "notebook"})
 
 
 class TestDcatShape(unittest.TestCase):
@@ -97,11 +120,13 @@ class TestDcatShape(unittest.TestCase):
         # dcterms:source means derivation; acquisition narrative is
         # provenance (r6 §3.2) - here both exist and must not blur.
         self.assertIn("archive", self.out["dcterms:provenance"])
-        # Step 1 of r8: the reference list passes through as data; step 2
-        # renders it per kind.
+        # r8 §5: a dataset reference renders as the parent's identifier
+        # node, under both dcterms:source and prov:wasDerivedFrom.
         self.assertEqual(self.out["dcterms:source"], [
-            {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/csac-clean"}])
+            {"@type": "dcat:Dataset",
+             "dcterms:identifier": ["rs2/csac/amber/1_interim/csac-clean"]}])
         self.assertEqual(self.out["prov:wasDerivedFrom"], self.out["dcterms:source"])
+        self.assertNotIn("prov:wasGeneratedBy", self.out)
 
     def test_locals_stay_in_crsw_namespace(self):
         self.assertEqual(self.out["crsw:strand"], "rs2")
@@ -124,6 +149,151 @@ class TestDcatShape(unittest.TestCase):
 
     def test_output_is_json_serialisable(self):
         json.dumps(self.out)
+
+
+FIXTURES = Path(__file__).resolve().parent / "data" / "records"
+
+# The r8 §2 worked example, verbatim.
+CDB90_ACTIVITY = {
+    "activity": "harmonise",
+    "description": "(CD)ISaW ingest script for cdb90 run unchanged against "
+                   "the Parquet shim instead of PostGIS; 18-column "
+                   "crws-nodes projection",
+    "tool": {"name": "cdisaw-parquet",
+             "repo": "https://github.com/kingsdigitallab/cdisaw-parquet",
+             "commit": "3f2a9c1e",
+             "command": "cdisaw-parquet sweep --source cdb90 && "
+                        "cdisaw-parquet project"},
+    "inputs": [{"kind": "external", "url": "https://github.com/jrnold/CDB90"}],
+    "outputs": ["wide/events/cdb90.parquet", "crws/events/cdb90.parquet"],
+    "agent": "k1078591",
+    "started": "2026-09-17T08:40:00Z",
+    "ended": "2026-09-17T08:59:10Z",
+}
+
+
+class TestProvenanceExport(unittest.TestCase):
+    """r8 step 2: derived_from references and provenance activities
+    render as DCAT + PROV nodes, terms from the mapping."""
+
+    def test_dataset_reference_lists_uuid_before_identifier(self):
+        rec = worked_example()
+        rec["derived_from"] = [{
+            "kind": "dataset",
+            "identifier": "rs2/csac/amber/1_interim/csac-clean",
+            "dataset_uuid": "0f8b6f1e-6a3e-4a6c-9b1d-2e7c3d4f5a6b",
+            "version": "2-1"}]
+        out = export_dcat.dcat_dataset(rec)
+        self.assertEqual(out["dcterms:source"], [{
+            "@type": "dcat:Dataset",
+            "dcterms:identifier": ["0f8b6f1e-6a3e-4a6c-9b1d-2e7c3d4f5a6b",
+                                   "rs2/csac/amber/1_interim/csac-clean"],
+            "crsw:version": "2-1"}])
+
+    def test_external_reference_by_url_and_by_citation(self):
+        rec = worked_example()
+        rec["derived_from"] = [
+            {"kind": "external", "url": "https://github.com/jrnold/CDB90",
+             "retrieved": "2026-09-17"},
+            {"kind": "external",
+             "citation": "Arnold, J. (2014). CDB90, reformatted."}]
+        out = export_dcat.dcat_dataset(rec)
+        self.assertEqual(out["dcterms:source"], [
+            {"@id": "https://github.com/jrnold/CDB90",
+             "crsw:retrieved": "2026-09-17"},
+            {"dcterms:bibliographicCitation":
+             "Arnold, J. (2014). CDB90, reformatted."}])
+        self.assertEqual(out["prov:wasDerivedFrom"], out["dcterms:source"])
+
+    def test_activity_graph(self):
+        rec = worked_example()
+        rec["files"] = [
+            record.manifest_entry("wide/events/cdb90.parquet", "ab" * 32, 1),
+            record.manifest_entry("crws/events/cdb90.parquet", "cd" * 32, 1)]
+        rec["provenance"] = [CDB90_ACTIVITY]
+        errors, _ = record.validate_record(rec, {"armed-conflict",
+                                                 "forced-labour"})
+        self.assertEqual(errors, [])
+        out = export_dcat.dcat_dataset(rec)
+        acts = out["prov:wasGeneratedBy"]
+        self.assertEqual(len(acts), 1)
+        act = acts[0]
+        self.assertEqual(act["@type"], "prov:Activity")
+        self.assertEqual(act["crsw:activityKind"], "harmonise")
+        self.assertIn("Parquet shim", act["dcterms:description"])
+        self.assertEqual(act["prov:wasAssociatedWith"], [
+            {"@type": "prov:SoftwareAgent",
+             "dcterms:title": "cdisaw-parquet",
+             "crsw:repo": "https://github.com/kingsdigitallab/cdisaw-parquet",
+             "crsw:commit": "3f2a9c1e",
+             "crsw:command": "cdisaw-parquet sweep --source cdb90 && "
+                             "cdisaw-parquet project"},
+            {"@type": "prov:Person", "dcterms:identifier": "k1078591"}])
+        self.assertEqual(act["prov:used"],
+                         [{"@id": "https://github.com/jrnold/CDB90"}])
+        self.assertEqual(act["prov:generated"], [
+            {"@type": "dcat:Distribution",
+             "dcat:downloadURL": "wide/events/cdb90.parquet"},
+            {"@type": "dcat:Distribution",
+             "dcat:downloadURL": "crws/events/cdb90.parquet"}])
+        self.assertEqual(act["prov:startedAtTime"], "2026-09-17T08:40:00Z")
+        self.assertEqual(act["prov:endedAtTime"], "2026-09-17T08:59:10Z")
+        # "activity" is local, so it must not leak in as a bare key.
+        self.assertNotIn("activity", act)
+        json.dumps(out)
+
+    def test_bare_path_input_renders_as_member(self):
+        rec = worked_example()
+        rec["provenance"] = [{"activity": "subset",
+                              "inputs": ["csac-clean-2025.csv"],
+                              "outputs": ["csac-annual-1989.csv"]}]
+        out = export_dcat.dcat_dataset(rec)
+        act = out["prov:wasGeneratedBy"][0]
+        self.assertEqual(act["prov:used"], [
+            {"@type": "dcat:Distribution",
+             "dcat:downloadURL": "csac-clean-2025.csv"}])
+        self.assertNotIn("prov:wasAssociatedWith", act)
+
+    def test_manual_activity_is_just_a_kind(self):
+        rec = worked_example()
+        rec["provenance"] = [{"activity": "manual"}]
+        out = export_dcat.dcat_dataset(rec)
+        self.assertEqual(out["prov:wasGeneratedBy"],
+                         [{"@type": "prov:Activity",
+                           "crsw:activityKind": "manual"}])
+
+    def test_cdb90_fixture_exports_as_dcat_and_prov(self):
+        # The step 2 checkpoint: the real 0.5 cdb90 record, upgraded on
+        # read, with the r8 §2 activity added, exports with its string
+        # derived_from rendered as an external source and the activity
+        # as a PROV graph. Round-trips through the command line too.
+        text = (FIXTURES / "dataset.cdb90.json").read_text(encoding="utf-8")
+        rec, upgraded = record.parse_record_with_status(text)
+        self.assertTrue(upgraded)
+        rec["provenance"] = [CDB90_ACTIVITY]
+        self.assertEqual(export_dcat.unmapped_fields(rec), [])
+        out = export_dcat.dcat_dataset(rec)
+        self.assertEqual(out["dcterms:source"],
+                         [{"@id": "https://github.com/jrnold/CDB90"}])
+        self.assertEqual(out["prov:wasGeneratedBy"][0]["prov:used"],
+                         out["dcterms:source"])
+        self.assertEqual(out["crsw:schemaVersion"], "0.6")
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "dataset.cdb90.json"
+            src.write_text(record.record_json(rec), encoding="utf-8")
+            dst = Path(d) / "out.json"
+            self.assertEqual(export_dcat.main([str(src), "-o", str(dst)]), 0)
+            again = json.loads(dst.read_text(encoding="utf-8"))
+        self.assertEqual(again, out)
+
+    def test_untouched_05_fixture_still_exports(self):
+        # No provenance at all: the upgraded string reference renders,
+        # nothing is invented (r8 §6).
+        text = (FIXTURES / "dataset.icews-conflict.json").read_text(
+            encoding="utf-8")
+        out = export_dcat.dcat_dataset(record.parse_record(text))
+        self.assertNotIn("prov:wasGeneratedBy", out)
+        self.assertEqual(len(out["dcterms:source"]), 1)
 
 
 class TestCli(unittest.TestCase):
