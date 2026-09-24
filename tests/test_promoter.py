@@ -41,6 +41,10 @@ CFG = dict(s3_endpoint="https://rgw.example", s3_access_key="t", s3_secret_key="
 DEST = "rs2/csac/green/0_raw/promo"
 
 
+def finish(lines):
+    return [l for l in lines if l["action"] == "finish"][-1]
+
+
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class PromoterBase(unittest.TestCase):
     def setUp(self):
@@ -286,22 +290,22 @@ class TestRun(PromoterBase):
             bad.user, bad.id, "rs2/csac/green/0_raw/promo-bad/one.csv"))
         code, lines = self.run_cli()
         self.assertEqual(code, 1)
-        finish = lines[-1]
-        self.assertEqual((finish["promoted"], finish["refused_or_failed"]), (1, 1))
+        fin = finish(lines)
+        self.assertEqual((fin["promoted"], fin["refused_or_failed"]), (1, 1))
         self.assertEqual(len(self.keys_under(DEST + "/")), 3)
         self.assertEqual(self.keys_under("staging/_test/k1078591/%s/" % good.id), [])
         self.assertEqual(len(self.keys_under("staging/_test/k1078591/%s/" % bad.id)), 3)
         # Second run: the bad one is refused again, nothing else to do.
         code, lines = self.run_cli()
-        self.assertEqual(lines[-1]["promoted"], 0)
-        self.assertEqual(lines[-1]["seen"], 1)
+        self.assertEqual(finish(lines)["promoted"], 0)
+        self.assertEqual(finish(lines)["seen"], 1)
 
     def test_filter_by_deposit(self):
         a = self.stage()
         b = self.stage(dataset="promo-b")
         code, lines = self.run_cli("--deposit", b.id)
         self.assertEqual(code, 0)
-        self.assertEqual(lines[-1]["seen"], 1)
+        self.assertEqual(finish(lines)["seen"], 1)
         self.assertEqual(len(self.keys_under("staging/_test/k1078591/%s/" % a.id)), 4)
 
     def test_config_error_exit_2(self):
@@ -402,8 +406,8 @@ class TestRecategorise(PromoterBase):
         k3, d3, _ = self.place("three", ["armed-conflict"])
         code, lines = self.run_cli("recategorise", self.evolved(), "--by", "k1078591")
         self.assertEqual(code, 0, lines)
-        finish = lines[-1]
-        self.assertEqual((finish["seen"], finish["rewritten"], finish["refused_or_failed"]),
+        fin = finish(lines)
+        self.assertEqual((fin["seen"], fin["rewritten"], fin["refused_or_failed"]),
                          (3, 2, 0))
         one = self.read(k1)
         self.assertEqual(one["subject"], ["forced-labour", "armed-conflict"])
@@ -424,7 +428,7 @@ class TestRecategorise(PromoterBase):
         # second run: nothing to do
         code, lines = self.run_cli("recategorise", self.evolved())
         self.assertEqual(code, 0)
-        self.assertEqual((lines[-1]["seen"], lines[-1]["rewritten"]), (3, 0))
+        self.assertEqual((finish(lines)["seen"], finish(lines)["rewritten"]), (3, 0))
 
     def test_split_gives_all_successors_with_review_entry(self):
         k, _, _ = self.place("s", ["survey", "armed-conflict"])
@@ -455,7 +459,7 @@ class TestRecategorise(PromoterBase):
         self.assertEqual(kinds, ["removed", "added", "domain_changed"])
         self.assertTrue(all(e["by"] == "k1078591" and e["reason"] == "steward review"
                             for e in out["category_history"]))
-        self.assertEqual(lines[-1]["rewritten"], 1)
+        self.assertEqual(finish(lines)["rewritten"], 1)
         planned = [l for l in lines if l["action"] == "recategorise_planned"]
         self.assertEqual(planned[0]["subject_before"], ["forced-labour", "survey-household"])
 
@@ -492,8 +496,8 @@ class TestRecategorise(PromoterBase):
         self.assertEqual(code, 0)
         planned = [l for l in lines if l["action"] == "recategorise_planned"]
         self.assertEqual(planned[0]["subject_after"], ["forced-labour"])
-        self.assertEqual(lines[-1]["would_rewrite"], 1)
-        self.assertEqual(lines[-1]["rewritten"], 0)
+        self.assertEqual(finish(lines)["would_rewrite"], 1)
+        self.assertEqual(finish(lines)["rewritten"], 0)
         self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), data)
 
     def test_only_one_dataset(self):
@@ -546,3 +550,142 @@ class TestLogStdout(unittest.TestCase):
         with redirect_stdout(out):
             Log("/dev/stdout").write("start")
         self.assertEqual(out.getvalue().count('"action": "start"'), 1)
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestAuditTrail(PromoterBase):
+    """Each run leaves one object in the bucket; `audit` and `datasets`
+    read the bucket back."""
+
+    ENV = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
+           "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",
+           "PROMOTER_STAGING_PREFIX": "staging/_test", "PROMOTER_LOG_PATH": ""}
+
+    def cli(self, argv, env=None):
+        with mock.patch.dict(os.environ, dict(self.ENV, **(env or {}))), \
+             mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
+             mock.patch("promoter.__main__.vocab.load_vocabulary",
+                        return_value=(VOCAB, "remote")), \
+             mock.patch("builtins.print") as printed:
+            code = cli.main(argv + ["--env-file", os.devnull])
+        out = [c.args[0] for c in printed.call_args_list if c.args]
+        return code, out
+
+    def audit_keys(self):
+        return self.keys_under("audit/")
+
+    def test_each_run_writes_one_object_named_by_its_run_id(self):
+        self.stage()
+        code, out = self.cli(["run"])
+        self.assertEqual(code, 0)
+        lines = [json.loads(o) for o in out]
+        start, last = lines[0], lines[-1]
+        run_id = start["run_id"]
+        self.assertRegex(run_id, r"^\d{8}T\d{12}Z-[0-9a-f]{4}$")
+        self.assertEqual(last["action"], "audit_written")
+        key = last["key"]
+        self.assertEqual(key, "audit/promoter/%s/%s/%s/%s.jsonl"
+                         % (run_id[:4], run_id[4:6], run_id[6:8], run_id))
+        self.assertEqual(self.audit_keys(), [key])
+        stored = self.s3.get_object(Bucket="crsw", Key=key)["Body"].read().decode()
+        stored_lines = [json.loads(l) for l in stored.splitlines()]
+        # Everything up to and including finish, and nothing after.
+        self.assertEqual(stored_lines, lines[:-1])
+        self.assertEqual(stored_lines[-1]["action"], "finish")
+        self.assertIn("promoted", [l["action"] for l in stored_lines])
+
+    def test_dry_run_and_recategorise_are_on_the_record_too(self):
+        self.stage()
+        self.cli(["run", "--dry-run"])
+        self.cli(["recategorise", "--dry-run"])
+        keys_ = self.audit_keys()
+        self.assertEqual(len(keys_), 2)
+        firsts = [json.loads(self.s3.get_object(Bucket="crsw", Key=k)["Body"]
+                             .read().decode().splitlines()[0]) for k in keys_]
+        self.assertTrue(all(f["dry_run"] for f in firsts))
+        self.assertEqual(sorted(f.get("command", "run") for f in firsts),
+                         ["recategorise", "run"])
+
+    def test_blank_prefix_disables_the_trail(self):
+        self.stage()
+        code, out = self.cli(["run"], env={"PROMOTER_AUDIT_PREFIX": ""})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.audit_keys(), [])
+        self.assertEqual(json.loads(out[-1])["action"], "finish")
+
+    def test_real_run_whose_trail_cannot_be_written_exits_2(self):
+        self.stage()
+        with mock.patch("promoter.audit.write_run", side_effect=OSError("bucket gone")):
+            code, out = self.cli(["run"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(out[-1])["action"], "audit_write_failed")
+        # ...but the promotion itself happened and is in the printed log.
+        self.assertIn("promoted", [json.loads(o)["action"] for o in out])
+        with mock.patch("promoter.audit.write_run", side_effect=OSError("bucket gone")):
+            code, out = self.cli(["run", "--dry-run"])
+        self.assertEqual(code, 0)      # a dry run is not made to fail by this
+
+    def test_audit_command_reads_runs_back_newest_first_with_filters(self):
+        a = self.stage()
+        b = self.stage(dataset="promo-b")
+        self.cli(["run", "--deposit", a.id])
+        self.cli(["run", "--deposit", b.id])
+        code, out = self.cli(["audit", "--json"])
+        self.assertEqual(code, 0)
+        entries = [json.loads(o) for o in out]
+        # newest run first, each run in order
+        runs = [e["run_id"] for e in entries if e["action"] == "start"]
+        self.assertEqual(runs, sorted(runs, reverse=True))
+        self.assertEqual(entries[0]["action"], "start")
+        self.assertEqual([e["deposit"] for e in entries if e["action"] == "promoted"],
+                         [b.id, a.id])
+        # filters
+        code, out = self.cli(["audit", "--json", "--dataset", "promo-b"])
+        promoted = [json.loads(o) for o in out if json.loads(o)["action"] == "promoted"]
+        self.assertEqual([e["deposit"] for e in promoted], [b.id])
+        code, out = self.cli(["audit", "--json", "--action", "promoted", "--user", "k1078591"])
+        self.assertEqual(len(out), 2)
+        code, out = self.cli(["audit", "--json", "--user", "nobody"])
+        self.assertEqual(out, [])
+        code, out = self.cli(["audit", "--runs", "1", "--json"])
+        self.assertEqual(len([o for o in out if '"start"' in o]), 1)
+        code, out = self.cli(["audit", "--since", "2099-01-01"])
+        self.assertEqual(out, ["(no matching audit lines)"])
+
+    def test_audit_lines_read_as_words(self):
+        dep = self.stage()
+        self.cli(["run"])
+        code, out = self.cli(["audit", "--action", "promoted"])
+        self.assertEqual(len(out), 1)
+        line = out[0]
+        self.assertIn("promoted", line)
+        self.assertIn(DEST, line)
+        self.assertIn("by k1078591", line)
+        self.assertIn("deposit " + dep.id, line)
+        code, out = self.cli(["audit", "--action", "checked"])
+        self.assertIn("bytes=", out[0])
+        self.assertIn(" B", out[0])       # human-readable size
+
+    def test_datasets_lists_records_in_place(self):
+        self.stage()
+        self.cli(["run"])
+        code, out = self.cli(["datasets", "--json"])
+        self.assertEqual(code, 0)
+        rows = [json.loads(o) for o in out]
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["prefix"], DEST)
+        self.assertEqual(r["identifier"], DEST)
+        self.assertEqual(r["depositor"], "k1078591")
+        self.assertEqual(r["files"], 2)
+        self.assertEqual(r["bytes"], 11)
+        self.assertEqual(r["schema_version"], "0.6")
+        self.assertRegex(r["dataset_uuid"], r"^[0-9a-f-]{36}$")
+        code, out = self.cli(["datasets"])
+        header, row = out[0].splitlines()
+        self.assertTrue(header.startswith("prefix"))
+        self.assertIn(DEST, row)
+        code, out = self.cli(["datasets", "--strand", "rs1"])
+        self.assertEqual(out, ["(nothing in place)"])
+        code, out = self.cli(["datasets", "--strand", "rs9"])
+        self.assertEqual(code, 2)

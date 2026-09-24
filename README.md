@@ -178,6 +178,12 @@ per-dataset changes through the promoter too, and vocabulary changes
 through the vocabulary repository's review process; the promoter never
 writes to that repository. See `docs/specs/DEPOSIT_TOOL_SPEC_R9.md`.
 
+Every promoter run leaves its log as one object in the bucket under
+`audit/promoter/`, so what was promoted, refused or rewritten, by whom
+and when, survives the VM. `python -m promoter audit` reads it back
+(filtered by dataset, user, date or action) and `python -m promoter
+datasets` lists every record in place. See the runbook, section 6.
+
 The vocabulary lives at
 [kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),
 which is public, so every tool fetches the current file at run time. To

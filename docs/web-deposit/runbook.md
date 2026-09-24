@@ -84,11 +84,12 @@ docker compose -f deploy/compose.yaml --profile internal build promoter
 docker compose -f deploy/compose.yaml --profile internal run --rm promoter python -m promoter run --dry-run --env-file /dev/null
 sudo cp deploy/promoter.service /etc/systemd/system/crsw-promoter.service   # WorkingDirectory=/opt/crsw-data-promoter
 sudo cp deploy/promoter.timer   /etc/systemd/system/crsw-promoter.timer
+sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald   # journal survives reboots
 sudo systemctl daemon-reload && sudo systemctl enable --now crsw-promoter.timer
 journalctl -u crsw-promoter.service -f        # one JSON line per action
 ```
 
-The unit's `WorkingDirectory` must be the checkout; edit the copied unit if it is anywhere other than `/opt/crsw-data-promoter`. The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
+The unit's `WorkingDirectory` must be the checkout; edit the copied unit if it is anywhere other than `/opt/crsw-data-promoter`. The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons. Exit code 2 on a real run means the run's audit object could not be written (section 6): the promotion happened, the journal has the lines, and the bucket needs looking at.
 
 ### Interim: promoter from a laptop
 
@@ -184,3 +185,55 @@ an unusable change file.
 **Deferred**: a form in the web service for stewards to file a change
 request into `staging/` for the promoter to pick up (r9 §1.4 B). Not
 built; the change file is the route until a steward asks.
+
+## 6. Audit: what has happened, and what is in place
+
+Every promoter run (`run` and `recategorise`, dry runs included) ends by
+writing its log lines as one object in the bucket:
+`audit/promoter/YYYY/MM/DD/<run-id>.jsonl`, the run id being the UTC
+time the run started. The bucket is versioned and the promoter never
+rewrites an audit object, so this is the durable trail; the VM's
+journal is a convenience copy that dies with the VM. `PROMOTER_AUDIT_PREFIX`
+moves it; blank disables it (not for production).
+
+Read it back from anywhere the promoter key is (the internal VM's
+container, or a laptop checkout):
+
+```
+cd /opt/crsw-data-promoter
+P="docker compose -f deploy/compose.yaml --profile internal run --rm promoter python -m promoter"
+$P audit --env-file /dev/null                          # the newest ten runs, one line per action
+$P audit --since 2026-09-01 --action promoted --env-file /dev/null
+$P audit --dataset rs1/test/green/0_raw/test --env-file /dev/null   # or a dataset name or uuid
+$P audit --user k1078591 --json --env-file /dev/null   # raw JSON lines for piping
+$P datasets --env-file /dev/null                       # every record in place: depositor, created, modified, files, bytes
+$P datasets --strand rs2 --json --env-file /dev/null
+```
+
+From a laptop drop the `docker compose ...` prefix and the `--env-file`
+flag: `.venv/Scripts/python -m promoter audit --since 2026-09-01`.
+
+Questions and where the answer is:
+
+- *What happened to deposit X, and when?* `audit --dataset <name>`: its
+  `checked` line (problems, warnings, size), then `promoted` with the
+  dataset UUID, or `promotion_failed` with the error. The `start` line
+  of that run names the vocabulary version used.
+- *Who deposited what, this month?* `audit --since <date> --action
+  promoted`.
+- *Which records were rewritten when the vocabulary changed?*
+  `audit --action record_rewritten`; the record's own
+  `category_history` says what changed and why.
+- *What is in the store now?* `datasets`. It reads the bucket, so it is
+  always current; there is no register to keep in step.
+- *Who created a deposit, or uploaded a file, before promotion?* The
+  web VM's container log (`docker compose logs deposit-web`), rotated at
+  50 MB. The promoter's `checked` line carries the depositor and the
+  deposit id, which is enough for most questions.
+
+Not built, recorded for the pilot: a read-only administrator page in the
+web service showing the same two views. It needs the web VM's key
+widened by eResearch to read `audit/` and the dataset prefixes (the same
+read-scoped key the deferred data-egress path needs), and an
+administrator group on the proxy. Until then the trail is read from the
+command line as above.

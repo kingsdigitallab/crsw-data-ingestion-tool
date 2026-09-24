@@ -26,6 +26,8 @@ class PromoterConfig:
     max_deposit_bytes: Optional[int] = None
     authorised: Authorised = "*"
     log_path: str = "promoter.log"
+    # Where each run's log lines are kept in the bucket; blank disables.
+    audit_prefix: str = "audit/promoter"
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
@@ -70,6 +72,7 @@ class PromoterConfig:
             max_deposit_bytes=opt_int("MAX_DEPOSIT_BYTES"),
             authorised=authorised,
             log_path=(env.get(ENV_PREFIX + "LOG_PATH") or "promoter.log").strip(),
+            audit_prefix=env.get(ENV_PREFIX + "AUDIT_PREFIX", "audit/promoter").strip().strip("/"),
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:
