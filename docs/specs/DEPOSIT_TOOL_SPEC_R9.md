@@ -255,7 +255,7 @@ Stop at each and wait for review.
   split and retire map a subject list as decided and mapping twice is a
   no-op; a record with history validates and exports; `--dry-run`
   output unchanged.*
-- **B. Vocabulary command line**: `crsw-vocab validate | add | rename |
+- **B. Vocabulary command line** (*built*): `crsw-vocab validate | add | rename |
   merge | split | retire | move | tree`.
 - **C. Promoter**: dataset listing, `recategorise` (dry-run, change file,
   logging), stale-term mapping at promotion time.

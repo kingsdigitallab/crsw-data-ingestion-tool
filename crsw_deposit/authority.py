@@ -15,6 +15,7 @@ behaves exactly as if the hierarchy did not exist.
 """
 import copy
 import datetime
+import json
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -469,3 +470,33 @@ def map_subjects(subjects: List[str], doc: dict) -> Tuple[List[str], List[dict]]
                     else MAPPED_REPLACED if successors else MAPPED_REMOVED)
             substitute([slug], successors, kind, t.get("until"))
     return current, applied
+
+
+# --- writing -----------------------------------------------------------
+
+def dump_authority(doc: dict) -> str:
+    """The file as text, one term, one change, one domain per line, so
+    a change shows as a small diff in review. `facets` is regenerated."""
+    doc = normalise(doc)
+
+    def block(key, items):
+        items = list(items)
+        if not items:
+            return ['  "%s": [],' % key]
+        return ['  "%s": [' % key] + [
+            "    %s%s" % (json.dumps(item, ensure_ascii=False),
+                          "," if i < len(items) - 1 else "")
+            for i, item in enumerate(items)] + ["  ],"]
+
+    lines = ["{", '  "vocabulary_version": %s,' % json.dumps(doc["vocabulary_version"])]
+    for key in ("domains", "activities"):
+        if key in doc:
+            lines += block(key, doc[key])
+    lines += block("terms", doc["terms"])
+    lines += block("changes", doc.get("changes") or [])
+    facets = list(doc["facets"].items())
+    lines += ['  "facets": {'] + [
+        '    %s: %s%s' % (json.dumps(name), json.dumps(slugs),
+                          "," if i < len(facets) - 1 else "")
+        for i, (name, slugs) in enumerate(facets)] + ["  }", "}", ""]
+    return "\n".join(lines)

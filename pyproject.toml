@@ -11,6 +11,9 @@ requires-python = ">=3.8"
 # checkout on stdlib alone. Everything below is opt-in.
 dependencies = []
 
+[project.scripts]
+crsw-vocab = "crsw_deposit.vocab_cli:main"
+
 [project.optional-dependencies]
 web = [
     "fastapi>=0.115",
