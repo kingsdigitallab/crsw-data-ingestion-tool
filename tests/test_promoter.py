@@ -535,3 +535,14 @@ class TestRecategorise(PromoterBase):
         self.assertFalse(any(l["action"] == "stale_terms_mapped" for l in lines))
         rec = self.read(DEST + "/dataset.promo.json")
         self.assertNotIn("category_history", rec)
+
+
+class TestLogStdout(unittest.TestCase):
+    def test_stdout_path_prints_each_line_once(self):
+        import io
+        from contextlib import redirect_stdout
+        from promoter.log import Log
+        out = io.StringIO()
+        with redirect_stdout(out):
+            Log("/dev/stdout").write("start")
+        self.assertEqual(out.getvalue().count('"action": "start"'), 1)

@@ -9,7 +9,13 @@ from crsw_deposit import record
 
 
 class Log:
+    STDOUT_PATHS = ("/dev/stdout", "-")
+
     def __init__(self, path: Optional[str], echo=True):
+        # A stdout path (the container's setting) means stdout only,
+        # otherwise every line would be printed twice.
+        if path in self.STDOUT_PATHS:
+            path, echo = None, True
         self.path = path
         self.echo = echo
         self.lines = []      # kept in memory too, for tests and the summary
