@@ -14,3 +14,4 @@ scratch/
 .claude/settings.local.json
 .env.promoter
 promoter.log
+*.egg-info/
