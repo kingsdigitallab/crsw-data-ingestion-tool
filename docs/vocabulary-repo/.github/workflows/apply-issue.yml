@@ -31,7 +31,7 @@ jobs:
           ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: python scripts/apply_issue.py >> "$GITHUB_OUTPUT"
+        run: python scripts/apply_issue.py
       - name: Report a refusal on the issue
         if: failure()
         env:

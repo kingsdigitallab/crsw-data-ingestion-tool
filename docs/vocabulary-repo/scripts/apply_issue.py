@@ -107,7 +107,11 @@ def main() -> int:
     code = vocab_cli.main(["--file", "vocab.json"] + argv + common)
     if code != 0:
         return code
-    print("title=vocabulary: %s" % title)
+    out_path = os.environ.get("GITHUB_OUTPUT")
+    if out_path:
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write("title=vocabulary: %s\n" % title)
+    print("title: vocabulary: %s" % title)
     return 0
 
 
