@@ -16,11 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import crsw_deposit
-from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
+from crsw_deposit import authority, deposit_logic, keys, labels as labels_mod, noise, record, vocab
 from . import s3
 from .auth import User, make_authenticator, peer_address
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
+from .vocabulary import VocabularyCache
 from .metadata import SOURCE_TYPES, validate_meta
 from . import quota
 from .upload import TooLarge, stream_to_s3
@@ -60,26 +61,39 @@ def create_app(settings: Optional[Settings] = None,
     if vocab_dict is None:
         # fetch -> cache -> bundled. The cache write is best-effort, so a
         # read-only container root just means the bundled copy is used.
-        vocab_dict, _source = vocab.load_vocabulary()
+        # While running, the cache re-fetches every
+        # CRSW_VOCAB_REFRESH_SECONDS so a merged vocabulary change reaches
+        # the form without a restart.
+        loaded, source = vocab.load_vocabulary()
+        vocab_cache = VocabularyCache(loaded, source,
+                                      refresh_seconds=settings.vocab_refresh_seconds)
+    else:
+        # Injected (tests): held as given, never refreshed.
+        vocab_cache = VocabularyCache(vocab_dict, "injected", refresh_seconds=0)
     store = DepositStore(client, settings.s3_bucket, settings.staging_prefix)
-    vocab_terms = vocab.all_terms(vocab_dict)
-    domain_codes = vocab.domain_codes(vocab_dict)
 
     app = FastAPI(title="CRSW web deposit", version=crsw_deposit.__version__,
                   docs_url=None, redoc_url=None)
     app.state.settings = settings
-    app.state.vocab = vocab_dict
+    app.state.vocab_cache = vocab_cache
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
 
     # --- Phase 3: the browser form ----------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, user: User = Depends(current_user)):
+        vocab_dict = vocab_cache.current()
+        facets = vocab.facets(vocab_dict)
         return templates.TemplateResponse(request, "index.html", {
             "user": user,
             "strands": keys.STRANDS,
             "domains": vocab.domains(vocab_dict),
-            "facets": vocab_dict.get("facets", {}),
+            "facets": facets,
+            # r9 §1.8: narrower terms sit indented under their broader term
+            "facet_tree": {name: authority.tree(vocab_dict, name)
+                           if authority.is_authority(vocab_dict)
+                           else [(t, 0) for t in terms]
+                           for name, terms in facets.items()},
             "vocabulary_version": vocab_dict.get("vocabulary_version"),
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
             "rules": client_rules(),
@@ -160,8 +174,11 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/vocabulary")
     def vocabulary():
+        vocab_dict = vocab_cache.current()
         return {"vocabulary_version": vocab_dict.get("vocabulary_version"),
-                "facets": vocab_dict.get("facets", {}),
+                "vocabulary_source": vocab_cache.source,
+                "vocabulary_loaded": vocab_cache.loaded,
+                "facets": vocab.facets(vocab_dict),
                 "domains": vocab.domains(vocab_dict),
                 "strands": list(keys.STRANDS), "states": list(keys.STATES),
                 "sensitivities": list(keys.SENSITIVITIES)}
@@ -169,7 +186,7 @@ def create_app(settings: Optional[Settings] = None,
     # --- Phase 2: the deposit API -----------------------------------------
     @app.post("/deposits", status_code=201)
     def create_deposit(form: Dict, user: User = Depends(current_user)):
-        meta, errors, warnings = validate_meta(form, vocab_dict)
+        meta, errors, warnings = validate_meta(form, vocab_cache.current())
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})
@@ -319,7 +336,8 @@ def create_app(settings: Optional[Settings] = None,
         rec, union, _added, _updated = deposit_logic.assemble_record(
             dep.meta, None, dep.entries, dep.user, record.utc_now_iso(),
             dep.dataset_uuid)
-        errors, warnings = record.validate_record(rec, vocab_terms, domain_codes)
+        errors, warnings = record.validate_record(rec, vocab_cache.terms,
+                                                  vocab_cache.domain_codes)
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})

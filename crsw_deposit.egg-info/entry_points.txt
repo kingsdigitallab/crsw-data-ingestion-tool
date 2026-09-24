@@ -1,0 +1,2 @@
+[console_scripts]
+crsw-vocab = crsw_deposit.vocab_cli:main

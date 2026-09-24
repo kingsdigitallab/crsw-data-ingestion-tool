@@ -103,7 +103,7 @@
         {% for facet, terms in facets.items() %}
         <div class="facet">
           <h3>{{ facet }}</h3>
-          {% for t in terms %}<label><input type="checkbox" name="subject" value="{{ t }}"> {{ t }}</label>{% endfor %}
+          {% for t, depth in facet_tree[facet] %}<label class="depth-{{ depth }}"><input type="checkbox" name="subject" value="{{ t }}"> {{ t }}</label>{% endfor %}
         </div>
         {% endfor %}
       </div>

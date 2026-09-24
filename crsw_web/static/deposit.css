@@ -69,6 +69,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 
 .facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem 1.5rem; }
 .facet label { display: block; }
+.facet label.depth-1 { padding-left: 1.25rem; }
+.facet label.depth-2 { padding-left: 2.5rem; }
+.facet label.depth-3 { padding-left: 3.75rem; }
 
 .pickers { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-bottom: .75rem; }
 .picker { display: inline-block; padding: .5rem .9rem; border: 1px solid var(--action); color: var(--action); border-radius: 3px; cursor: pointer; }

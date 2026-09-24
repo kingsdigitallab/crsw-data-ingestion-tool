@@ -46,6 +46,9 @@ class Settings:
     user_quota_bytes: Optional[int] = None
     user_max_open_deposits: int = 5
     max_members_per_deposit: int = 10000
+    # how often the running service re-fetches the vocabulary; 0 = only
+    # at start-up
+    vocab_refresh_seconds: int = 600
 
     def trusted_proxy_networks(self):
         return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
@@ -108,6 +111,7 @@ class Settings:
             s3_bucket=get("S3_BUCKET"),
             staging_prefix=prefix,
             auth_mode=auth_mode,
+            vocab_refresh_seconds=opt_int("VOCAB_REFRESH_SECONDS", 600),
             dev_user=get("DEV_USER", "k1078591"),
             max_body_bytes=opt_int("MAX_BODY_BYTES", cls.max_body_bytes),
             proxy_user_header=user_header,
