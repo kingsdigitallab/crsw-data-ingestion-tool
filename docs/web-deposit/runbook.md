@@ -108,6 +108,11 @@ that rewrites a record, and it only ever rewrites the record: files,
 labels, keys and the UUID never change. Every rewrite is a new object
 version in the bucket and a `record_rewritten` line in the log.
 
+The vocabulary is fetched live from the public repo
+[kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary)
+on every promoter run (the `start` log line names the source and
+version). Changes to it go through that repo's issue forms and review.
+
 Two sources of change:
 
 - **The vocabulary's own changes** (a term renamed, merged, split or

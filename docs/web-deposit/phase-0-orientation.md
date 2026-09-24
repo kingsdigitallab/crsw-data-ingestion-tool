@@ -44,6 +44,8 @@ The tool was written with this gateway in mind. `keys.py`, `record.py` and `voca
 
 ### Vocabulary: `vocab.py` (imports cleanly, no user I/O)
 
+> Update, 24 Sept 2026: the vocabulary repo now exists, public, at `kingsdigitallab/crsw-vocabulary`, and `VOCAB_URL` points at it; the file is the r9 term authority file. The remarks below about a repo "still to be created" are historical.
+
 `load_vocabulary()` tries GitHub, then a cache dir, then the bundled `vocab.json`, returning `(dict, source)`. `all_terms`, `domains`, `domain_codes` read it. Two service considerations:
 
 - `cache_dir()` picks `%LOCALAPPDATA%` or `~/.cache`. Fine in a container, but the service should pass an explicit cache path.

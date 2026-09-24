@@ -98,22 +98,20 @@ before writing and refuses anything the rules forbid.
 
 ## Repository settings that are not files
 
-Set once, by an organisation owner, after creating the repository:
+Set on 24 September 2026; listed so they can be checked or redone:
 
-1. **Branch protection on `main`** (Settings, Branches): require a pull
-   request before merging; require 1 approval; dismiss stale approvals;
-   require review from Code Owners; require the `validate` status check;
-   do not allow bypassing. On a private repository this needs a GitHub
-   plan that offers branch protection for private repositories; until
-   then, rely on the review convention and the check.
-2. **Actions permissions** (Settings, Actions, General): "Allow GitHub
-   Actions to create and approve pull requests" must be on, or the
-   apply-issue workflow cannot open the pull request.
-3. **Repository variable `TOOL_REF`** (Settings, Secrets and variables,
-   Actions, Variables): the tag or branch of crsw-data-ingestion-tool the
-   workflows install. Default `main`; pin to a release tag once one exists.
-4. **Visibility**: private to begin with. While private, the deposit
-   tool cannot fetch the file anonymously and falls back to the copy
-   bundled in its release, so a new term reaches researchers only with
-   the next tool release. Making the repository public (or giving the
-   tools a read token) is what makes changes live immediately.
+1. **Branch protection on `main`**: a pull request is required; 1
+   approval; stale approvals dismissed; review from Code Owners
+   required; the `validate` check required. Administrators are not
+   exempt from the review rule by convention, though the setting allows
+   it.
+2. **Actions permissions**: "Allow GitHub Actions to create and approve
+   pull requests" is on; the apply-issue workflow needs it.
+3. **Repository variable `TOOL_REF`** (optional): the tag or branch of
+   crsw-data-ingestion-tool the workflows install. Unset means `main`;
+   pin to a release tag once one exists.
+4. **Visibility: public.** The tools fetch the file anonymously at run
+   time, so a merged change is live on the next deposit anywhere. If the
+   repository is ever made private again, every tool silently falls
+   back to the copy bundled in its release, and branch protection is
+   lost on the free plan.

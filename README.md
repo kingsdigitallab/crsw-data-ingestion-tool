@@ -178,11 +178,49 @@ per-dataset changes through the promoter too, and vocabulary changes
 through the vocabulary repository's review process; the promoter never
 writes to that repository. See `docs/specs/DEPOSIT_TOOL_SPEC_R9.md`.
 
+The vocabulary lives at
+[kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),
+which is public, so every tool fetches the current file at run time. To
+propose a change, open an issue there and pick the form for it (add,
+rename, merge, split, retire, move); the form becomes a pull request for
+a steward to approve. The same edits can be made from a laptop with
+`crsw-vocab` (installed with `pip install -e .` from this repository):
+
+```
+crsw-vocab --file vocab.json validate
+crsw-vocab --file vocab.json merge debt-bondage --into forced-labour --note "issue #12"
+```
+
 ## Output
 
 Colour is used sparingly (warnings yellow, errors red, success green) and
 never as the only signal. Set `NO_COLOR=1` to disable it, `FORCE_COLOR=1`
 to force it on; piped or redirected output is always plain.
+
+## The dataset record
+
+Every dataset prefix holds one `dataset.<name>.json`: the description
+and the files manifest in a single document, written last so its
+presence marks a complete deposit. The current schema is **0.6**
+(`dataset.schema.json`). Records written as 0.5 are still read; the
+tool upgrades them on the way in and writes them back as 0.6, so nobody
+converts a record by hand. Beyond the descriptive fields and the
+manifest, a record may carry:
+
+- `derived_from` — a list of references to what this dataset was made
+  from: another Centre dataset (by its five-part identifier and, once
+  known, its UUID) or something outside the store (a URL or a citation).
+- `provenance` — a list of the activities that produced it, oldest
+  first: the kind of step (convert, clean, harmonise, …), the tool with
+  its repository and commit, inputs, outputs, who ran it and when. The
+  tool writes only what it is told; it never infers provenance.
+- `category_history` — what has changed in the dataset's subject terms
+  or domain since deposit, and by whom (a steward, or the vocabulary
+  itself when a term was renamed, merged, split or retired).
+
+`export_dcat.py` renders a record as a DCAT dataset description with the
+derivation and activities expressed in W3C PROV terms, using
+`crsw-dc-mapping.json` as the single source of every term.
 
 ## Deposit log
 
@@ -240,6 +278,9 @@ document — and `export_dcat.py` renders it into a DCAT (JSON-LD) dataset
 description, doubling as the proof that every schema field is mapped or
 explicitly marked local.
 
-The build spec is `DEPOSIT_TOOL_SPEC.md`, revised by `DEPOSIT_TOOL_SPEC_r2.md`
-(r2 supersedes where it speaks). Module boundaries and constraints are
-documented there and in `CLAUDE.md`.
+The build spec is `docs/specs/DEPOSIT_TOOL_SPEC.md`, revised by
+`DEPOSIT_TOOL_SPEC_R2.md` to `_R9.md` (a later revision supersedes an
+earlier one where it speaks; r8 is provenance, r9 is categories that
+change after deposit). Module boundaries and constraints are documented
+there and in `CLAUDE.md`. `python -m pytest` runs the same tests plus the
+web service and promoter tests after `pip install -e ".[web,dev]"`.
