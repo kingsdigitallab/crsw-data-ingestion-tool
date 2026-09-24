@@ -1461,7 +1461,11 @@ class TestHierarchyListing(unittest.TestCase):
         self.assertEqual(deposit.subject_listing_lines(entries, 80),
                          deposit.subject_listing_lines(entries, 80,
                                                        deposit.subject_depths(v)))
-        bundled = deposit.vocab.load_vocabulary(opener=lambda u, t: (_ for _ in ()).throw(OSError()))[0]
+        # An empty cache dir, so the machine's real cache (which may hold
+        # a vocabulary with children) cannot leak in.
+        with tempfile.TemporaryDirectory() as d:
+            bundled = deposit.vocab.load_vocabulary(
+                cache=Path(d), opener=lambda u, t: (_ for _ in ()).throw(OSError()))[0]
         self.assertTrue(all(d == 0 for d in deposit.subject_depths(bundled).values()))
 
     def test_child_is_indented_and_numbered_in_order(self):
