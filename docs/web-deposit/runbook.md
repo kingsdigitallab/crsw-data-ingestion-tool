@@ -73,13 +73,13 @@ cp .env.promoter.example .env.promoter     # fill in the promoter key; set PROMO
 chmod 600 .env.promoter
 docker compose -f deploy/compose.yaml --profile internal build promoter
 docker compose -f deploy/compose.yaml --profile internal run --rm promoter python -m promoter run --dry-run --env-file /dev/null
-sudo cp deploy/promoter.service /etc/systemd/system/crsw-promoter.service
+sed "s#/opt/crsw-deposit#$PWD#" deploy/promoter.service | sudo tee /etc/systemd/system/crsw-promoter.service >/dev/null
 sudo cp deploy/promoter.timer   /etc/systemd/system/crsw-promoter.timer
 sudo systemctl daemon-reload && sudo systemctl enable --now crsw-promoter.timer
 journalctl -u crsw-promoter.service -f        # one JSON line per action
 ```
 
-The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
+The unit's `WorkingDirectory` must be the checkout (the `sed` above sets it; `/opt/crsw-deposit` is only the example path, a checkout under a home directory such as `~/repos/crsw-deposit` is fine). The timer runs every five minutes with a lock, so runs never overlap. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons.
 
 ### Interim: promoter from a laptop
 

@@ -1,6 +1,8 @@
 # /etc/systemd/system/crsw-promoter.service  (internal VM only)
 # One promoter run. Triggered by crsw-promoter.timer; never enabled on
-# its own. The compose file and .env.promoter live in /opt/crsw-deposit.
+# its own. WorkingDirectory is the checkout holding the compose file and
+# .env.promoter; /opt/crsw-deposit is an example, replace it with the real
+# path when installing (the runbook's sed does this).
 [Unit]
 Description=CRSW deposit promoter (one run)
 After=docker.service
