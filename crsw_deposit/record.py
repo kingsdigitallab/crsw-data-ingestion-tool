@@ -31,8 +31,8 @@ RECOMMENDED_FIELDS = (
     "vocabulary_version", "creator", "source_type", "source_detail",
     "license", "steward", "depositors",
 )
-OPTIONAL_FIELDS = ("derived_from", "provenance", "language", "ethics_ref",
-                   "spatial", "notes")
+OPTIONAL_FIELDS = ("derived_from", "provenance", "category_history",
+                   "language", "ethics_ref", "spatial", "notes")
 
 MANIFEST_REQUIRED = ("path", "checksum_sha256", "bytes")
 MANIFEST_OPTIONAL = ("temporal", "format", "derived_from", "notes")
@@ -44,6 +44,13 @@ REFERENCE_KINDS = ("dataset", "external")
 ACTIVITY_KINDS = ("convert", "clean", "harmonise", "aggregate", "geocode",
                   "anonymise", "merge", "subset", "manual", "other")
 _URL_SCHEMES = ("http", "https")
+
+# r9: what a category_history entry can say happened to a record's
+# subject terms or domain after deposit. `by` is a username, or
+# "vocabulary" when a vocabulary change was applied mechanically.
+HISTORY_KINDS = ("added", "removed", "replaced", "split_review",
+                 "domain_changed")
+VOCABULARY_ACTOR = "vocabulary"
 
 _VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -395,6 +402,169 @@ def validate_activity(act, label: str, manifest_paths: Set[str],
     return errors, warnings
 
 
+# --- category history (r9) ---------------------------------------------
+
+class RecordChangeError(ValueError):
+    """A category change that cannot be applied to a record."""
+
+
+def validate_history_entry(entry, label: str) -> List[str]:
+    """Errors for one category_history entry; `label` names it."""
+    errors = []
+    if not isinstance(entry, dict):
+        return ["%s is not an object" % label]
+    when = entry.get("when")
+    if not (isinstance(when, str) and _TIMESTAMP_RE.match(when)):
+        errors.append("%s: when %r is not a UTC timestamp like "
+                      "2026-09-24T10:00:00Z" % (label, when))
+    if not isinstance(entry.get("by"), str) or not entry["by"].strip():
+        errors.append("%s: by (who changed it) is missing" % label)
+    kind = entry.get("kind")
+    if kind not in HISTORY_KINDS:
+        errors.append("%s: kind %r is not one of %s"
+                      % (label, kind, "/".join(HISTORY_KINDS)))
+        return errors
+    for field in ("from", "to"):
+        value = entry.get(field)
+        if value is not None and not (isinstance(value, list)
+                                      and all(isinstance(s, str) for s in value)):
+            errors.append("%s: %s must be a list of strings" % (label, field))
+    needs_from = kind in ("removed", "replaced", "split_review", "domain_changed")
+    needs_to = kind in ("added", "replaced", "split_review", "domain_changed")
+    if needs_from and not entry.get("from"):
+        errors.append("%s: %s needs from" % (label, kind))
+    if needs_to and not entry.get("to"):
+        errors.append("%s: %s needs to" % (label, kind))
+    for field in ("reason", "vocabulary_version"):
+        if field in entry and not isinstance(entry[field], str):
+            errors.append("%s: %s must be a string" % (label, field))
+    return errors
+
+
+def history_entry(when: str, by: str, kind: str, frm=None, to=None,
+                  reason: Optional[str] = None,
+                  vocabulary_version: Optional[str] = None) -> dict:
+    entry = {"when": when, "by": by, "kind": kind}
+    if frm:
+        entry["from"] = list(frm)
+    if to:
+        entry["to"] = list(to)
+    if reason:
+        entry["reason"] = reason
+    if vocabulary_version:
+        entry["vocabulary_version"] = vocabulary_version
+    return entry
+
+
+def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
+                         vocab_terms: Set[str],
+                         domain_codes: Optional[List[str]] = None,
+                         vocabulary_version: Optional[str] = None
+                         ) -> Tuple[dict, List[dict]]:
+    """One steward decision about one dataset (r9 §4): `change` may
+    carry `add` and `remove` (subject terms), `set_domain` and `reason`.
+    Returns (new record, the history entries appended). Unknown terms,
+    unknown domains, removing a term the record does not have, or
+    leaving no subject at all raise RecordChangeError; the input record
+    is untouched. `modified` moves to `now`; `vocabulary_version` is
+    stamped when given. A change that changes nothing returns the record
+    as it was and no entries."""
+    add = [s for s in (change.get("add") or [])]
+    remove = [s for s in (change.get("remove") or [])]
+    domain = change.get("set_domain")
+    reason = change.get("reason") or None
+    unknown = unknown_subjects(add, vocab_terms)
+    if unknown:
+        raise RecordChangeError("not in the vocabulary: %s" % ", ".join(unknown))
+    subjects = list(rec.get("subject") or [])
+    missing = [s for s in remove if s not in subjects]
+    if missing:
+        raise RecordChangeError("not on this record, so cannot be removed: %s"
+                                % ", ".join(missing))
+    if domain is not None:
+        codes = list(domain_codes) if domain_codes else list(keys.DOMAINS)
+        if domain not in codes:
+            raise RecordChangeError("domain %r is not one of %s"
+                                    % (domain, "/".join(codes)))
+    new_subjects = [s for s in subjects if s not in remove]
+    for s in add:
+        if s not in new_subjects:
+            new_subjects.append(s)
+    if not new_subjects:
+        raise RecordChangeError("a dataset must keep at least one subject term")
+
+    entries = []
+    really_removed = [s for s in remove if s in subjects]
+    really_added = [s for s in add if s not in subjects]
+    if really_removed:
+        entries.append(history_entry(now, who, "removed", frm=really_removed,
+                                     reason=reason,
+                                     vocabulary_version=vocabulary_version))
+    if really_added:
+        entries.append(history_entry(now, who, "added", to=really_added,
+                                     reason=reason,
+                                     vocabulary_version=vocabulary_version))
+    if domain is not None and domain != rec.get("domain"):
+        entries.append(history_entry(now, who, "domain_changed",
+                                     frm=[rec.get("domain")], to=[domain],
+                                     reason=reason,
+                                     vocabulary_version=vocabulary_version))
+    if not entries:
+        return rec, []
+    out = dict(rec)
+    out["subject"] = new_subjects
+    if domain is not None:
+        out["domain"] = domain
+    out["modified"] = now
+    if vocabulary_version:
+        out["vocabulary_version"] = vocabulary_version
+    out["category_history"] = list(rec.get("category_history") or []) + entries
+    return _in_field_order(out), entries
+
+
+def apply_vocabulary_mapping(rec: dict, vocab_doc: dict, now: str
+                             ) -> Tuple[dict, List[dict]]:
+    """The record with its subjects brought up to the vocabulary's
+    current terms (r9 §2 and §3), recorded as history entries by the
+    actor "vocabulary". A record whose terms are all current comes back
+    as it was, with no entries, so this is safe to run on every record
+    on every run."""
+    from . import authority  # local import: authority is record-free
+    subjects, applied = authority.map_subjects(
+        list(rec.get("subject") or []), vocab_doc)
+    if not applied:
+        return rec, []
+    version = vocab_doc.get("vocabulary_version")
+    entries = [history_entry(now, VOCABULARY_ACTOR, a["kind"],
+                             frm=a.get("from"), to=a.get("to"),
+                             reason="vocabulary change dated %s" % a.get("date"),
+                             vocabulary_version=version)
+               for a in applied]
+    out = dict(rec)
+    out["subject"] = subjects
+    out["modified"] = now
+    if version:
+        out["vocabulary_version"] = version
+    out["category_history"] = list(rec.get("category_history") or []) + entries
+    return _in_field_order(out), entries
+
+
+def _in_field_order(rec: dict) -> dict:
+    """The record's keys in build_record order, so a rewritten record
+    diffs cleanly against the original."""
+    order = ["schema_version", "dataset_uuid", "identifier", "strand",
+             "project", "dataset", "sensitivity", "state", "domain",
+             "version", "abstract", "subject", "vocabulary_version",
+             "temporal", "creator", "source_type", "source_detail",
+             "license", "steward", "depositors", "created", "modified"
+             ] + list(OPTIONAL_FIELDS) + ["files"]
+    out = {k: rec[k] for k in order if k in rec}
+    for k in rec:
+        if k not in out:
+            out[k] = rec[k]
+    return out
+
+
 def upgrade_record(rec: dict) -> Tuple[dict, bool]:
     """Bring a record read from storage up to SCHEMA_VERSION in place.
     Returns (record, upgraded). A current record is returned untouched,
@@ -426,8 +596,9 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
                  subject, files, created, modified, vocabulary_version=None,
                  creator=None, source_type=None, source_detail=None,
                  license=None, steward=None, depositors=None,
-                 derived_from=None, provenance=None, language=None,
-                 ethics_ref=None, spatial=None, notes=None) -> dict:
+                 derived_from=None, provenance=None, category_history=None,
+                 language=None, ethics_ref=None, spatial=None,
+                 notes=None) -> dict:
     """Assemble the dataset record in field order.
     Recommended/optional fields that are None or empty are omitted.
     `temporal` is the nested {"start", "end"} object; `subject` and
@@ -460,6 +631,7 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
     rec["modified"] = modified
     for name, value in (
             ("derived_from", derived_from), ("provenance", provenance),
+            ("category_history", category_history),
             ("language", language), ("ethics_ref", ethics_ref),
             ("spatial", spatial), ("notes", notes)):
         if value:
@@ -622,6 +794,14 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                     act, "provenance[%d]" % (i + 1), seen_paths, activity_codes)
                 errors.extend(act_errors)
                 warnings.extend(act_warnings)
+    # r9: category history entries.
+    if "category_history" in rec:
+        if not isinstance(rec["category_history"], list):
+            errors.append("category_history must be a list of entries")
+        else:
+            for i, entry in enumerate(rec["category_history"]):
+                errors.extend(validate_history_entry(
+                    entry, "category_history[%d]" % (i + 1)))
     return errors, warnings
 
 

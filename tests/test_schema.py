@@ -44,6 +44,11 @@ def worked_example() -> dict:
         created="2026-07-29T10:15:00Z", modified="2026-07-29T10:15:00Z",
         derived_from=[{"kind": "dataset",
                        "identifier": "rs2/csac/amber/1_interim/csac-clean"}],
+        category_history=[{"when": "2026-09-24T10:00:00Z", "by": "vocabulary",
+                           "kind": "replaced", "from": ["debt-bondage"],
+                           "to": ["forced-labour"],
+                           "reason": "vocabulary change dated 2026-09-01",
+                           "vocabulary_version": "2026-09-01"}],
         files=[
             record.manifest_entry("csac-clean-2025.csv", "e3" * 32,
                                   48211023, fmt="text/csv"),
@@ -192,6 +197,10 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
         ("activity without kind", {"provenance": [{"tool": {"name": "x"}}]}),
         ("tool without name", {"provenance": [{"activity": "clean",
                                                "tool": {"repo": "r"}}]}),
+        ("history entry without kind", {"category_history": [
+            {"when": "2026-09-24T10:00:00Z", "by": "k1"}]}),
+        ("history entry with bad kind", {"category_history": [
+            {"when": "2026-09-24T10:00:00Z", "by": "k1", "kind": "renamed"}]}),
     )
 
     def test_schema_invalid_is_runtime_invalid(self):

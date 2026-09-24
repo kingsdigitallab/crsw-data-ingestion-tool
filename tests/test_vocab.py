@@ -110,6 +110,57 @@ class TestDomains(unittest.TestCase):
         self.assertEqual(codes, ["quant", "geo", "pol", "narr", "parti"])
 
 
+class TestAuthorityShape(unittest.TestCase):
+    """r9: an authority file (terms + changes) is accepted through the
+    load chain, gets its flat facets derived, and a broken one is
+    ignored like any other bad fetch."""
+
+    AUTH = {"vocabulary_version": "2026-10-01",
+            "terms": [{"slug": "forced-labour", "facet": "practices",
+                       "label": "Forced labour", "status": "current",
+                       "since": "2026-07-23"},
+                      {"slug": "debt-bondage", "facet": "practices",
+                       "label": "Debt bondage", "status": "retired",
+                       "since": "2026-07-23", "until": "2026-10-01",
+                       "replaced_by": ["forced-labour"]}],
+            "changes": [{"date": "2026-10-01", "kind": "merge",
+                         "from": ["debt-bondage"], "to": ["forced-labour"],
+                         "by": "k1078591"}]}
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.cache = Path(self._tmp.name) / "cache"
+        self.bundled = Path(self._tmp.name) / "vocab.json"
+        self.bundled.write_text(json.dumps(GOOD), encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_remote_authority_file_is_used_and_facets_derived(self):
+        v, source = vocab.load_vocabulary(
+            cache=self.cache, bundled=self.bundled,
+            opener=opener_returning(json.dumps(self.AUTH).encode("utf-8")))
+        self.assertEqual(source, "remote")
+        self.assertEqual(v["facets"], {"practices": ["forced-labour"]})
+        self.assertEqual(vocab.all_terms(v), {"forced-labour"})
+        self.assertEqual(vocab.facets(v), {"practices": ["forced-labour"]})
+
+    def test_invalid_authority_file_falls_back(self):
+        bad = dict(self.AUTH, terms=[dict(self.AUTH["terms"][0], status="gone")])
+        v, source = vocab.load_vocabulary(
+            cache=self.cache, bundled=self.bundled,
+            opener=opener_returning(json.dumps(bad).encode("utf-8")))
+        self.assertEqual(source, "bundled")
+
+    def test_bundled_file_is_an_authority_file(self):
+        v, source = vocab.load_vocabulary(cache=self.cache, opener=opener_failing)
+        self.assertEqual(source, "bundled")
+        self.assertIn("terms", v)
+        self.assertEqual(len(vocab.all_terms(v)), 34)
+        self.assertEqual(list(v["facets"]),
+                         ["practices", "themes", "methods", "contexts"])
+
+
 class TestActivities(unittest.TestCase):
     """r8 §2: activity kinds are vocabulary-managed like domains."""
 

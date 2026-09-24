@@ -160,6 +160,24 @@ mix. Unknown terms are refused — propose additions via the vocabulary
 repository or your domain steward. Choosing a domain fills in its steward
 automatically.
 
+The vocabulary file is a **term authority file** (r9): it lists every term
+ever approved, current or retired, with the date each came in, what
+replaced a retired one, and an append-only list of the changes (add,
+rename, merge, split, retire, move) that got it there. A term may sit
+under a broader term in the same facet; a file with no such parents is
+simply flat. The tool validates a fetched file against every rule before
+trusting it and falls through to the cached or bundled copy if it fails.
+
+Categories can change after deposit. A record whose subject terms have
+since been renamed, merged, split or retired is brought up to date by the
+promoter, which rewrites only the record (never the files, the UUID or
+the key) and appends what it did to the record's `category_history`. A
+split gives the dataset every successor term and marks the entry for
+review; a steward then removes the ones that do not apply. Stewards make
+per-dataset changes through the promoter too, and vocabulary changes
+through the vocabulary repository's review process; the promoter never
+writes to that repository. See `docs/specs/DEPOSIT_TOOL_SPEC_R9.md`.
+
 ## Output
 
 Colour is used sparingly (warnings yellow, errors red, success green) and

@@ -570,6 +570,136 @@ class TestActivities(unittest.TestCase):
             record.parse_record(json.dumps(rec))
 
 
+class TestCategoryHistory(unittest.TestCase):
+    """r9: category_history entries, a steward's per-dataset change and
+    the mechanical vocabulary mapping."""
+
+    VOCAB = {"forced-labour", "debt-bondage", "survey", "osint", "prevalence"}
+    NOW = "2026-09-24T10:00:00Z"
+
+    def rec(self, **over):
+        from tests.test_schema import worked_example
+        r = worked_example()
+        r["subject"] = ["armed-conflict", "forced-labour"]
+        r.update(over)
+        return r
+
+    def test_entry_validation(self):
+        good = {"when": self.NOW, "by": "k1", "kind": "added", "to": ["survey"]}
+        self.assertEqual(record.validate_history_entry(good, "h"), [])
+        cases = [
+            ({"when": "yesterday", "by": "k1", "kind": "added", "to": ["x"]}, "timestamp"),
+            ({"when": self.NOW, "kind": "added", "to": ["x"]}, "by (who"),
+            ({"when": self.NOW, "by": "k1", "kind": "renamed"}, "not one of"),
+            ({"when": self.NOW, "by": "k1", "kind": "added"}, "added needs to"),
+            ({"when": self.NOW, "by": "k1", "kind": "removed"}, "removed needs from"),
+            ({"when": self.NOW, "by": "k1", "kind": "replaced", "from": "x", "to": ["y"]},
+             "list of strings"),
+            ("nope", "not an object"),
+        ]
+        for entry, fragment in cases:
+            errors = record.validate_history_entry(entry, "h")
+            self.assertTrue(any(fragment in e for e in errors), (entry, errors))
+
+    def test_validate_record_checks_the_list(self):
+        r = self.rec(category_history=[{"when": self.NOW, "by": "k1",
+                                        "kind": "added", "to": ["forced-labour"]}])
+        errors, _ = record.validate_record(r, {"armed-conflict", "forced-labour"})
+        self.assertEqual(errors, [])
+        r["category_history"] = "x"
+        errors, _ = record.validate_record(r, {"armed-conflict", "forced-labour"})
+        self.assertTrue(any("category_history must be a list" in e for e in errors))
+        r["category_history"] = [{"when": self.NOW, "by": "k1", "kind": "nope"}]
+        errors, _ = record.validate_record(r, {"armed-conflict", "forced-labour"})
+        self.assertTrue(any("category_history[1]" in e for e in errors))
+
+    def test_build_record_places_history_after_provenance(self):
+        from tests.test_schema import worked_example
+        r = worked_example()
+        keys_ = list(r)
+        self.assertLess(keys_.index("derived_from"), keys_.index("category_history"))
+        self.assertLess(keys_.index("category_history"), keys_.index("files"))
+        self.assertIn("category_history", record.OPTIONAL_FIELDS)
+
+    def test_dataset_change_add_remove_domain(self):
+        r = self.rec(subject=["forced-labour", "survey"], domain="quant")
+        vocab_terms = self.VOCAB | {"armed-conflict"}
+        out, entries = record.apply_dataset_change(
+            r, {"add": ["prevalence"], "remove": ["survey"], "set_domain": "geo",
+                "reason": "steward review"},
+            "k1078591", self.NOW, vocab_terms, ["quant", "geo"],
+            vocabulary_version="2026-10-01")
+        self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
+        self.assertEqual(out["domain"], "geo")
+        self.assertEqual(out["modified"], self.NOW)
+        self.assertEqual(out["vocabulary_version"], "2026-10-01")
+        self.assertEqual([e["kind"] for e in entries],
+                         ["removed", "added", "domain_changed"])
+        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1078591",
+                                      "kind": "removed", "from": ["survey"],
+                                      "reason": "steward review",
+                                      "vocabulary_version": "2026-10-01"})
+        self.assertEqual(entries[2]["from"], ["quant"])
+        self.assertEqual(out["category_history"],
+                         r["category_history"] + entries)
+        # The input record is untouched and the output is in field order.
+        self.assertEqual(r["subject"], ["forced-labour", "survey"])
+        self.assertEqual(list(out), list(r))  # build_record order, exactly
+        errors, _ = record.validate_record(out, vocab_terms, ["quant", "geo"])
+        self.assertEqual(errors, [])
+
+    def test_dataset_change_that_changes_nothing(self):
+        r = self.rec(subject=["forced-labour"])
+        out, entries = record.apply_dataset_change(
+            r, {"add": ["forced-labour"]}, "k1", self.NOW, self.VOCAB)
+        self.assertIs(out, r)
+        self.assertEqual(entries, [])
+
+    def test_dataset_change_refusals(self):
+        r = self.rec(subject=["forced-labour"])
+        cases = [
+            ({"add": ["made-up"]}, "not in the vocabulary"),
+            ({"remove": ["survey"]}, "cannot be removed"),
+            ({"remove": ["forced-labour"]}, "at least one subject"),
+            ({"set_domain": "nope"}, "domain 'nope'"),
+        ]
+        for change, fragment in cases:
+            with self.assertRaises(record.RecordChangeError) as cm:
+                record.apply_dataset_change(r, change, "k1", self.NOW, self.VOCAB,
+                                            ["quant", "geo"])
+            self.assertIn(fragment, str(cm.exception))
+
+    def test_vocabulary_mapping_writes_history_by_vocabulary(self):
+        from crsw_deposit import authority
+        doc = {"vocabulary_version": "2026-07-23",
+               "terms": [{"slug": "forced-labour", "facet": "p", "label": "F",
+                          "status": "current", "since": "2026-07-23"},
+                         {"slug": "debt-bondage", "facet": "p", "label": "D",
+                          "status": "current", "since": "2026-07-23"},
+                         {"slug": "armed-conflict", "facet": "c", "label": "A",
+                          "status": "current", "since": "2026-07-23"}],
+               "changes": []}
+        doc = authority.apply_change(doc, {"kind": "merge", "from": ["debt-bondage"],
+                                           "to": ["forced-labour"],
+                                           "date": "2026-10-01", "by": "k1"})
+        r = self.rec(subject=["debt-bondage", "armed-conflict"])
+        out, entries = record.apply_vocabulary_mapping(r, doc, self.NOW)
+        self.assertEqual(out["subject"], ["forced-labour", "armed-conflict"])
+        self.assertEqual(out["vocabulary_version"], "2026-10-01")
+        self.assertEqual(out["modified"], self.NOW)
+        self.assertEqual(entries, [{"when": self.NOW, "by": "vocabulary",
+                                    "kind": "replaced", "from": ["debt-bondage"],
+                                    "to": ["forced-labour"],
+                                    "reason": "vocabulary change dated 2026-10-01",
+                                    "vocabulary_version": "2026-10-01"}])
+        errors, _ = record.validate_record(out, {"forced-labour", "armed-conflict"})
+        self.assertEqual(errors, [])
+        # Already current: same object back, nothing recorded.
+        again, more = record.apply_vocabulary_mapping(out, doc, "2026-09-25T00:00:00Z")
+        self.assertIs(again, out)
+        self.assertEqual(more, [])
+
+
 class TestDepositors(unittest.TestCase):
     def test_first_deposit(self):
         self.assertEqual(record.append_depositor(None, "njakeman"),

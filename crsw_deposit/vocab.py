@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from . import authority
 from . import keys
 from . import record
 
@@ -42,6 +43,11 @@ def _default_opener(url, timeout):
 
 
 def _valid(vocab_dict) -> bool:
+    """A file is usable if it is the r9 authority shape and passes every
+    authority rule, or the older flat shape with facet lists. A fetched
+    file that fails is ignored and the chain falls through."""
+    if authority.is_authority(vocab_dict):
+        return not authority.validate_authority(vocab_dict)
     return (isinstance(vocab_dict, dict)
             and isinstance(vocab_dict.get("facets"), dict)
             and all(isinstance(v, list) for v in vocab_dict["facets"].values()))
@@ -79,7 +85,7 @@ def load_vocabulary(url: str = VOCAB_URL,
         vocab_dict = json.loads(raw.decode("utf-8"))
         if _valid(vocab_dict):
             _write_cache(cache, raw)
-            return vocab_dict, "remote"
+            return authority.normalise(vocab_dict), "remote"
     except Exception:
         pass
 
@@ -87,19 +93,26 @@ def load_vocabulary(url: str = VOCAB_URL,
     try:
         vocab_dict = json.loads(cached_file.read_text(encoding="utf-8"))
         if _valid(vocab_dict):
-            return vocab_dict, "cache"
+            return authority.normalise(vocab_dict), "cache"
     except Exception:
         pass
 
     vocab_dict = json.loads(bundled.read_text(encoding="utf-8"))
-    return vocab_dict, "bundled"
+    return authority.normalise(vocab_dict), "bundled"
 
 
 def all_terms(vocab_dict: dict) -> Set[str]:
+    """Every current subject term, whichever shape the file has."""
     terms = set()
-    for facet_terms in vocab_dict.get("facets", {}).values():
+    for facet_terms in authority.facets_of(vocab_dict).values():
         terms.update(facet_terms)
     return terms
+
+
+def facets(vocab_dict: dict) -> dict:
+    """Facet name -> current terms in file order (r9: derived from the
+    term entries when the file is an authority file)."""
+    return authority.facets_of(vocab_dict)
 
 
 def domains(vocab_dict: dict) -> List[dict]:

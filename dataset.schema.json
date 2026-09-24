@@ -44,6 +44,7 @@
       ]
     },
     "provenance": {"type": "array", "items": {"$ref": "#/definitions/activity"}},
+    "category_history": {"type": "array", "items": {"$ref": "#/definitions/history_entry"}},
     "language": {"type": "array", "items": {"type": "string"}},
     "ethics_ref": {"type": "string"},
     "spatial": {},
@@ -115,6 +116,19 @@
         "agent": {"type": "string"},
         "started": {"type": "string"},
         "ended": {"type": "string"}
+      }
+    },
+    "history_entry": {
+      "type": "object",
+      "required": ["when", "by", "kind"],
+      "properties": {
+        "when": {"type": "string"},
+        "by": {"type": "string"},
+        "kind": {"enum": ["added", "removed", "replaced", "split_review", "domain_changed"]},
+        "from": {"type": "array", "items": {"type": "string"}},
+        "to": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"},
+        "vocabulary_version": {"type": "string"}
       }
     }
   }
