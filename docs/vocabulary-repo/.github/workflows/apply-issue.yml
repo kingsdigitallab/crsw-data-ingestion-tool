@@ -53,9 +53,12 @@ jobs:
           if gh pr view "$branch" >/dev/null 2>&1; then
             gh pr comment "$branch" --body "Updated from the edited issue."
           else
+            {
+              echo "Closes #${{ github.event.issue.number }}. Requested by @${{ github.event.issue.user.login }}."
+              echo
+              echo "Review the diff: it should touch only the term(s) named, the changes list and the version date. Approve to accept the change; it applies to existing datasets on the promoter's next run."
+            } > /tmp/pr-body.md
             gh pr create --base main --head "$branch" \
               --title "${{ steps.apply.outputs.title }}" \
-              --body "Closes #${{ github.event.issue.number }}. Requested by @${{ github.event.issue.user.login }}.
-
-Review the diff: it should touch only the term(s) named, the changes list and the version date. Approve to accept the change; it applies to existing datasets on the promoter's next run."
+              --body-file /tmp/pr-body.md
           fi
