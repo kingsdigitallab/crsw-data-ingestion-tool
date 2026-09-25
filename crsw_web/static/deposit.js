@@ -122,21 +122,26 @@
   $("pick-folder").addEventListener("change", function () { addFiles(this.files, true); this.value = ""; });
   $("clear-files").addEventListener("click", function () { files = []; renderFiles(0); });
 
-  // ----- the upstream-dataset picker (read role only) -------------------
+  // ----- the upstream-dataset lookup (read role only) -------------------
   // Searches /datasets.json and appends the chosen identifier as a new
   // line of the derived-from box, so the reference is found, not typed.
   (function () {
-    var open = $("picker-open"), panel = $("picker-panel"), q = $("picker-q"),
-        list = $("picker-results"), box = $("derived_from");
+    var open = $("lookup-open"), close = $("lookup-close"), panel = $("lookup-panel"),
+        q = $("lookup-q"), list = $("lookup-results"), box = $("derived_from");
     if (!open) return;
     var timer = null, seq = 0;
+    function show(on) {
+      panel.hidden = !on;
+      open.setAttribute("aria-expanded", on ? "true" : "false");
+      if (on) { q.focus(); search(); } else { open.focus(); }
+    }
     function addLine(identifier) {
       var lines = box.value.split(/\r?\n/).filter(function (l) { return l.trim(); });
       if (lines.indexOf(identifier) < 0) lines.push(identifier);
       box.value = lines.join("\n") + "\n";
       box.dispatchEvent(new Event("input", { bubbles: true }));
       panel.hidden = true;
-      open.hidden = false;
+      open.setAttribute("aria-expanded", "false");
       box.focus();
     }
     function render(items) {
@@ -167,14 +172,13 @@
         .then(function (body) { if (mine === seq) render(body.datasets || []); })
         .catch(function () { if (mine === seq) render([]); });
     }
-    open.addEventListener("click", function () {
-      panel.hidden = false; open.hidden = true; q.focus(); search();
-    });
+    open.addEventListener("click", function () { show(panel.hidden); });
+    close.addEventListener("click", function () { show(false); });
     q.addEventListener("input", function () {
       clearTimeout(timer); timer = setTimeout(search, 200);
     });
-    q.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape") { panel.hidden = true; open.hidden = false; }
+    panel.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") { ev.preventDefault(); show(false); }
     });
   })();
 

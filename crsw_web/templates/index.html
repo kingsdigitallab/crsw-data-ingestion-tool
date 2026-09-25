@@ -155,12 +155,16 @@
         <label for="derived_from">Derived from</label>
         <textarea id="derived_from" name="derived_from" rows="3" placeholder="rs2/csac/amber/1_interim/csac&#10;https://github.com/jrnold/CDB90"></textarea>
         {% if read_enabled %}
-        <div class="picker" id="picker">
-          <button type="button" class="link" id="picker-open">Find a dataset in the store</button>
-          <div class="picker-panel" id="picker-panel" hidden>
-            <input type="search" id="picker-q" placeholder="dataset, project, words from the abstract" aria-label="Search datasets" autocomplete="off">
-            <ul class="picker-results" id="picker-results" aria-live="polite"></ul>
-            <p class="hint" id="picker-note">Type to search; choose a dataset to add its identifier above.</p>
+        <div class="lookup" id="lookup">
+          <button type="button" class="link" id="lookup-open" aria-expanded="false" aria-controls="lookup-panel">Find a dataset in the store</button>
+          <div class="lookup-panel" id="lookup-panel" hidden>
+            <div class="lookup-head">
+              <label for="lookup-q">Search the store</label>
+              <button type="button" class="link" id="lookup-close">Close</button>
+            </div>
+            <input type="search" id="lookup-q" placeholder="dataset, project, words from the abstract" autocomplete="off">
+            <ul class="lookup-results" id="lookup-results" aria-live="polite"></ul>
+            <p class="hint" id="lookup-note">Type to narrow the list; choose a dataset to add its identifier above.</p>
           </div>
         </div>
         {% endif %}
