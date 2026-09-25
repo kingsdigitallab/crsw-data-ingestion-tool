@@ -29,6 +29,7 @@ python -m promoter run --dry-run                   # check staged deposits; drop
 python -m promoter recategorise --dry-run [--changes FILE] [--dataset ID]   # r9: bring records up to the vocabulary
 python -m promoter audit [--since DATE] [--dataset ID] [--user K] [--action A] [--json]   # the trail, read back from the bucket
 python -m promoter datasets [--strand rsN] [--json]                          # every record in place
+pandoc docs/how-to-deposit.md -o docs/how-to-deposit.docx --reference-doc docs/style/kdl-reference.docx   # rebuild the researcher guide's Word copy after editing the Markdown
 python -m promoter index                                                     # rebuild index/datasets.{jsonl,parquet}; run/recategorise do it after a change
 python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merge|split|retire|move   # crsw-vocab
 ```

@@ -6,6 +6,8 @@ keys from the Centre's path convention, uploads the files via rclone, and
 maintains one `dataset.<name>.json` record per dataset describing the
 whole prefix - shared metadata plus a manifest of every member file.
 
+**Researchers:** the one-page guide to depositing and finding data through the web service is `docs/how-to-deposit.md` (also `docs/how-to-deposit.docx`).
+
 ## Requirements
 
 - Python 3.8 or newer (standard library only — nothing to install)
