@@ -11,14 +11,16 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import crsw_deposit
 from crsw_deposit import authority, deposit_logic, keys, labels as labels_mod, noise, record, vocab
 from . import s3
+from .access import may_download
 from .auth import User, make_authenticator, peer_address
+from .catalogue import Catalogue
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
@@ -54,10 +56,18 @@ def client_rules() -> Dict:
 
 
 def create_app(settings: Optional[Settings] = None,
-               s3_client=None, vocab_dict: Optional[Dict] = None) -> FastAPI:
+               s3_client=None, vocab_dict: Optional[Dict] = None,
+               read_client=None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
+    # The read role: a second, read-only client over the read key and the
+    # promoter's index. Off (every /datasets route 404) unless configured.
+    if read_client is None and settings.read_enabled:
+        read_client = s3.make_read_client(settings)
+    catalogue = (Catalogue(read_client, settings.s3_bucket, settings.index_prefix,
+                           settings.index_refresh_seconds)
+                 if read_client is not None else None)
     if vocab_dict is None:
         # fetch -> cache -> bundled. The cache write is best-effort, so a
         # read-only container root just means the bundled copy is used.
@@ -76,6 +86,8 @@ def create_app(settings: Optional[Settings] = None,
                   docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.vocab_cache = vocab_cache
+    app.state.catalogue = catalogue
+    read_enabled = catalogue is not None
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
 
@@ -86,6 +98,7 @@ def create_app(settings: Optional[Settings] = None,
         facets = vocab.facets(vocab_dict)
         return templates.TemplateResponse(request, "index.html", {
             "user": user,
+            "read_enabled": read_enabled,
             "strands": keys.STRANDS,
             "domains": vocab.domains(vocab_dict),
             "facets": facets,
@@ -114,6 +127,81 @@ def create_app(settings: Optional[Settings] = None,
         return templates.TemplateResponse(request, "summary.html", {
             "user": user, "dep": dep, "record_text": record_text,
             "staging_root": store.root(dep.user, dep.id),
+            "read_enabled": read_enabled,
+        })
+
+    # --- the read role: find, browse (finding-and-reuse.md §§1-3) ------------
+    def need_read() -> Catalogue:
+        if catalogue is None:
+            raise HTTPException(status_code=404, detail="Not Found")
+        return catalogue
+
+    def public_row(r: Dict) -> Dict:
+        abstract = r.get("abstract") or ""
+        return {k: r.get(k) for k in ("identifier", "dataset_uuid", "dataset", "project",
+                                      "strand", "state", "sensitivity", "domain",
+                                      "depositor", "files", "bytes", "modified",
+                                      "subject", "version")} | {
+            "abstract": abstract[:200] + ("…" if len(abstract) > 200 else "")}
+
+    def search_args(q, strand, state, sensitivity, subject, project):
+        return dict(q=q, strand=strand or None, state=state or None,
+                    sensitivity=sensitivity or None, subject=subject or None,
+                    project=project or None)
+
+    @app.get("/datasets", response_class=HTMLResponse)
+    def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
+                      sensitivity: str = "", subject: str = "", project: str = "",
+                      user: User = Depends(current_user)):
+        cat = need_read()
+        results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
+        return templates.TemplateResponse(request, "datasets.html", {
+            "user": user, "q": q, "strand": strand, "state": state,
+            "sensitivity": sensitivity, "subject": subject,
+            "strands": keys.STRANDS, "states": keys.STATES,
+            "sensitivities": keys.SENSITIVITIES, "subjects": cat.subjects(),
+            "results": results,
+            "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
+            "built_at": cat.built_at(), "error": cat.error,
+        })
+
+    @app.get("/datasets.json")
+    def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",
+                      subject: str = "", project: str = "", limit: int = 50,
+                      user: User = Depends(current_user)):
+        cat = need_read()
+        rows = cat.search(limit=max(1, min(limit, 500)),
+                          **search_args(q, strand, state, sensitivity, subject, project))
+        return {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
+
+    def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:
+        if cat.get(identifier) is None and not keys.dataset_prefix_ok(identifier):
+            raise HTTPException(status_code=404, detail="no such dataset")
+        try:
+            rec = cat.record(identifier)
+        except Exception as exc:
+            raise storage_error(exc)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such dataset")
+        return rec
+
+    @app.get("/datasets/{identifier:path}/record")
+    def dataset_record(identifier: str, user: User = Depends(current_user)):
+        cat = need_read()
+        load_record_or_404(cat, identifier)
+        return Response(content=cat.record_text(identifier), media_type="application/json")
+
+    @app.get("/datasets/{identifier:path}", response_class=HTMLResponse)
+    def dataset_page(identifier: str, request: Request, user: User = Depends(current_user)):
+        cat = need_read()
+        rec = load_record_or_404(cat, identifier)
+        files = rec.get("files") or []
+        derived = [r for r in cat.rows() if identifier in (r.get("derived_from_identifiers") or [])]
+        return templates.TemplateResponse(request, "dataset.html", {
+            "user": user, "identifier": identifier, "rec": rec, "derived": derived,
+            "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings),
+            "sizes": {f["path"]: record.human_bytes(f.get("bytes") or 0) for f in files},
+            "total": record.human_bytes(sum(int(f.get("bytes") or 0) for f in files)),
         })
 
     def storage_error(exc: Exception) -> HTTPException:

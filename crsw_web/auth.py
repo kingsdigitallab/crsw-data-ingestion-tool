@@ -16,7 +16,7 @@ Modes:
 import ipaddress
 import re
 from dataclasses import dataclass
-from typing import Callable, List, Mapping, Optional
+from typing import Callable, List, Mapping, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -27,6 +27,8 @@ from .config import Settings
 class User:
     username: str   # the KCL username, e.g. k1078591 - what the record's
                     # depositor field holds, so CLI and web deposits agree
+    groups: Tuple[str, ...] = ()   # as the proxy reports them; the read
+                                   # role's amber rule reads these
 
 
 class NotAuthenticated(Exception):
@@ -55,12 +57,13 @@ def user_from_headers(headers: Mapping[str, str], settings: Settings) -> User:
             raise NotAuthorised("identity %r does not match the expected form" % raw)
         username = m.group(1)
     username = username.strip().lower()
-    if settings.proxy_groups_header and settings.proxy_required_group:
+    groups: List[str] = []
+    if settings.proxy_groups_header:
         groups = _split_groups(headers.get(settings.proxy_groups_header) or "")
-        if settings.proxy_required_group not in groups:
+        if settings.proxy_required_group and settings.proxy_required_group not in groups:
             raise NotAuthorised(
                 "%s is not a member of %s" % (username, settings.proxy_required_group))
-    return User(username=username)
+    return User(username=username, groups=tuple(groups))
 
 
 PEER_HEADER = "x-sidecar-peer"
@@ -94,7 +97,7 @@ def make_authenticator(settings: Settings) -> Callable[[Request], User]:
     deployment's auth mode. Constructed once at app creation so an
     unsupported mode fails at startup, not on the first request."""
     if settings.auth_mode == "placeholder":
-        user = User(username=settings.dev_user)
+        user = User(username=settings.dev_user, groups=tuple(settings.dev_groups))
 
         def placeholder(request: Request) -> User:
             return user

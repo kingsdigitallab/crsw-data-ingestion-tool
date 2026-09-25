@@ -200,6 +200,17 @@ def _validate_parts(strand: str, project: str, sensitivity: str,
             "dataset must be lowercase letters/digits with hyphens, got %r" % dataset)
 
 
+def dataset_prefix_ok(identifier: str) -> bool:
+    """True when `identifier` is a well-formed five-part dataset prefix
+    (strand/project/sensitivity/state/dataset); no store access."""
+    parts = (identifier or "").split("/")
+    if len(parts) != 5:
+        return False
+    strand, project, sensitivity, state, dataset = parts
+    return (strand in STRANDS and sensitivity in SENSITIVITIES and state in STATES
+            and bool(validate_project(project)) and bool(validate_project(dataset)))
+
+
 def dataset_prefix(strand: str, project: str, sensitivity: str,
                    state: str, dataset: str) -> str:
     """The dataset prefix {strand}/{project}/{sensitivity}/{state}/{dataset}

@@ -44,6 +44,36 @@ class TestSettings(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Settings.from_env(dict(GOOD, CRSW_STAGING_PREFIX="rs2/csac"))
 
+    def test_read_role_off_by_default_and_keys_come_together(self):
+        s = Settings.from_env(GOOD)
+        self.assertFalse(s.read_enabled)
+        self.assertEqual((s.index_prefix, s.index_refresh_seconds, s.amber_access),
+                         ("index", 60, "off"))
+        with self.assertRaises(ConfigError) as cm:
+            Settings.from_env(dict(GOOD, CRSW_READ_S3_ACCESS_KEY="RK"))
+        self.assertIn("READ_S3_SECRET_KEY", str(cm.exception))
+        s = Settings.from_env(dict(GOOD, CRSW_READ_S3_ACCESS_KEY="RK",
+                                   CRSW_READ_S3_SECRET_KEY="RS", CRSW_INDEX_PREFIX="/idx/",
+                                   CRSW_DEV_GROUPS="a, er_prj_kdl_slavery_rs2"))
+        self.assertTrue(s.read_enabled)
+        self.assertEqual(s.index_prefix, "idx")
+        self.assertEqual(s.dev_groups, ("a", "er_prj_kdl_slavery_rs2"))
+
+    def test_amber_access_modes(self):
+        with self.assertRaises(ConfigError):
+            Settings.from_env(dict(GOOD, CRSW_AMBER_ACCESS="maybe"))
+        self.assertEqual(Settings.from_env(dict(GOOD, CRSW_AMBER_ACCESS="all")).amber_access, "all")
+        with self.assertRaises(ConfigError):     # template without the strand
+            Settings.from_env(dict(GOOD, CRSW_AMBER_ACCESS="groups",
+                                   CRSW_AMBER_GROUP_TEMPLATE="er_prj_kdl_slavery"))
+        with self.assertRaises(ConfigError):     # proxy mode needs the groups header
+            Settings.from_env(dict(GOOD, CRSW_AMBER_ACCESS="groups", CRSW_AUTH_MODE="proxy",
+                                   CRSW_PROXY_USER_HEADER="X-Remote-User"))
+        s = Settings.from_env(dict(GOOD, CRSW_AMBER_ACCESS="groups", CRSW_AUTH_MODE="proxy",
+                                   CRSW_PROXY_USER_HEADER="X-Remote-User",
+                                   CRSW_PROXY_GROUPS_HEADER="X-Remote-Groups"))
+        self.assertEqual(s.amber_group_template, "er_prj_kdl_slavery_{strand}")
+
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestDotenv(unittest.TestCase):

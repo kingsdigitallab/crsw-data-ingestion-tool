@@ -201,6 +201,14 @@ record the promoter also rewrites an index of every record in place,
 as JSON lines and Parquet under `index/`, for search tools to read
 straight from the bucket. See the runbook, section 6.
 
+The web service can also show what is in the store: with a read-only key
+configured it gains a "Find data" page (search and filters over the
+index), a page per dataset (description, what it was derived from and
+what was derived from it, how it was made, files), and the record as
+stored. Green files will be downloadable through the service; amber is
+described for everyone and served according to the Centre's decision.
+Runbook, section 7.
+
 The vocabulary lives at
 [kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),
 which is public, so every tool fetches the current file at run time. To

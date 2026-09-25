@@ -164,6 +164,19 @@ def temporal_object(start, end) -> dict:
     return {"start": start, "end": end}
 
 
+def human_bytes(n) -> str:
+    """1234567 -> '1.2 MB' (decimal units, one decimal above bytes)."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return str(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return ("%d %s" if unit == "B" else "%.1f %s") % (n, unit)
+        n /= 1000.0
+    return str(n)
+
+
 def temporal_pair(temporal):
     """(start, end) out of a temporal object; (None, None) when absent or
     malformed - callers that need to enforce the shape (validate_record)

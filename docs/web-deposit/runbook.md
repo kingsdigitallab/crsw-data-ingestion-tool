@@ -59,6 +59,8 @@ docker compose -f deploy/compose.yaml up -d --build
 curl -s localhost:8080/health
 ```
 
+The read role (section 7) stays off on the VM until eResearch issue the read-scoped key: leave `CRSW_READ_S3_ACCESS_KEY` and `CRSW_READ_S3_SECRET_KEY` blank. **Never put a personal key on the web VM**; a personal key can write anywhere, and the staging-only design depends on the VM holding nothing that can.
+
 `/health` is the only path nginx serves to a source outside `CRSW_TRUSTED_PROXY_CIDRS`; every other path answers 403 from the VM itself, which is the allow-list working. The same CIDR value must be in `.env` (the app's peer check) and exported in the shell (the nginx sidecar), and the export is needed again for every later `docker compose` command.
 
 First deploy only, to learn the identity header:
@@ -267,3 +269,32 @@ widened by eResearch to read `audit/` and the dataset prefixes (the same
 read-scoped key the deferred data-egress path needs), and an
 administrator group on the proxy. Until then the trail is read from the
 command line as above.
+
+## 7. Finding and downloading (the read role)
+
+Planned in `finding-and-reuse.md`; built in stages from 25 September. The
+service gains a second, read-only S3 client over `CRSW_READ_S3_ACCESS_KEY`
+/ `CRSW_READ_S3_SECRET_KEY` and reads the promoter's index
+(`index/datasets.jsonl`, section 6). With both keys blank every route below
+is 404 and the form shows no "Find data" link, so the deployed service is
+unchanged until the key exists.
+
+| Route | What |
+|---|---|
+| `/datasets` | search box and filters (strand, state, sensitivity, subject) over the index |
+| `/datasets.json?q=…` | the same rows as JSON; feeds the form's picker |
+| `/datasets/<identifier>` | the record's description, derived-from links both ways, provenance, files |
+| `/datasets/<identifier>/record` | the record as stored |
+
+The read client is wrapped so it can only get, head and list; a bug cannot
+write or delete with the read key however broad it is. This is what makes
+a developer's personal key safe to use **on a laptop** while the scoped key
+is awaited. Amber data is listed and described for everyone signed in;
+whether its files are served is `CRSW_AMBER_ACCESS` (`off` until the
+Centre decides; `groups` uses the proxy's groups header and
+`CRSW_AMBER_GROUP_TEMPLATE`; `all` for the KCL-only phase).
+
+To ask eResearch for, in one go: a read-scoped key for the web VM over
+`index/` and the four strand prefixes (never `staging/`); the groups header
+the proxy can forward; whether the proxy buffers or time-limits large
+responses.

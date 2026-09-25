@@ -7,7 +7,8 @@ try:
     from fastapi.testclient import TestClient
     from moto import mock_aws
     from crsw_web.app import create_app
-    from crsw_web.auth import (NotAuthenticated, NotAuthorised, peer_is_trusted,
+    from crsw_web.access import may_download
+    from crsw_web.auth import (NotAuthenticated, NotAuthorised, User, peer_is_trusted,
                                user_from_headers)
     from crsw_web.config import ConfigError, Settings
     HAVE_WEB = True
@@ -48,6 +49,35 @@ class TestUserFromHeaders(unittest.TestCase):
         ok = user_from_headers({"X-Remote-User": "k1",
                                 "X-Remote-Groups": "staff; er_prj_kdl_slavery"}, s)
         self.assertEqual(ok.username, "k1")
+
+
+    def test_groups_travel_with_the_user(self):
+        s = Settings(**dict(PROXY, proxy_groups_header="X-Remote-Groups"))
+        u = user_from_headers({"X-Remote-User": "k1",
+                               "X-Remote-Groups": "er_prj_kdl_slavery, er_prj_kdl_slavery_rs2"}, s)
+        self.assertEqual(u.groups, ("er_prj_kdl_slavery", "er_prj_kdl_slavery_rs2"))
+        self.assertEqual(user_from_headers({"X-Remote-User": "k1"}, Settings(**PROXY)).groups, ())
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestMayDownload(unittest.TestCase):
+    """The amber rule, finding-and-reuse.md §1."""
+
+    def test_green_always_amber_by_mode_red_never(self):
+        s = Settings(**BASE)
+        u = User("k1")
+        self.assertIsNone(may_download(u, "green", "rs1", s))
+        self.assertIn("steward", may_download(u, "amber", "rs1", s))
+        self.assertIn("not served", may_download(u, "red", "rs1", s))
+        s = Settings(**dict(BASE, amber_access="all"))
+        self.assertIsNone(may_download(u, "amber", "rs1", s))
+
+    def test_groups_mode_uses_the_strand_group(self):
+        s = Settings(**dict(BASE, amber_access="groups"))
+        self.assertIn("er_prj_kdl_slavery_rs2",
+                      may_download(User("k1", ("er_prj_kdl_slavery",)), "amber", "rs2", s))
+        self.assertIsNone(may_download(User("k1", ("er_prj_kdl_slavery_rs2",)), "amber", "rs2", s))
+        self.assertIsNotNone(may_download(User("k1", ("er_prj_kdl_slavery_rs2",)), "amber", "rs3", s))
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")

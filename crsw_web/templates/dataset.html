@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ rec.dataset }} · CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="/">CRSW data deposit</a>
+    <nav class="nav"><a href="/datasets">Find data</a> <a href="/">Deposit</a></nav>
+    <span class="who">Signed in as <strong>{{ user.username }}</strong></span>
+  </div>
+</header>
+
+<main class="page single">
+  <article class="summary dataset">
+    <h1>{{ rec.dataset }} <span class="sens {{ rec.sensitivity }} tag">{{ rec.sensitivity }}</span></h1>
+    <p class="lede"><code>{{ identifier }}</code></p>
+    <p>{{ rec.abstract }}</p>
+    <dl>
+      <dt>Subjects</dt><dd>{{ rec.subject|join(", ") }}</dd>
+      <dt>Coverage</dt><dd>{{ rec.temporal.start }} to {{ rec.temporal.end }}</dd>
+      <dt>Domain</dt><dd>{{ rec.domain }}{% if rec.steward %} (steward {{ rec.steward }}){% endif %}</dd>
+      <dt>Version</dt><dd>{{ rec.version }}</dd>
+      {% if rec.creator %}<dt>Creator</dt><dd>{{ rec.creator }}</dd>{% endif %}
+      {% if rec.license %}<dt>Licence</dt><dd>{{ rec.license }}</dd>{% endif %}
+      {% if rec.source_type %}<dt>Source</dt><dd>{{ rec.source_type }}{% if rec.source_detail %}: {{ rec.source_detail }}{% endif %}</dd>{% endif %}
+      <dt>Deposited</dt><dd>{{ (rec.created or "")[:10] }} by {{ rec.depositors|join(", ") }}; last changed {{ (rec.modified or "")[:10] }}</dd>
+      <dt>Dataset UUID</dt><dd><code>{{ rec.dataset_uuid }}</code></dd>
+      {% if rec.derived_from %}
+      <dt>Derived from</dt>
+      <dd><ul class="plain">
+        {% for ref in rec.derived_from %}
+        <li>{% if ref.kind == "dataset" %}<a href="/datasets/{{ ref.identifier }}"><code>{{ ref.identifier }}</code></a>{% if ref.version %} (version {{ ref.version }}){% endif %}{% elif ref.url %}<a href="{{ ref.url }}" rel="noopener">{{ ref.url }}</a>{% if ref.citation %} — {{ ref.citation }}{% endif %}{% else %}{{ ref.citation }}{% endif %}</li>
+        {% endfor %}
+      </ul></dd>
+      {% endif %}
+      {% if derived %}
+      <dt>Derived datasets</dt>
+      <dd><ul class="plain">{% for d in derived %}<li><a href="/datasets/{{ d.identifier }}"><code>{{ d.identifier }}</code></a></li>{% endfor %}</ul></dd>
+      {% endif %}
+      {% if rec.provenance %}
+      <dt>How it was made</dt>
+      <dd><ul class="plain">
+        {% for a in rec.provenance %}
+        <li><strong>{{ a.activity }}</strong>{% if a.tool %} with {{ a.tool.name }}{% if a.tool.repo %} (<a href="{{ a.tool.repo }}" rel="noopener">{{ a.tool.repo }}</a>{% if a.tool.commit %}, commit <code>{{ a.tool.commit }}</code>{% endif %}){% endif %}{% endif %}{% if a.description %}: {{ a.description }}{% endif %}</li>
+        {% endfor %}
+      </ul></dd>
+      {% endif %}
+    </dl>
+
+    <h2>Files</h2>
+    {% if refusal %}<p class="notice">{{ refusal }}</p>{% endif %}
+    <table class="files">
+      <thead><tr><th>Path</th><th class="num">Size</th><th>SHA-256</th></tr></thead>
+      <tbody>
+      {% for f in rec.files %}
+      <tr>
+        <td>{% if not refusal %}<a href="/datasets/{{ identifier }}/files/{{ f.path }}" download><code>{{ f.path }}</code></a>{% else %}<code>{{ f.path }}</code>{% endif %}</td>
+        <td class="num">{{ sizes[f.path] }}</td>
+        <td><code class="sha">{{ f.checksum_sha256[:16] }}…</code></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr><td>{{ rec.files|length }} file{% if rec.files|length != 1 %}s{% endif %}</td><td class="num">{{ total }}</td><td></td></tr></tfoot>
+    </table>
+    <p><a href="/datasets/{{ identifier }}/record">Dataset record (JSON)</a> · <a href="/datasets">Back to Find data</a></p>
+  </article>
+</main>
+</body>
+</html>

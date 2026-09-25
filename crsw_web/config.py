@@ -17,6 +17,10 @@ REQUIRED = ("S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET",
 # reverse proxy, which does sign-in and group restriction and forwards
 # the user in a header. There is deliberately no in-app OIDC.
 AUTH_MODES = ("placeholder", "proxy")
+# Who may download amber data through the read role (finding-and-reuse.md
+# §1, a Centre policy decision): off = listed, not served; groups = the
+# strand's group as the proxy reports it; all = any signed-in member.
+AMBER_ACCESS = ("off", "groups", "all")
 
 
 class ConfigError(RuntimeError):
@@ -49,6 +53,20 @@ class Settings:
     # how often the running service re-fetches the vocabulary; 0 = only
     # at start-up
     vocab_refresh_seconds: int = 600
+    # The read role (find, browse, download): off unless both read keys
+    # are set. On the web VM this must be the read-scoped key from
+    # eResearch; a personal key is for a laptop only.
+    read_s3_access_key: str = ""
+    read_s3_secret_key: str = ""
+    index_prefix: str = "index"            # where the promoter writes datasets.jsonl
+    index_refresh_seconds: int = 60        # re-read the index at most this often
+    amber_access: str = "off"
+    amber_group_template: str = "er_prj_kdl_slavery_{strand}"
+    dev_groups: Tuple[str, ...] = ()       # placeholder-mode group membership
+
+    @property
+    def read_enabled(self) -> bool:
+        return bool(self.read_s3_access_key and self.read_s3_secret_key)
 
     def trusted_proxy_networks(self):
         return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
@@ -95,6 +113,22 @@ class Settings:
                 ipaddress.ip_network(c, strict=False)
             except ValueError:
                 raise ConfigError("%sTRUSTED_PROXY_CIDRS: %r is not a network" % (ENV_PREFIX, c))
+        read_key, read_secret = get("READ_S3_ACCESS_KEY"), get("READ_S3_SECRET_KEY")
+        if bool(read_key) != bool(read_secret):
+            raise ConfigError("%sREAD_S3_ACCESS_KEY and %sREAD_S3_SECRET_KEY must be "
+                              "set together (both blank turns the read role off)"
+                              % (ENV_PREFIX, ENV_PREFIX))
+        amber_access = get("AMBER_ACCESS", "off")
+        if amber_access not in AMBER_ACCESS:
+            raise ConfigError("%sAMBER_ACCESS must be one of %s, got %r"
+                              % (ENV_PREFIX, "/".join(AMBER_ACCESS), amber_access))
+        amber_template = get("AMBER_GROUP_TEMPLATE", cls.amber_group_template)
+        if amber_access == "groups":
+            if "{strand}" not in amber_template:
+                raise ConfigError("%sAMBER_GROUP_TEMPLATE must contain {strand}" % ENV_PREFIX)
+            if auth_mode == "proxy" and not get("PROXY_GROUPS_HEADER"):
+                raise ConfigError("%sAMBER_ACCESS=groups needs %sPROXY_GROUPS_HEADER "
+                                  "in proxy mode" % (ENV_PREFIX, ENV_PREFIX))
         pattern = get("PROXY_USERNAME_PATTERN")
         if pattern:
             try:
@@ -123,6 +157,13 @@ class Settings:
             user_quota_bytes=opt_int("USER_QUOTA_BYTES"),
             user_max_open_deposits=opt_int("USER_MAX_OPEN_DEPOSITS", cls.user_max_open_deposits),
             max_members_per_deposit=opt_int("MAX_MEMBERS_PER_DEPOSIT", cls.max_members_per_deposit),
+            read_s3_access_key=read_key,
+            read_s3_secret_key=read_secret,
+            index_prefix=get("INDEX_PREFIX", cls.index_prefix).strip("/") or cls.index_prefix,
+            index_refresh_seconds=opt_int("INDEX_REFRESH_SECONDS", cls.index_refresh_seconds),
+            amber_access=amber_access,
+            amber_group_template=amber_template,
+            dev_groups=tuple(g.strip() for g in get("DEV_GROUPS").split(",") if g.strip()),
         )
 
 

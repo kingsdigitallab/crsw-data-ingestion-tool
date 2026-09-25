@@ -10,7 +10,7 @@ import json
 import re
 from typing import Dict, Iterable, Iterator, List, Optional
 
-from crsw_deposit import keys
+from crsw_deposit import keys, record
 
 from .log import Log
 from . import index as index_mod
@@ -87,16 +87,7 @@ def trail(client, bucket: str, prefix: str, runs: Optional[int] = 10,
                 yield entry
 
 
-def human_bytes(n) -> str:
-    try:
-        n = float(n)
-    except (TypeError, ValueError):
-        return str(n)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1000 or unit == "TB":
-            return ("%d %s" if unit == "B" else "%.1f %s") % (n, unit)
-        n /= 1000.0
-    return str(n)
+human_bytes = record.human_bytes
 
 
 _HEAD = ("when", "action", "deposit", "user", "by", "prefix", "run_id")

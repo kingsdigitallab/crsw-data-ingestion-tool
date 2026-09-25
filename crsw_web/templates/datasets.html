@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find data · CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="/">CRSW data deposit</a>
+    <nav class="nav"><a href="/datasets" aria-current="page">Find data</a> <a href="/">Deposit</a></nav>
+    <span class="who">Signed in as <strong>{{ user.username }}</strong></span>
+  </div>
+</header>
+
+<main class="page single wide">
+  <article class="find">
+    <h1>Find data</h1>
+    <p class="lede">Every dataset in the Centre's shared store, from the records the deposit tools write.{% if built_at %} Index built {{ built_at[:16].replace("T", " ") }} UTC.{% endif %}</p>
+    {% if error %}<p class="notice">{{ error }}</p>{% endif %}
+
+    <form class="search" method="get" action="/datasets">
+      <div class="field">
+        <label for="q">Search</label>
+        <input id="q" name="q" type="search" value="{{ q }}" placeholder="dataset, project, words from the abstract, a person">
+      </div>
+      <div class="grid three">
+        <div class="field">
+          <label for="strand">Strand</label>
+          <select id="strand" name="strand"><option value="">any</option>{% for s in strands %}<option value="{{ s }}"{% if s == strand %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        </div>
+        <div class="field">
+          <label for="state">State</label>
+          <select id="state" name="state"><option value="">any</option>{% for s in states %}<option value="{{ s }}"{% if s == state %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        </div>
+        <div class="field">
+          <label for="sensitivity">Sensitivity</label>
+          <select id="sensitivity" name="sensitivity"><option value="">any</option>{% for s in sensitivities %}<option value="{{ s }}"{% if s == sensitivity %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        </div>
+        <div class="field">
+          <label for="subject">Subject</label>
+          <select id="subject" name="subject"><option value="">any</option>{% for s in subjects %}<option value="{{ s }}"{% if s == subject %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+        </div>
+      </div>
+      <div class="actions"><button class="primary" type="submit">Search</button> <a href="/datasets">Clear</a></div>
+    </form>
+
+    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}</p>
+    {% if results %}
+    <table class="files results">
+      <thead><tr><th>Dataset</th><th>Where</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>
+      <tbody>
+      {% for r in results %}
+      <tr>
+        <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span></td>
+        <td><code>{{ r.identifier }}</code></td>
+        <td>{{ r.depositor or "" }}</td>
+        <td class="num">{{ r.files }}</td>
+        <td class="num">{{ sizes[r.identifier] }}</td>
+        <td>{{ (r.modified or "")[:10] }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Nothing matches.</p>
+    {% endif %}
+  </article>
+</main>
+</body>
+</html>

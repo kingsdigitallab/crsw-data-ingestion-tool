@@ -90,10 +90,11 @@ membership of the strand's group as reported by the proxy, or a list the
 steward maintains. Red never appears. *The amber rule is a Centre policy
 decision to make before the download page goes live, not a technical one.*
 
-*For the builder:* second credential set in `crsw_web/config.py`; second
-client from `crsw_web/s3.py`; per-prefix check in `crsw_web/auth.py`; move
-`promoter/scan.py::list_datasets` into a module both roles import; a
-`StreamingResponse` over `get_object` with the Range header forwarded.
+*For the builder:* built 25 Sept (find and browse): `crsw_web/config.py`
+read keys and `CRSW_AMBER_ACCESS`; `crsw_web/s3.py::ReadOnly`;
+`crsw_web/access.py::may_download`; `crsw_web/catalogue.py` over the index;
+routes in `crsw_web/app.py`. Still to do: the streamed download route
+with the Range header, the nginx download limits, the whole-dataset zip.
 
 ## 2. What does search read: the bucket every time, or an index?
 
