@@ -28,6 +28,8 @@ class PromoterConfig:
     log_path: str = "promoter.log"
     # Where each run's log lines are kept in the bucket; blank disables.
     audit_prefix: str = "audit/promoter"
+    # Where the index of every record in place is written; blank disables.
+    index_prefix: str = "index"
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
@@ -73,6 +75,7 @@ class PromoterConfig:
             authorised=authorised,
             log_path=(env.get(ENV_PREFIX + "LOG_PATH") or "promoter.log").strip(),
             audit_prefix=env.get(ENV_PREFIX + "AUDIT_PREFIX", "audit/promoter").strip().strip("/"),
+            index_prefix=env.get(ENV_PREFIX + "INDEX_PREFIX", "index").strip().strip("/"),
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:

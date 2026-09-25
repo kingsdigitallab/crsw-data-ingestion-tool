@@ -70,8 +70,8 @@ The promoted record's `created` was the promotion time, not the time the researc
 Addition of 25 September (r8 §4): before copying anything, the promoter
 looks up each "derived from" reference to another dataset in the store
 and fills in the parent's UUID and version, rewriting the staged record
-first so what is moved is what was checked (`record_rewritten` with
-`where: staging`, then `resolved_reference` lines). A parent that is not
+first so what is moved is what was checked (`resolved_reference` lines
+after `checked`, then `record_rewritten` with `where: staging`). A parent that is not
 there is a warning; the reference is left as typed and the deposit still
 promotes. Dry runs report what would be filled in and write nothing.
 

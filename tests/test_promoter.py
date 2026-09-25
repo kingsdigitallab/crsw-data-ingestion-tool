@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import tempfile
@@ -18,6 +19,7 @@ try:
     from promoter.config import ConfigError, PromoterConfig
     from promoter.log import Log
     from promoter.promote import promote
+    from promoter import index as index_mod
     from promoter.scan import list_deposits
     HAVE_WEB = True
 except ImportError:
@@ -356,6 +358,129 @@ class TestResolveReferences(PromoterBase):
             {"kind": "dataset", "identifier": self.PARENT, "version": "9-9"}])
         self.assertEqual(out[0]["dataset_uuid"], self.PARENT_UUID)
         self.assertEqual(out[0]["version"], "9-9")     # kept: the depositor said which
+
+
+class TestIndex(PromoterBase):
+    """The index: rewritten after a real run that changed something,
+    rebuilt on demand, readable as JSON lines and Parquet."""
+
+    ENV = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
+           "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",
+           "PROMOTER_STAGING_PREFIX": "staging/_test", "PROMOTER_LOG_PATH": "",
+           "PROMOTER_AUDIT_PREFIX": ""}
+
+    def cli(self, argv, env=None):
+        with mock.patch.dict(os.environ, dict(self.ENV, **(env or {}))), \
+             mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
+             mock.patch("promoter.__main__.vocab.load_vocabulary", return_value=(VOCAB, "bundled")), \
+             mock.patch("builtins.print") as printed:
+            code = cli.main(argv + ["--env-file", os.devnull])
+        return code, [c.args[0] for c in printed.call_args_list if c.args]
+
+    def jsonl_rows(self):
+        body = self.s3.get_object(Bucket="crsw", Key="index/datasets.jsonl")["Body"].read()
+        return [json.loads(l) for l in body.decode().splitlines()]
+
+    def test_run_that_promotes_writes_both_index_objects(self):
+        parent_uuid = "22222222-2222-4222-8222-222222222222"
+        parent = "rs2/csac/amber/1_interim/parent"
+        meta = dict(FORM, sensitivity="amber", state="1_interim", dataset="parent")
+        rec, _, _, _ = deposit_logic.assemble_record(
+            meta, None, [record.manifest_entry("p.csv", "c" * 64, 3)],
+            "alice", "2026-01-01T00:00:00Z", parent_uuid)
+        self.s3.put_object(Bucket="crsw", Key=parent + "/dataset.parent.json",
+                           Body=deposit_logic.record_bytes(rec),
+                           Metadata={"depositor": "alice"})
+        self.stage(derived_from=parent, provenance_activity="harmonise",
+                   provenance_tool="cdisaw-parquet")
+        code, out = self.cli(["run"])
+        self.assertEqual(code, 0, out)
+        lines = [json.loads(o) for o in out]
+        written = next(l for l in lines if l["action"] == "index_written")
+        self.assertEqual((written["datasets"], written["jsonl"], written["parquet"]),
+                         (2, "index/datasets.jsonl", "index/datasets.parquet"))
+        # Part of the run, so inside the audit object: before finish.
+        actions = [l["action"] for l in lines]
+        self.assertEqual(actions[-2:], ["index_written", "finish"])
+        rows = self.jsonl_rows()
+        self.assertEqual([r["identifier"] for r in rows], [parent, DEST])
+        promo = rows[1]
+        self.assertEqual(promo["dataset"], "promo")
+        self.assertEqual(promo["depositor"], "k1078591")
+        self.assertEqual(promo["depositors"], ["k1078591"])
+        self.assertEqual(promo["subject"], FORM["subject"])
+        self.assertEqual((promo["temporal_start"], promo["temporal_end"]), ("2020", "2021"))
+        self.assertEqual((promo["files"], promo["bytes"]), (2, 11))
+        self.assertEqual(promo["derived_from_identifiers"], [parent])
+        self.assertEqual(json.loads(promo["derived_from"])[0]["dataset_uuid"], parent_uuid)
+        self.assertEqual(promo["provenance_tools"], ["cdisaw-parquet"])
+        self.assertEqual(promo["origin"], "cdisaw-parquet")
+        self.assertEqual(rows[0]["origin"], "deposit")
+        self.assertEqual(rows[0]["depositor"], "alice")
+        self.assertTrue(promo["indexed_at"].endswith("Z"))
+        self.assertEqual(promo["record_key"], DEST + "/dataset.promo.json")
+        # The Parquet copy says the same.
+        import pyarrow.parquet as pq
+        body = self.s3.get_object(Bucket="crsw", Key="index/datasets.parquet")["Body"].read()
+        table = pq.read_table(io.BytesIO(body))
+        self.assertEqual(table.num_rows, 2)
+        self.assertEqual(list(table.column_names), list(index_mod.COLUMNS))
+        self.assertEqual(table.column("subject").to_pylist()[1], FORM["subject"])
+        self.assertEqual(table.column("bytes").to_pylist(), [3, 11])
+
+    def test_nothing_changed_means_nothing_written(self):
+        self.stage()
+        code, out = self.cli(["run", "--dry-run"])
+        self.assertEqual(self.keys_under("index/"), [])
+        self.assertNotIn("index_written", "".join(out))
+        self.cli(["run"])
+        first = self.s3.head_object(Bucket="crsw", Key="index/datasets.jsonl")["ETag"]
+        code, out = self.cli(["run"])              # nothing to do
+        self.assertEqual(code, 0)
+        self.assertNotIn("index_written", "".join(out))
+        self.assertEqual(self.s3.head_object(Bucket="crsw", Key="index/datasets.jsonl")["ETag"], first)
+
+    def test_blank_prefix_disables_and_index_command_rebuilds(self):
+        self.stage()
+        code, out = self.cli(["run"], env={"PROMOTER_INDEX_PREFIX": ""})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.keys_under("index/"), [])
+        code, out = self.cli(["index"], env={"PROMOTER_INDEX_PREFIX": ""})
+        self.assertEqual(code, 2)
+        code, out = self.cli(["index"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out[-1])["datasets"], 1)
+        self.assertEqual(self.keys_under("index/"),
+                         ["index/datasets.jsonl", "index/datasets.parquet"])
+        self.assertEqual(self.jsonl_rows()[0]["identifier"], DEST)
+
+    def test_write_failure_is_logged_and_leaves_the_exit_code(self):
+        self.stage()
+        with mock.patch("promoter.index.write", side_effect=OSError("bucket gone")):
+            code, out = self.cli(["run"])
+        self.assertEqual(code, 0)
+        self.assertIn("index_write_failed", "".join(out))
+        self.assertEqual(self.keys_under("index/"), [])
+
+    def test_old_record_and_unreadable_record_still_get_a_row(self):
+        old = {"schema_version": "0.5", "dataset_uuid": "11111111-1111-4111-8111-111111111111",
+               "identifier": "rs1/p/green/0_raw/old", "strand": "rs1", "project": "p",
+               "dataset": "old", "state": "0_raw", "sensitivity": "green", "domain": "quant",
+               "version": "1-0", "abstract": "x", "subject": ["forced-labour"],
+               "temporal": {"start": "1990", "end": "1991"}, "created": "2026-01-01T00:00:00Z",
+               "modified": "2026-01-01T00:00:00Z", "files": [],
+               "derived_from": "rs1/p/green/0_raw/older"}
+        self.s3.put_object(Bucket="crsw", Key="rs1/p/green/0_raw/old/dataset.old.json",
+                           Body=json.dumps(old).encode())
+        self.s3.put_object(Bucket="crsw", Key="rs1/p/green/0_raw/bad/dataset.bad.json",
+                           Body=b"{not json")
+        rows = index_mod.rows(self.s3, "crsw", now="2026-09-25T00:00:00Z")
+        self.assertEqual([r["identifier"] for r in rows],
+                         ["rs1/p/green/0_raw/bad", "rs1/p/green/0_raw/old"])
+        self.assertEqual(rows[0]["dataset_uuid"], None)
+        self.assertEqual(rows[1]["derived_from_identifiers"], ["rs1/p/green/0_raw/older"])
+        self.assertEqual(rows[1]["schema_version"], "0.6")   # upgraded on read
+        self.assertIsNotNone(index_mod.parquet_bytes(rows))
 
 
 class TestRun(PromoterBase):

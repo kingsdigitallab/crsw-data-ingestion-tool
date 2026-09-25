@@ -8,7 +8,10 @@ place up to the current vocabulary, and apply a steward's change file.
 `python -m promoter audit [--runs N | --since DATE] [--dataset ID]
 [--user NAME] [--action NAME] [--json]`: read the audit trail back from
 the bucket. `python -m promoter datasets [--strand rsN] [--json]`: every
-dataset record in place.
+dataset record in place. `python -m promoter index`: rebuild the index
+of every record in place (datasets.jsonl and datasets.parquet under
+PROMOTER_INDEX_PREFIX); run and recategorise rewrite it themselves
+after any real run that promoted or rewrote a record.
 
 A deposit whose derived_from names another dataset in the store has the
 parent's uuid and version filled in before promotion (r8 §4): logged as
@@ -33,6 +36,7 @@ from crsw_web.config import load_dotenv
 from crsw_web.deposits import DepositStore
 
 from . import audit
+from . import index as index_mod
 from . import recategorise as recat
 from .checks import check
 from .config import ConfigError, PromoterConfig
@@ -90,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="local env file to load (default .env.promoter)")
     ds.add_argument("--strand", help="only this strand (rs1-rs4)")
     ds.add_argument("--json", action="store_true", help="one JSON object per line")
+
+    ix = sub.add_parser("index", help="rebuild the index of every record in place")
+    ix.add_argument("--env-file", default=".env.promoter",
+                    help="local env file to load (default .env.promoter)")
     return p
 
 
@@ -112,6 +120,25 @@ def _setup(args):
     log = Log(args.log or cfg.log_path)
     vocab_dict, source = vocab.load_vocabulary()
     return cfg, client, log, vocab_dict, source
+
+
+def _write_index(cfg, client, log, dry_run: bool, changed: int) -> None:
+    """Rewrite the index after a real run that changed a record. Never
+    on a dry run, never when nothing changed (the bucket is versioned;
+    a write every five minutes would pile up versions). A failure is
+    logged and does not change the exit code: the index is a cache
+    that `promoter index` rebuilds."""
+    if not cfg.index_prefix or dry_run or not changed:
+        return
+    try:
+        rows_ = index_mod.rows(client, cfg.s3_bucket)
+        keys_ = index_mod.write(client, cfg.s3_bucket, cfg.index_prefix, rows_)
+    except Exception as e:
+        log.write("index_write_failed", error=str(e))
+        return
+    log.write("index_written", datasets=len(rows_), **keys_)
+    if keys_["parquet"] is None:
+        log.write("index_parquet_skipped", reason="pyarrow is not installed")
 
 
 def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
@@ -172,6 +199,7 @@ def cmd_run(args) -> int:
         else:
             refused += 1
 
+    _write_index(cfg, client, log, args.dry_run, promoted)
     log.write("finish", seen=seen, promoted=promoted, refused_or_failed=refused,
               dry_run=args.dry_run)
     return _write_audit(cfg, client, log, args.dry_run, 1 if refused else 0)
@@ -213,10 +241,26 @@ def cmd_recategorise(args) -> int:
         else:
             failed += 1
     refused = len(plan.problems) + len(plan.refused) + failed
+    _write_index(cfg, client, log, args.dry_run, rewritten)
     log.write("finish", command="recategorise", seen=len(plan.items),
               would_rewrite=len(plan.to_write) if args.dry_run else None,
               rewritten=rewritten, refused_or_failed=refused, dry_run=args.dry_run)
     return _write_audit(cfg, client, log, args.dry_run, 1 if refused else 0)
+
+
+def cmd_index(args) -> int:
+    cfg, client = _connect(args)
+    if not cfg.index_prefix:
+        print("PROMOTER_INDEX_PREFIX is blank: no index is kept", file=sys.stderr)
+        return 2
+    rows_ = index_mod.rows(client, cfg.s3_bucket)
+    keys_ = index_mod.write(client, cfg.s3_bucket, cfg.index_prefix, rows_)
+    print(json.dumps({"action": "index_written", "datasets": len(rows_), **keys_},
+                     ensure_ascii=False))
+    if keys_["parquet"] is None:
+        print("pyarrow is not installed: only the JSON lines index was written",
+              file=sys.stderr)
+    return 0
 
 
 def cmd_audit(args) -> int:
@@ -257,7 +301,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return {"run": cmd_run, "recategorise": cmd_recategorise,
-                "audit": cmd_audit, "datasets": cmd_datasets}[args.command](args)
+                "audit": cmd_audit, "datasets": cmd_datasets,
+                "index": cmd_index}[args.command](args)
     except ConfigError as e:
         print("config error: %s" % e, file=sys.stderr)
         return 2

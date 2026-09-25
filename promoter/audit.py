@@ -13,7 +13,7 @@ from typing import Dict, Iterable, Iterator, List, Optional
 from crsw_deposit import keys
 
 from .log import Log
-from .scan import list_datasets
+from . import index as index_mod
 
 _RUN_KEY_RE = re.compile(r"/(?P<date>\d{4}/\d{2}/\d{2})/(?P<run>[^/]+)\.jsonl$")
 
@@ -138,20 +138,13 @@ def list_records(client, bucket: str, strand: Optional[str] = None) -> List[Dict
     """One row per dataset record in place, from the record and the
     object's depositor label."""
     rows = []
-    for ref in list_datasets(client, bucket):
-        if strand and not ref.prefix.startswith(strand + "/"):
-            continue
-        obj = client.get_object(Bucket=bucket, Key=ref.record_key)
-        try:
-            rec = json.loads(obj["Body"].read().decode("utf-8"))
-        except ValueError:
-            rec = {}
+    for ref, rec, labels in index_mod.read_records(client, bucket, strand):
         files = rec.get("files") or []
         rows.append({
             "prefix": ref.prefix,
             "identifier": rec.get("identifier"),
             "dataset_uuid": rec.get("dataset_uuid"),
-            "depositor": (obj.get("Metadata") or {}).get("depositor"),
+            "depositor": labels.get("depositor"),
             "created": rec.get("created"),
             "modified": rec.get("modified"),
             "files": len(files),

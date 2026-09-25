@@ -124,10 +124,10 @@ named in provenance. It also carries an origin column (deposit tool, CLI,
 cdisaw-parquet) so a reader can tell the harmonised corpus from everything
 else.
 
-*For the builder:* `promoter index` subcommand, run at the end of `run` and
-`recategorise` the way the audit object is written; extend
-`audit.list_records`; write `index/datasets.jsonl` and `index/datasets.parquet`
-(pyarrow in the web extras, or write the Parquet with DuckDB).
+*For the builder:* built 25 Sept: `promoter/index.py`, written by `run` and
+`recategorise` after a change and by `promoter index` on demand;
+`index/datasets.jsonl` and `index/datasets.parquet` (pyarrow in the web
+extras). Runbook section 6 describes the columns.
 
 ## 3. How does a depositor refer to the dataset theirs came from?
 
@@ -153,10 +153,10 @@ The reverse question, "what has been derived from this dataset", is a query
 over the index's "derived from" column. That is the catalogue's job and comes
 free once the index exists.
 
-*For the builder:* r8 steps 3 and 4 (`deposit.py` interview,
-`crsw_web/metadata.py` via `record.reference_from_text`, `index.html`,
-`deposit.js` field list, promoter `resolved_reference` line); then a
-`/datasets` JSON endpoint the form's picker reads.
+*For the builder:* r8 steps 3 and 4 built 25 Sept (`record.references_from_lines`
+shared by `deposit.py` and `crsw_web/metadata.py`; `promoter/resolve.py`);
+still to do: a `/datasets` JSON endpoint the form's picker reads, once the
+read key exists.
 
 ## 4. How do deposits meet cdisaw-parquet, keeping the core corpus distinct?
 

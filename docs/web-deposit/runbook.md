@@ -208,6 +208,26 @@ $P audit --dataset rs1/test/green/0_raw/test --env-file /dev/null   # or a datas
 $P audit --user k1078591 --json --env-file /dev/null   # raw JSON lines for piping
 $P datasets --env-file /dev/null                       # every record in place: depositor, created, modified, files, bytes
 $P datasets --strand rs2 --json --env-file /dev/null
+$P index --env-file /dev/null                          # rebuild the index by hand (see below)
+```
+
+**The index.** After any real run that promoted or rewrote a record, the
+promoter rewrites `index/datasets.jsonl` and `index/datasets.parquet`
+(`PROMOTER_INDEX_PREFIX`; blank disables): one row per dataset record in
+place with its identifier, UUID, path parts, domain, abstract, subjects,
+coverage, version, depositor(s), dates, file count and bytes, schema and
+vocabulary versions, the "derived from" references (and the parent
+identifiers as a list, for "what was derived from X"), the provenance
+tools, and an `origin` (the first tool named, else `deposit`). The
+records stay the truth; the index is a cache that `$P index` rebuilds
+in full at any time. Idle runs do not touch it, so the versioned bucket
+does not fill with copies. It is what the planned search page, the
+upstream-dataset picker and cdisaw-parquet read. From a laptop with the
+promoter key, DuckDB reads it straight from the bucket:
+
+```
+CREATE SECRET ceph (TYPE S3, KEY_ID '...', SECRET '...', ENDPOINT 'rgw.ceph.er.kcl.ac.uk', URL_STYLE 'path');
+SELECT identifier, dataset, depositor, files, bytes FROM read_parquet('s3://crsw/index/datasets.parquet');
 ```
 
 On the VM every promoter command runs inside the container like this:

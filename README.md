@@ -196,7 +196,10 @@ Every promoter run leaves its log as one object in the bucket under
 `audit/promoter/`, so what was promoted, refused or rewritten, by whom
 and when, survives the VM. `python -m promoter audit` reads it back
 (filtered by dataset, user, date or action) and `python -m promoter
-datasets` lists every record in place. See the runbook, section 6.
+datasets` lists every record in place. After any run that changed a
+record the promoter also rewrites an index of every record in place,
+as JSON lines and Parquet under `index/`, for search tools to read
+straight from the bucket. See the runbook, section 6.
 
 The vocabulary lives at
 [kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),
