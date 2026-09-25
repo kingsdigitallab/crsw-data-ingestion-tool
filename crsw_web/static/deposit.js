@@ -131,12 +131,9 @@
     if (!open) return;
     var timer = null, seq = 0;
     function addLine(identifier) {
-      var lines = box.value.split(/?
-/).filter(function (l) { return l.trim(); });
+      var lines = box.value.split(/\r?\n/).filter(function (l) { return l.trim(); });
       if (lines.indexOf(identifier) < 0) lines.push(identifier);
-      box.value = lines.join("
-") + "
-";
+      box.value = lines.join("\n") + "\n";
       box.dispatchEvent(new Event("input", { bubbles: true }));
       panel.hidden = true;
       open.hidden = false;

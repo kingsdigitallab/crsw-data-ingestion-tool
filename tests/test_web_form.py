@@ -1,5 +1,8 @@
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -81,6 +84,23 @@ class TestForm(unittest.TestCase):
         rules = json.loads(html[start:html.index("</script>", start)])
         self.assertEqual(set(rules["noise_file_names"]), set(noise.NOISE_FILE_NAMES))
         self.assertEqual(rules["noise_file_prefixes"], ["._"])
+
+    def test_script_parses(self):
+        """The whole form dies if deposit.js has a syntax error (seen once:
+        a patch turned regex escapes into line breaks). Parse-check it
+        with Node when Node is installed."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = self.client.get("/static/deposit.js").text
+        fd, path = tempfile.mkstemp(suffix=".js")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(js)
+            run = subprocess.run([node, "--check", path], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        finally:
+            os.unlink(path)
 
     def test_static_served(self):
         self.assertEqual(self.client.get("/static/deposit.css").status_code, 200)
