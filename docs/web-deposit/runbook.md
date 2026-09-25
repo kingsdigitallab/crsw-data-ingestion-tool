@@ -210,8 +210,13 @@ $P datasets --env-file /dev/null                       # every record in place: 
 $P datasets --strand rs2 --json --env-file /dev/null
 ```
 
-From a laptop drop the `docker compose ...` prefix and the `--env-file`
-flag: `.venv/Scripts/python -m promoter audit --since 2026-09-01`.
+On the VM every promoter command runs inside the container like this:
+the host has Docker and nothing else, no Python with boto3, and the key
+is only ever mounted into the container from `.env.promoter`. A bare
+`python -m promoter ...` on the VM will not work. From a laptop checkout
+with the venv and a local `.env.promoter`, drop the `docker compose ...`
+prefix and the `--env-file` flag:
+`.venv/Scripts/python -m promoter audit --since 2026-09-01`.
 
 Questions and where the answer is:
 
