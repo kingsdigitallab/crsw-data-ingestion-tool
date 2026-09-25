@@ -495,6 +495,25 @@ class TestReferences(unittest.TestCase):
         self.assertFalse(any("derived from what" in w for w in warnings))
 
 
+class TestReferencesFromLines(unittest.TestCase):
+    """The one rule both routes use to turn typed lines into references."""
+
+    def test_lines_and_lists_give_the_same_references(self):
+        text = "rs2/csac/amber/1_interim/csac\n\n  https://x.org/a  \nSmith 2020\n"
+        refs = record.references_from_lines(text)
+        self.assertEqual(refs, record.references_from_lines(
+            ["rs2/csac/amber/1_interim/csac", "", "https://x.org/a", "Smith 2020"]))
+        self.assertEqual([r["kind"] for r in refs], ["dataset", "external", "external"])
+        self.assertEqual(refs[0]["identifier"], "rs2/csac/amber/1_interim/csac")
+        self.assertEqual(refs[1]["url"], "https://x.org/a")
+        self.assertEqual(refs[2]["citation"], "Smith 2020")
+
+    def test_blank_gives_nothing(self):
+        self.assertEqual(record.references_from_lines(""), [])
+        self.assertEqual(record.references_from_lines(None), [])
+        self.assertEqual(record.references_from_lines(["", "  "]), [])
+
+
 class TestActivities(unittest.TestCase):
     PATHS = {"wide/events/cdb90.parquet", "crws/events/cdb90.parquet"}
 

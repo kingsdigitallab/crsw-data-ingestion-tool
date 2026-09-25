@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from crsw_deposit import noise
+from crsw_deposit import noise, vocab
 
 VOCAB = json.loads((Path(__file__).resolve().parent.parent
                     / "crsw_deposit" / "vocab.json").read_text(encoding="utf-8"))
@@ -52,6 +52,14 @@ class TestForm(unittest.TestCase):
         self.assertIn('value="forced-labour"', html)       # a subject checkbox
         self.assertIn("Depositing as <strong>k1078591", html)
         self.assertIn("/static/deposit.js", html)
+
+    def test_origin_section_renders_with_the_activity_vocabulary(self):
+        html = self.client.get("/").text
+        self.assertIn('name="derived_from"', html)
+        self.assertIn('name="provenance_tool"', html)
+        self.assertIn('name="provenance_commit"', html)
+        for a in vocab.activities(VOCAB):
+            self.assertIn('value="%s"' % a["code"], html)
 
     def test_rules_embedded_from_crsw_deposit(self):
         html = self.client.get("/").text

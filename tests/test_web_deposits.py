@@ -15,7 +15,7 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from crsw_deposit import deposit_logic, record
+from crsw_deposit import deposit_logic, record, vocab
 
 VOCAB = json.loads((Path(__file__).resolve().parent.parent
                     / "crsw_deposit" / "vocab.json").read_text(encoding="utf-8"))
@@ -154,6 +154,65 @@ class TestDepositFlow(unittest.TestCase):
         with self.assertRaises(self.s3.exceptions.ClientError):
             self.head(staged)
         self.assertEqual(self.client.get("/deposits/%s" % d["id"]).json()["entries"], [])
+
+    # --- origin (r8 step 4, web) -------------------------------------------
+    def test_derived_from_as_text_or_list_becomes_references(self):
+        d = self.create(derived_from="rs2/csac/amber/1_interim/csac\n"
+                                     "https://github.com/jrnold/CDB90\n")
+        meta = self.client.get("/deposits/%s" % d["id"]).json()["meta"]
+        self.assertEqual(meta["derived_from"], [
+            {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/csac"},
+            {"kind": "external", "url": "https://github.com/jrnold/CDB90"}])
+        d2 = self.create(dataset="poc-two",
+                         derived_from=["Smith, J. (2020). A book."])
+        meta2 = self.client.get("/deposits/%s" % d2["id"]).json()["meta"]
+        self.assertEqual(meta2["derived_from"][0]["citation"], "Smith, J. (2020). A book.")
+
+    def test_self_reference_and_bad_identifier_are_field_errors(self):
+        r = self.client.post("/deposits", json=dict(
+            FORM, derived_from="rs2/csac/green/0_raw/poc-test"))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("derived from itself", r.json()["detail"]["errors"]["derived_from"])
+        r = self.client.post("/deposits", json=dict(
+            FORM, source_type="derived"))
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(any("derived from what" in w for w in r.json()["warnings"]))
+
+    def test_named_script_becomes_one_activity_with_a_commit_warning(self):
+        r = self.client.post("/deposits", json=dict(
+            FORM, provenance_activity="harmonise", provenance_tool="cdisaw-parquet",
+            provenance_repo="https://github.com/kingsdigitallab/cdisaw-parquet",
+            provenance_commit="main", provenance_description="Ran unchanged."))
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertTrue(any("commit hash" in w for w in r.json()["warnings"]))
+        meta = self.client.get("/deposits/%s" % r.json()["id"]).json()["meta"]
+        self.assertEqual(meta["provenance"], [{
+            "activity": "harmonise",
+            "tool": {"name": "cdisaw-parquet",
+                     "repo": "https://github.com/kingsdigitallab/cdisaw-parquet",
+                     "commit": "main"},
+            "description": "Ran unchanged."}])
+        r = self.client.post("/deposits", json=dict(FORM, provenance_activity="harmonise"))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("provenance_tool", r.json()["detail"]["errors"])
+        r = self.client.post("/deposits", json=dict(
+            FORM, provenance_activity="teleport", provenance_tool="x"))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("provenance_activity", r.json()["detail"]["errors"])
+
+    def test_finalised_record_carries_the_origin_and_validates(self):
+        d = self.create(derived_from="rs2/csac/amber/1_interim/csac",
+                        provenance_activity="clean", provenance_tool="clean.py")
+        self.put(d["id"], "one.csv", b"a,b\n")
+        r = self.client.post("/deposits/%s/finalise" % d["id"])
+        self.assertEqual(r.status_code, 200, r.text)
+        data = self.s3.get_object(Bucket="crsw", Key=r.json()["record_key"])["Body"].read()
+        rec = record.parse_record(data.decode("utf-8"))
+        self.assertEqual(rec["derived_from"][0]["identifier"], "rs2/csac/amber/1_interim/csac")
+        self.assertNotIn("dataset_uuid", rec["derived_from"][0])   # the promoter fills it
+        self.assertEqual(rec["provenance"][0]["tool"]["name"], "clean.py")
+        errors, _ = record.validate_record(rec, vocab.all_terms(VOCAB))
+        self.assertEqual(errors, [])
 
     # --- finalise ---------------------------------------------------------
     def test_full_flow_record_is_what_the_cli_would_write(self):

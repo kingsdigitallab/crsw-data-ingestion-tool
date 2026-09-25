@@ -1,8 +1,12 @@
 # CRSW Deposit Tool — revision spec (r8): provenance
 
 Status: **proposal, not agreed.** Written 23 Sept 2026 after the catalogue
-survey; nothing here is built. Revised the same day to fold in the
-decisions from `DEPOSIT_TOOL_SPEC_R8_review.md` (marked *decided*). Read alongside r5 §4 (dataset-level
+survey. Revised the same day to fold in the
+decisions from `DEPOSIT_TOOL_SPEC_R8_review.md` (marked *decided*).
+Built so far: steps 1 and 2 (23 Sept), step 3 and the web half of step 4
+(25 Sept: CLI origin questions and `--provenance`, web Origin section,
+`record.references_from_lines` as the shared rule); the promoter half of
+step 4 is next. Read alongside r5 §4 (dataset-level
 `derived_from`) and r6 §3 (Dublin Core alignment), both of which this
 extends.
 
@@ -299,10 +303,15 @@ Stop at each and wait for review.
 
 ## 8. Open questions
 
-- **Known defect, to fix in step 3.** The CLI's "Parent object key" prompt
+- ~~**Known defect, to fix in step 3.** The CLI's "Parent object key" prompt
   and `crsw_web.metadata` both store `derived_from` as a bare string, which
-  `validate_record` rejects, and the browser form never sends the field.
-  Neither route calls `reference_from_text`; only the 0.5 upgrader does.
+  `validate_record` rejects, and the browser form never sends the field.~~
+  Fixed 25 Sept: both routes call `record.references_from_lines`.
+- **Re-deposits do not re-ask the origin questions** (25 Sept, a small
+  departure from §3's "the interview adds two questions"): a metadata edit
+  is a deliberate act, not a toll on every deposit, so a further activity on
+  a later deposit is `--provenance FILE`; `derived_from` follows the merge
+  rule in `deposit_logic`.
 - **Finding the parent.** How a depositor finds the identifier to reference
   (a picker fed by an index the promoter writes) and where the read path
   lives are planned in `docs/web-deposit/finding-and-reuse.md` §§2–3.

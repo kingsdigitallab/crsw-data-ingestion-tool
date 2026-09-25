@@ -7,7 +7,11 @@ inline; the full-record check (record.validate_record) still runs at
 finalise, when the manifest exists."""
 from typing import Dict, List, Tuple
 
-from crsw_deposit import keys, record, vocab
+from crsw_deposit import deposit_logic, keys, record, vocab
+
+PROVENANCE_FIELDS = ("provenance_activity", "provenance_tool",
+                     "provenance_repo", "provenance_commit",
+                     "provenance_description")
 
 # Matches dataset.schema.json's source_type enum and the CLI's menu.
 SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
@@ -136,10 +140,54 @@ def validate_meta(form: Dict, vocab_dict: Dict
                             "reference." % detail)
         meta["source_detail"] = detail
 
-    for field in ("creator", "derived_from"):
-        value = _text(form, field)
-        if value:
-            meta[field] = value
+    creator = _text(form, "creator")
+    if creator:
+        meta["creator"] = creator
+
+    # r8 §3: what this came from, one identifier or URL per line (or a
+    # list), through the same rule as the CLI interview.
+    raw = form.get("derived_from")
+    refs = record.references_from_lines(raw if isinstance(raw, list) else
+                                        (str(raw) if raw else ""))
+    if refs:
+        own = None
+        if not any(f in errors for f in ("strand", "project", "sensitivity",
+                                         "state", "dataset")):
+            own = deposit_logic.dataset_prefix(meta)
+        ref_errors = []
+        for i, ref in enumerate(refs):
+            ref_errors.extend(record.validate_reference(
+                ref, "derived_from[%d]" % (i + 1), own))
+        if ref_errors:
+            errors["derived_from"] = "; ".join(ref_errors)
+        meta["derived_from"] = refs
+    elif source_type == "derived":
+        warnings.append("source type is 'derived' but derived_from is "
+                        "empty - derived from what?")
+
+    # One provenance activity, if a script or notebook is named.
+    activity = _text(form, "provenance_activity")
+    tool_name = _text(form, "provenance_tool")
+    if activity or tool_name:
+        act: Dict = {"activity": activity}
+        if not tool_name:
+            errors["provenance_tool"] = "name the tool or script"
+        else:
+            tool: Dict = {"name": tool_name}
+            for field in ("repo", "commit"):
+                value = _text(form, "provenance_" + field)
+                if value:
+                    tool[field] = value
+            act["tool"] = tool
+        description = _text(form, "provenance_description")
+        if description:
+            act["description"] = description
+        act_errors, act_warnings = record.validate_activity(
+            act, "provenance[1]", set(), vocab.activity_codes(vocab_dict))
+        if act_errors:
+            errors["provenance_activity"] = "; ".join(act_errors)
+        warnings.extend(act_warnings)
+        meta["provenance"] = [act]
 
     meta["vocabulary_version"] = vocab_dict.get("vocabulary_version")
     return meta, errors, warnings

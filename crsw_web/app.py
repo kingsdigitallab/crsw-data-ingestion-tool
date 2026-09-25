@@ -96,6 +96,7 @@ def create_app(settings: Optional[Settings] = None,
                            for name, terms in facets.items()},
             "vocabulary_version": vocab_dict.get("vocabulary_version"),
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
+            "activities": vocab.activities(vocab_dict),
             "rules": client_rules(),
         })
 
@@ -336,8 +337,9 @@ def create_app(settings: Optional[Settings] = None,
         rec, union, _added, _updated = deposit_logic.assemble_record(
             dep.meta, None, dep.entries, dep.user, record.utc_now_iso(),
             dep.dataset_uuid)
-        errors, warnings = record.validate_record(rec, vocab_cache.terms,
-                                                  vocab_cache.domain_codes)
+        errors, warnings = record.validate_record(
+            rec, vocab_cache.terms, vocab_cache.domain_codes,
+            vocab.activity_codes(vocab_cache.current()))
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})

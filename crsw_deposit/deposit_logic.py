@@ -10,10 +10,55 @@ researcher used.
 
 No user I/O, no network. Stdlib only. Time and identity are passed
 in, never looked up, so tests are deterministic."""
+import json
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import keys
 from . import record
+
+
+def parse_provenance_file(text: str) -> Tuple[List[Dict], List[Dict]]:
+    """A `--provenance FILE` (r8 §3): either a JSON list of activities,
+    or an object with `provenance` and/or `derived_from`. Returns
+    (provenance, derived_from), each possibly empty. Shape errors raise
+    ValueError naming the entry; the full activity and reference checks
+    run in validate_record once the manifest exists. Strings in
+    `derived_from` become references by the shared rule."""
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        raise ValueError("provenance file is not JSON: %s" % e)
+    if isinstance(doc, list):
+        doc = {"provenance": doc}
+    if not isinstance(doc, dict):
+        raise ValueError("provenance file must be a list of activities or "
+                         "an object with provenance and/or derived_from")
+    unknown = sorted(set(doc) - {"provenance", "derived_from"})
+    if unknown:
+        raise ValueError("provenance file has unknown key(s): %s"
+                         % ", ".join(unknown))
+    provenance = doc.get("provenance") or []
+    if not isinstance(provenance, list):
+        raise ValueError("provenance must be a list of activities")
+    for i, act in enumerate(provenance):
+        if not isinstance(act, dict) or not act.get("activity"):
+            raise ValueError("provenance[%d] must be an object with an "
+                             "activity" % (i + 1))
+    derived = doc.get("derived_from") or []
+    if isinstance(derived, str):
+        derived = [derived]
+    if not isinstance(derived, list):
+        raise ValueError("derived_from must be a list")
+    refs = []
+    for i, item in enumerate(derived):
+        if isinstance(item, str):
+            refs.extend(record.references_from_lines([item]))
+        elif isinstance(item, dict):
+            refs.append(item)
+        else:
+            raise ValueError("derived_from[%d] must be a reference object "
+                             "or a string" % (i + 1))
+    return provenance, refs
 
 # A "meta" dict is the validated interview/form result. Required keys:
 # strand, project, sensitivity, state, dataset, domain, version,

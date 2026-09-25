@@ -42,6 +42,8 @@ python deposit.py FILE_OR_GLOB [FILE_OR_GLOB ...] [options]
   --state 2_final         skip state prompt (0_raw/1_interim/2_final)
   --sensitivity green     skip sensitivity prompt (green/amber)
   --dry-run               preview keys and the dataset record, upload nothing
+  --provenance FILE       JSON file of provenance activities (and optionally
+                          derived_from references); skips the origin questions
   --remote NAME           rclone remote (default: saved config, else ceph)
   --bucket NAME           target bucket (default: saved config, else crsw)
   --reconfigure           re-run the remote/bucket setup prompts
@@ -60,6 +62,18 @@ say yes and the tool stops, because that restriction has to exist before
 the first deposit, not be applied afterwards. A fully-flagged `--dry-run`
 is the way to check a deposit before committing to it, and the way to
 reproduce a problem when asking for support.
+
+A first deposit also asks two origin questions, both skippable: what this
+dataset was derived from (a dataset identifier such as
+`rs2/csac/amber/1_interim/csac` for something already in the store, or a
+URL or citation for something outside it, one per line), and whether a
+script or notebook you can name produced it (the tool, its repository and
+commit, and the kind of step). If a script made this, name it: the commit
+is what lets someone in five years check out exactly what ran. A pipeline
+that already knows all this passes it in one go with `--provenance FILE`,
+a JSON list of activities or an object with `provenance` and
+`derived_from`; that is also the route for adding an activity on a later
+deposit. Nothing is inferred: an empty origin means nobody said.
 
 Files land at `{strand}/{project}/{sensitivity}/{state}/{dataset}/{filename}`
 — a project can hold several distinct datasets, each in its own prefix, so
@@ -216,6 +230,8 @@ manifest, a record may carry:
 - `derived_from` — a list of references to what this dataset was made
   from: another Centre dataset (by its five-part identifier and, once
   known, its UUID) or something outside the store (a URL or a citation).
+  The CLI interview, the web form's Origin section and `--provenance`
+  all fill it through one rule; the promoter fills in the UUID.
 - `provenance` — a list of the activities that produced it, oldest
   first: the kind of step (convert, clean, harmonise, …), the tool with
   its repository and commit, inputs, outputs, who ran it and when. The

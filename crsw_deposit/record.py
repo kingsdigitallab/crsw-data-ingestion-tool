@@ -297,6 +297,25 @@ def reference_from_text(text: str) -> dict:
     return {"kind": "external", "citation": value}
 
 
+def references_from_lines(text_or_list) -> List[dict]:
+    """What a person typed into a "derived from" box, one reference per
+    line (or one per list item): blanks dropped, each line through
+    reference_from_text. The CLI interview and the web form both call
+    this so the two routes cannot drift."""
+    if text_or_list is None:
+        return []
+    if isinstance(text_or_list, str):
+        items = text_or_list.splitlines()
+    else:
+        items = list(text_or_list)
+    out = []
+    for item in items:
+        value = str(item or "").strip()
+        if value:
+            out.append(reference_from_text(value))
+    return out
+
+
 def validate_reference(ref, label: str,
                        own_identifier: Optional[str] = None) -> List[str]:
     """Errors for one derived_from reference; `label` names it in

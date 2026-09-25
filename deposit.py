@@ -655,6 +655,20 @@ def preview_lines(plans: List[Dict], meta: Dict, existing: Optional[Dict],
     lines.append("    coverage %s to %s | subjects: %s" % (
         meta.get("coverage_start"), meta.get("coverage_end"),
         ", ".join(meta.get("subject", []))))
+    refs = meta.get("derived_from") or []
+    if refs:
+        names = [r.get("identifier") or r.get("url") or r.get("citation") or "?"
+                 for r in refs]
+        more = "" if len(names) <= 2 else ", ... and %d more" % (len(names) - 2)
+        lines.append("    derived from: %d reference(s): %s%s"
+                     % (len(refs), ", ".join(names[:2]), more))
+    acts = meta.get("provenance") or []
+    if acts:
+        tools = sorted({(a.get("tool") or {}).get("name") for a in acts
+                        if (a.get("tool") or {}).get("name")})
+        lines.append("    provenance: %d activit%s%s" % (
+            len(acts), "y" if len(acts) == 1 else "ies",
+            (", tool " + ", ".join(tools)) if tools else ""))
     return lines
 
 
@@ -676,6 +690,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sensitivity")  # validated by hand so 'red' gets OUR message
     p.add_argument("--dry-run", action="store_true",
                    help="preview keys and the dataset record, upload nothing")
+    p.add_argument("--provenance", metavar="FILE",
+                   help="JSON file of provenance activities (and optionally "
+                        "derived_from references) to record; skips the two "
+                        "origin questions")
     p.add_argument("--remote", default=None,
                    help="rclone remote name (default: ceph, or your saved config)")
     p.add_argument("--bucket", default=None,
@@ -909,6 +927,52 @@ def check_project_flag(project: str, container: str,
             "nothing deposited: %s '%s' was not confirmed - pick an "
             "existing %s or re-run and confirm" % (kind, project, kind))
     check_restricted_access(kind)
+
+
+def prompt_origin(meta: Dict, vocab_dict: Dict) -> None:
+    """The two origin questions of a first deposit (r8 §3), both
+    skippable. What this came from, one identifier or URL per line;
+    then, if a script or notebook made it, the tool and the kind of
+    step, as one provenance activity. Re-deposits do not ask again: a
+    further activity is `--provenance FILE`."""
+    say("What was this derived from? Dataset identifier "
+        "(strand/project/sensitivity/state/dataset) or URL, one per "
+        "line; blank line to finish (Enter to skip).")
+    lines = []
+    while True:
+        line = input("> ").strip()
+        if not line:
+            break
+        lines.append(line)
+    refs = record.references_from_lines(lines)
+    if refs:
+        meta["derived_from"] = refs
+        say("Derived from: %s" % ", ".join(
+            r.get("identifier") or r.get("url") or r.get("citation")
+            for r in refs))
+    elif meta.get("source_type") == "derived":
+        warn("source type is 'derived' but nothing was named - the record "
+             "will carry a warning until a reference is added.")
+
+    if not ask_yes_no("Was this dataset produced by a script or notebook "
+                      "you can name?", default_no=True):
+        return
+    entries = [(str(i), a["code"], a.get("label", ""))
+               for i, a in enumerate(vocab.activities(vocab_dict), 1)]
+    activity = {"activity": ask_select("Kind of step", entries)}
+    tool = {"name": ask("Tool or script name")}
+    repo = input("Repository URL (Enter to skip): ").strip()
+    if repo:
+        tool["repo"] = repo
+    commit = input("Commit hash (Enter to skip): ").strip()
+    if commit:
+        tool["commit"] = commit
+    activity["tool"] = tool
+    description = input("One or two sentences on what the step did "
+                        "(Enter to skip): ").strip()
+    if description:
+        activity["description"] = description
+    meta["provenance"] = [activity]
 
 
 def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
@@ -1159,8 +1223,9 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
     if existing:
         # Recommended fields carry over untouched; a metadata edit is a
         # deliberate act, not a toll on every deposit.
-        for field in ("license", "source_type", "source_detail",
-                      "derived_from", "creator"):
+        # (derived_from is not copied: deposit_logic.assemble_record keeps
+        # the existing list unless this deposit supplies one, r8 §3.)
+        for field in ("license", "source_type", "source_detail", "creator"):
             if existing.get(field):
                 meta[field] = existing[field]
     else:
@@ -1178,10 +1243,15 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             warn("'%s' will not help anyone in five years - consider naming "
                  "the archive, URL, or reference." % detail)
         meta["source_detail"] = detail
-        if meta["source_type"] == "derived":
-            parent = input("Parent object key, if known (Enter to skip): ").strip()
-            if parent:
-                meta["derived_from"] = parent
+        if getattr(args, "provenance_doc", None) is None:
+            prompt_origin(meta, vocab_dict)
+
+    if getattr(args, "provenance_doc", None) is not None:
+        provenance, derived_from = args.provenance_doc
+        if provenance:
+            meta["provenance"] = provenance
+        if derived_from:
+            meta["derived_from"] = derived_from
 
     if "creator" not in meta:
         creator = input("Creator - person or team intellectually "
@@ -1369,7 +1439,8 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
                 now=record.utc_now_iso(), dataset_uuid=dataset_uuid)
             errors, _ = record.validate_record(
                 rec, vocab.all_terms(vocab_dict),
-                vocab.domain_codes(vocab_dict))
+                vocab.domain_codes(vocab_dict),
+                vocab.activity_codes(vocab_dict))
             if errors:
                 raise transfer.TransferError("record_invalid",
                                              "; ".join(errors))
@@ -1546,6 +1617,16 @@ def main(argv=None) -> int:
     fetcher = ((lambda key: transfer.read_key(
                     rclone, args.remote, args.bucket, key))
                if (rclone and remote_ok) else None)
+
+    args.provenance_doc = None
+    if args.provenance:
+        try:
+            args.provenance_doc = deposit_logic.parse_provenance_file(
+                Path(args.provenance).read_text(encoding="utf-8"))
+        except OSError as e:
+            return fail("Could not read %s: %s" % (args.provenance, e), 2)
+        except ValueError as e:
+            return fail("--provenance: %s" % e, 2)
 
     try:
         meta, existing = prompt_metadata(args, vocab_dict, lister, prober,

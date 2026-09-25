@@ -146,6 +146,50 @@
         <p class="error" hidden></p>
       </div>
     </div>
+
+    <details class="origin" id="origin">
+      <summary>Origin: what this was made from, and what made it</summary>
+      <p class="lede">Optional. Fill this in if the dataset was derived from other data, or produced by a script or notebook you can name.</p>
+      <div class="field" data-field="derived_from">
+        <label for="derived_from">Derived from</label>
+        <textarea id="derived_from" name="derived_from" rows="3" placeholder="rs2/csac/amber/1_interim/csac&#10;https://github.com/jrnold/CDB90"></textarea>
+        <p class="hint">One per line: a dataset identifier (strand/project/sensitivity/state/dataset) for something already in the store, or a URL or citation for something outside it.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="grid two">
+        <div class="field" data-field="provenance_activity">
+          <label for="provenance_activity">Kind of step</label>
+          <select id="provenance_activity" name="provenance_activity">
+            <option value="">Not stated</option>
+            {% for a in activities %}<option value="{{ a.code }}">{{ a.code }}{% if a.label %} — {{ a.label }}{% endif %}</option>{% endfor %}
+          </select>
+          <p class="error" hidden></p>
+        </div>
+        <div class="field" data-field="provenance_tool">
+          <label for="provenance_tool">Tool or script</label>
+          <input id="provenance_tool" name="provenance_tool" type="text" placeholder="e.g. cdisaw-parquet, clean.ipynb">
+          <p class="error" hidden></p>
+        </div>
+      </div>
+      <div class="grid two">
+        <div class="field" data-field="provenance_repo">
+          <label for="provenance_repo">Repository</label>
+          <input id="provenance_repo" name="provenance_repo" type="text" placeholder="https://github.com/...">
+          <p class="error" hidden></p>
+        </div>
+        <div class="field" data-field="provenance_commit">
+          <label for="provenance_commit">Commit</label>
+          <input id="provenance_commit" name="provenance_commit" type="text" placeholder="7 to 40 hex characters">
+          <p class="hint">So the exact version that ran can be checked out later.</p>
+          <p class="error" hidden></p>
+        </div>
+      </div>
+      <div class="field" data-field="provenance_description">
+        <label for="provenance_description">What the step did</label>
+        <textarea id="provenance_description" name="provenance_description" rows="2"></textarea>
+        <p class="error" hidden></p>
+      </div>
+    </details>
   </section>
 
   <section class="step" id="step-files">

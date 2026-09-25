@@ -190,5 +190,40 @@ class TestCompletionProblems(unittest.TestCase):
         ])
 
 
+class TestProvenanceFile(unittest.TestCase):
+    """`--provenance FILE` (r8 §3): a list of activities, or an object
+    with provenance and/or derived_from."""
+
+    def test_bare_list_is_activities(self):
+        prov, refs = deposit_logic.parse_provenance_file(
+            '[{"activity": "clean", "tool": {"name": "x"}}]')
+        self.assertEqual(prov[0]["activity"], "clean")
+        self.assertEqual(refs, [])
+
+    def test_object_with_both_keys_and_string_references(self):
+        prov, refs = deposit_logic.parse_provenance_file(
+            '{"provenance": [{"activity": "harmonise"}], '
+            '"derived_from": ["rs2/csac/amber/1_interim/csac", '
+            '{"kind": "external", "url": "https://x.org"}]}')
+        self.assertEqual(len(prov), 1)
+        self.assertEqual(refs[0], {"kind": "dataset",
+                                   "identifier": "rs2/csac/amber/1_interim/csac"})
+        self.assertEqual(refs[1]["url"], "https://x.org")
+
+    def test_errors_name_the_entry(self):
+        with self.assertRaises(ValueError) as ctx:
+            deposit_logic.parse_provenance_file(
+                '[{"activity": "clean"}, {"tool": {"name": "no activity"}}]')
+        self.assertIn("provenance[2]", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            deposit_logic.parse_provenance_file('{"derived_from": [3]}')
+        self.assertIn("derived_from[1]", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            deposit_logic.parse_provenance_file("not json")
+        with self.assertRaises(ValueError) as ctx:
+            deposit_logic.parse_provenance_file('{"activities": []}')
+        self.assertIn("unknown key", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

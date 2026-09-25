@@ -349,6 +349,116 @@ class TestPreview(unittest.TestCase):
         self.assertIn("unchanged - upload will be skipped", text)
 
 
+    def test_origin_lines_only_when_present(self):
+        plans = self._plans(1)
+        meta = dict(_META)
+        text = "\n".join(deposit.preview_lines(plans, meta, None,
+                                               (["f0.csv"], [], [])))
+        self.assertNotIn("derived from", text)
+        self.assertNotIn("provenance", text)
+        meta["derived_from"] = [
+            {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/a"},
+            {"kind": "external", "url": "https://x.org/b"},
+            {"kind": "external", "citation": "Smith 2020"}]
+        meta["provenance"] = [{"activity": "clean", "tool": {"name": "clean.py"}}]
+        text = "\n".join(deposit.preview_lines(plans, meta, None,
+                                               (["f0.csv"], [], [])))
+        self.assertIn("derived from: 3 reference(s): rs2/csac/amber/1_interim/a, "
+                      "https://x.org/b, ... and 1 more", text)
+        self.assertIn("provenance: 1 activity, tool clean.py", text)
+
+
+class TestPromptOrigin(unittest.TestCase):
+    """r8 §3: the two origin questions of a first deposit."""
+
+    def test_lines_become_references_and_a_named_script_an_activity(self):
+        meta = {"source_type": "derived"}
+        answers = ["rs2/csac/amber/1_interim/csac", "https://x.org/a", "",
+                   "y", "1", "cdisaw-parquet", "https://github.com/k/p",
+                   "3f2a9c1", "Ran the ingest script unchanged."]
+        with mock.patch("builtins.input", side_effect=answers), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn") as warned:
+            deposit.prompt_origin(meta, _VOCAB)
+        self.assertEqual([r["kind"] for r in meta["derived_from"]],
+                         ["dataset", "external"])
+        act = meta["provenance"][0]
+        self.assertEqual(act["activity"], deposit.record.ACTIVITY_KINDS[0])
+        self.assertEqual(act["tool"], {"name": "cdisaw-parquet",
+                                       "repo": "https://github.com/k/p",
+                                       "commit": "3f2a9c1"})
+        self.assertEqual(act["description"], "Ran the ingest script unchanged.")
+        warned.assert_not_called()
+
+    def test_both_questions_skippable(self):
+        meta = {"source_type": "archive"}
+        with mock.patch("builtins.input", side_effect=["", "n"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn") as warned:
+            deposit.prompt_origin(meta, _VOCAB)
+        self.assertNotIn("derived_from", meta)
+        self.assertNotIn("provenance", meta)
+        warned.assert_not_called()
+
+    def test_derived_with_nothing_named_is_warned_not_refused(self):
+        meta = {"source_type": "derived"}
+        with mock.patch("builtins.input", side_effect=["", "n"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn") as warned:
+            deposit.prompt_origin(meta, _VOCAB)
+        self.assertNotIn("derived_from", meta)
+        self.assertIn("nothing was named", warned.call_args[0][0])
+
+    def test_activity_codes_come_from_the_vocabulary(self):
+        v = dict(_VOCAB, activities=[{"code": "reproject", "label": "Reproject"}])
+        meta = {}
+        with mock.patch("builtins.input",
+                        side_effect=["", "y", "reproject", "gdalwarp", "", "", ""]), \
+             mock.patch("deposit.say"):
+            deposit.prompt_origin(meta, v)
+        self.assertEqual(meta["provenance"][0]["activity"], "reproject")
+        self.assertEqual(meta["provenance"][0]["tool"], {"name": "gdalwarp"})
+
+
+class TestFirstDepositOrigin(unittest.TestCase):
+    """The interview asks the origin questions once, on a first deposit,
+    and not at all when --provenance supplies the answers."""
+
+    GOOD = " ".join(["word"] * 60)
+
+    def _answers(self):
+        # version, coverage x2, subjects, abstract, licence, source type,
+        # source detail, creator, steward (origin is mocked out).
+        return ["", "1990", "2000", "1", self.GOOD, "", "1",
+                "The National Archives, CO 123", "", ""]
+
+    def test_first_deposit_reaches_the_origin_questions(self):
+        args = _flagged_args()
+        args.provenance_doc = None
+        with mock.patch("builtins.input", side_effect=self._answers()), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"), \
+             mock.patch("deposit.prompt_origin") as origin:
+            meta, existing = deposit.prompt_metadata(args, _VOCAB, None, None, None)
+        self.assertIsNone(existing)
+        origin.assert_called_once()
+        self.assertEqual(meta["source_type"], "archive")
+
+    def test_provenance_file_answers_instead(self):
+        args = _flagged_args()
+        args.provenance_doc = ([{"activity": "clean", "tool": {"name": "c.py"}}],
+                               [{"kind": "dataset",
+                                 "identifier": "rs2/csac/amber/1_interim/x"}])
+        with mock.patch("builtins.input", side_effect=self._answers()), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"), \
+             mock.patch("deposit.prompt_origin") as origin:
+            meta, _ = deposit.prompt_metadata(args, _VOCAB, None, None, None)
+        origin.assert_not_called()
+        self.assertEqual(meta["provenance"][0]["tool"]["name"], "c.py")
+        self.assertEqual(meta["derived_from"][0]["identifier"],
+                         "rs2/csac/amber/1_interim/x")
+
+    def test_parser_takes_the_flag(self):
+        args = deposit.build_parser().parse_args(["a.csv", "--provenance", "p.json"])
+        self.assertEqual(args.provenance, "p.json")
+
+
 class TestConfirmFilenames(unittest.TestCase):
     def test_clean_member_not_prompted(self):
         src = deposit.Source(Path("x"), "2024/tiles/a.tif")
@@ -958,6 +1068,19 @@ class TestExistingRecordFlow(unittest.TestCase):
         self.assertTrue(any(
             "Existing dataset found: sentinel2-imagery 3-0" in s
             for s in said))
+
+    def test_existing_derived_from_is_left_to_the_merge_rule(self):
+        import json
+        fetch = self._fetcher((json.dumps(self._existing(
+            derived_from="rs2/csac/amber/1_interim/csac")), None))
+        with mock.patch("builtins.input", side_effect=["", "", "", "n"]), \
+             mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            meta, existing = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        # Not copied into meta (r8 §3); assemble_record keeps the
+        # existing list, already upgraded to a reference on read.
+        self.assertNotIn("derived_from", meta)
+        self.assertEqual(existing["derived_from"][0]["kind"], "dataset")
 
     def test_absent_record_is_a_first_deposit(self):
         fetch = self._fetcher((None, "absent"))

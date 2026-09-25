@@ -22,6 +22,7 @@ python -m unittest tests.test_keys.TestBuildKey.test_happy_path
 python -m pytest                        # same tests plus web tests; needs pip install -e ".[dev]"
 pip install -e ".[web,dev]"             # service + test deps into a venv (never required for the CLI)
 python deposit.py FILE_OR_FOLDER [...] --strand rs2 --project csac --dataset x --state 2_final --sensitivity green --domain quant --dry-run
+python deposit.py FILE [...] --provenance prov.json   # r8: activities and derived_from from a file; skips the origin questions
 docker compose -f deploy/compose.yaml up --build   # web service + nginx sidecar, reads .env
 python -m promoter run --dry-run                   # check staged deposits; drop --dry-run to promote
 python -m promoter recategorise --dry-run [--changes FILE] [--dataset ID]   # r9: bring records up to the vocabulary

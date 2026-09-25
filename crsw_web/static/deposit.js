@@ -43,6 +43,11 @@
   }
   form.addEventListener("input", updateSlip);
   form.addEventListener("change", updateSlip);
+  // A derived dataset should say what it came from: open the origin
+  // section when that source type is chosen.
+  $("source_type").addEventListener("change", function () {
+    if (this.value === "derived") $("origin").open = true;
+  });
   $("abstract").addEventListener("input", function () {
     var n = this.value.trim() ? this.value.trim().split(/\s+/).length : 0;
     $("wordcount").textContent = n + " word" + (n === 1 ? "" : "s");
@@ -129,6 +134,8 @@
     Object.keys(errors).forEach(function (name) {
       var f = form.querySelector('.field[data-field="' + name + '"]');
       if (!f) return;
+      var d = f.closest("details");
+      if (d) d.open = true;
       f.classList.add("invalid");
       var e = f.querySelector(".error"); e.hidden = false; e.textContent = errors[name];
       if (!first) first = f;
@@ -142,7 +149,9 @@
     var m = {};
     ["strand", "sensitivity", "state", "project", "dataset", "domain", "version",
      "coverage_start", "coverage_end", "abstract", "license", "creator",
-     "source_type", "source_detail"].forEach(function (k) { m[k] = val(k); });
+     "source_type", "source_detail", "derived_from", "provenance_activity",
+     "provenance_tool", "provenance_repo", "provenance_commit",
+     "provenance_description"].forEach(function (k) { m[k] = val(k); });
     m.subject = Array.prototype.map.call(form.querySelectorAll('input[name=subject]:checked'), function (c) { return c.value; });
     return m;
   }
