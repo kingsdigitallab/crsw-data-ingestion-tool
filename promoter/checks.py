@@ -6,12 +6,11 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-from botocore.exceptions import ClientError
-
-from crsw_deposit import deposit_logic, keys, labels as labels_mod, record
+from crsw_deposit import deposit_logic, keys, labels as labels_mod, record, vocab
 from crsw_web.deposits import STATUS_COMPLETE, Deposit, DepositStore
 
 from .config import PromoterConfig
+from .resolve import lookup, read_json_object
 
 CHUNK = 8 * 1024 * 1024
 
@@ -28,22 +27,18 @@ class Report:
     mapped_subjects: Optional[List[str]] = None
     mapping_entries: List[Dict] = field(default_factory=list)
     mapped_vocabulary_version: Optional[str] = None
+    # r8 §4: derived_from with parents' uuid/version filled in from the
+    # store, when any reference needed it; None when nothing changed.
+    resolved_derived_from: Optional[List[Dict]] = None
+    resolved_references: List[Dict] = field(default_factory=list)
+    unresolved_references: List[Dict] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.problems
 
 
-def _read_json_object(client, bucket, key):
-    """(text, None) or (None, 'absent') or (None, error)."""
-    try:
-        obj = client.get_object(Bucket=bucket, Key=key)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("NoSuchKey", "404", "NotFound"):
-            return None, "absent"
-        return None, code or str(e)
-    return obj["Body"].read().decode("utf-8"), None
+_read_json_object = read_json_object
 
 
 def _sha256_of_object(client, bucket, key) -> str:
@@ -116,8 +111,23 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             rep.mapped_vocabulary_version = mapped.get("vocabulary_version")
             staged_rec = mapped
     rep.staged_record = staged_rec
+    if staged_rec and isinstance(staged_rec.get("derived_from"), list):
+        # r8 §4: resolve, don't invent. A parent that is not there is a
+        # warning; the reference is left as typed and the deposit goes on.
+        refs, resolved, unresolved = lookup(client, bucket, staged_rec["derived_from"])
+        rep.resolved_references = resolved
+        rep.unresolved_references = unresolved
+        if resolved:
+            rep.resolved_derived_from = refs
+        for u in unresolved:
+            rep.warnings.append(
+                "derived_from[%d] %s: %s in the store; reference left as typed"
+                % (u["index"], u["identifier"],
+                   "no dataset record" if u["reason"] == "absent" else u["reason"]))
     if staged_rec:
-        errors, _ = record.validate_record(staged_rec, vocab_terms, domain_codes)
+        errors, _ = record.validate_record(
+            staged_rec, vocab_terms, domain_codes,
+            vocab.activity_codes(vocab_doc) if vocab_doc else None)
         for e in errors:
             p.append("staged record invalid: %s" % e)
         if staged_rec.get("identifier") != dep.prefix:

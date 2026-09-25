@@ -3,10 +3,11 @@
 Status: **proposal, not agreed.** Written 23 Sept 2026 after the catalogue
 survey. Revised the same day to fold in the
 decisions from `DEPOSIT_TOOL_SPEC_R8_review.md` (marked *decided*).
-Built so far: steps 1 and 2 (23 Sept), step 3 and the web half of step 4
-(25 Sept: CLI origin questions and `--provenance`, web Origin section,
-`record.references_from_lines` as the shared rule); the promoter half of
-step 4 is next. Read alongside r5 §4 (dataset-level
+Built so far: steps 1 to 4 (steps 1 and 2 on 23 Sept; step 3 and step 4
+on 25 Sept: CLI origin questions and `--provenance`, web Origin section,
+`record.references_from_lines` as the shared rule, promoter resolution in
+`promoter/resolve.py` with the staged record rewritten first as decided
+in §4). Step 5 (docs) is folded into each step's commit. Read alongside r5 §4 (dataset-level
 `derived_from`) and r6 §3 (Dublin Core alignment), both of which this
 extends.
 

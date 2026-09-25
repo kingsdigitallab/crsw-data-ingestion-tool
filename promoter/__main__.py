@@ -10,6 +10,11 @@ place up to the current vocabulary, and apply a steward's change file.
 the bucket. `python -m promoter datasets [--strand rsN] [--json]`: every
 dataset record in place.
 
+A deposit whose derived_from names another dataset in the store has the
+parent's uuid and version filled in before promotion (r8 §4): logged as
+resolved_reference, or reference_unresolved when the parent is absent
+(a warning; the deposit still promotes with the reference as typed).
+
 Every run and recategorise writes its log lines as one object under
 PROMOTER_AUDIT_PREFIX before it exits (dry runs too, marked as such).
 
@@ -77,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
                                       "dataset name or uuid)")
     au.add_argument("--user", help="only lines about this depositor or steward")
     au.add_argument("--action", help="only this action, e.g. promoted, checked, "
-                                     "record_rewritten")
+                                     "record_rewritten, resolved_reference")
     au.add_argument("--json", action="store_true", help="raw JSON lines")
 
     ds = sub.add_parser("datasets", help="every dataset record in place")
@@ -143,6 +148,14 @@ def cmd_run(args) -> int:
         log.write("checked", dep, ok=rep.ok, problems=rep.problems,
                   warnings=rep.warnings, files=len(dep.entries),
                   bytes=rep.total_bytes)
+        for r in rep.resolved_references:
+            # r8 §4: what the store knows about the parent, filled in.
+            log.write("resolved_reference", dep, identifier=r["identifier"],
+                      dataset_uuid=r["dataset_uuid"], version=r["version"],
+                      dry_run=args.dry_run)
+        for u in rep.unresolved_references:
+            log.write("reference_unresolved", dep, identifier=u["identifier"],
+                      reason=u["reason"])
         if not rep.ok:
             refused += 1
             continue
@@ -152,7 +165,8 @@ def cmd_run(args) -> int:
                 else dep.dataset_uuid))
             continue
         out = promote(dep, rep, store, log, terms, codes,
-                      keep_staging=args.keep_staging)
+                      keep_staging=args.keep_staging,
+                      activity_codes=vocab.activity_codes(vocab_dict))
         if out.promoted:
             promoted += 1
         else:

@@ -67,6 +67,14 @@ The promoted deposit is gone from staging (delete markers; versions remain per b
 
 The promoted record's `created` was the promotion time, not the time the researcher finalised. Fixed in the shared package: `deposit_logic.assemble_record` now takes a `created` hint, used only when no destination record exists; the promoter passes the staged record's `created`. `modified` is the promotion time. The record already promoted at `rs2/csac/green/0_raw/web-poc` carries the wrong `created` (13:14 rather than 10:42 UTC); it is test data and was left as is.
 
+Addition of 25 September (r8 §4): before copying anything, the promoter
+looks up each "derived from" reference to another dataset in the store
+and fills in the parent's UUID and version, rewriting the staged record
+first so what is moved is what was checked (`record_rewritten` with
+`where: staging`, then `resolved_reference` lines). A parent that is not
+there is a warning; the reference is left as typed and the deposit still
+promotes. Dry runs report what would be filled in and write nothing.
+
 ## Test counts at this commit
 
 429 pass under pytest (moto), 430 under stdlib unittest; CLI `--dry-run` output unchanged from the pre-refactor baseline; secrets check passes.

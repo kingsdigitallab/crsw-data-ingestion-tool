@@ -255,6 +255,109 @@ class TestPromote(PromoterBase):
             promote(dep, rep, self.store, self.log, TERMS, CODES)
 
 
+class TestResolveReferences(PromoterBase):
+    """r8 §4: the promoter fills in a parent's uuid and version, in
+    staging first, then promotes; a missing parent is a warning."""
+
+    PARENT = "rs2/csac/amber/1_interim/parent"
+    PARENT_UUID = "22222222-2222-4222-8222-222222222222"
+
+    def seed_parent(self):
+        meta = dict(FORM, sensitivity="amber", state="1_interim",
+                    dataset="parent", version="2-1")
+        rec, _, _, _ = deposit_logic.assemble_record(
+            meta, None, [record.manifest_entry("p.csv", "c" * 64, 3)],
+            "alice", "2026-01-01T00:00:00Z", self.PARENT_UUID)
+        self.s3.put_object(Bucket="crsw", Key=self.PARENT + "/dataset.parent.json",
+                           Body=deposit_logic.record_bytes(rec))
+
+    def run_cli(self, *extra):
+        env = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
+               "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",
+               "PROMOTER_STAGING_PREFIX": "staging/_test", "PROMOTER_LOG_PATH": "",
+               "PROMOTER_AUDIT_PREFIX": ""}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
+             mock.patch("promoter.__main__.vocab.load_vocabulary", return_value=(VOCAB, "bundled")), \
+             mock.patch("builtins.print") as printed:
+            code = cli.main(["run", "--env-file", os.devnull] + list(extra))
+        return code, [json.loads(c.args[0]) for c in printed.call_args_list]
+
+    def test_parent_uuid_and_version_are_filled_in_staging_then_promoted(self):
+        self.seed_parent()
+        dep = self.stage(derived_from=self.PARENT + "\nhttps://x.org/a")
+        code, lines = self.run_cli("--keep-staging")
+        self.assertEqual(code, 0, lines)
+        actions = [l["action"] for l in lines]
+        self.assertIn("resolved_reference", actions)
+        self.assertLess(actions.index("resolved_reference"), actions.index("record_rewritten"))
+        self.assertLess(actions.index("record_rewritten"), actions.index("copied"))
+        res = next(l for l in lines if l["action"] == "resolved_reference")
+        self.assertEqual((res["identifier"], res["dataset_uuid"], res["version"]),
+                         (self.PARENT, self.PARENT_UUID, "2-1"))
+        rew = next(l for l in lines if l["action"] == "record_rewritten")
+        self.assertEqual((rew["where"], rew["reason"]), ("staging", "resolved_reference"))
+        # The destination record carries the resolved reference, and the
+        # external one is untouched.
+        raw = self.s3.get_object(Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read()
+        rec = json.loads(raw)
+        self.assertEqual(rec["derived_from"], [
+            {"kind": "dataset", "identifier": self.PARENT,
+             "dataset_uuid": self.PARENT_UUID, "version": "2-1"},
+            {"kind": "external", "url": "https://x.org/a"}])
+        # The staged record was rewritten to say the same before the move
+        # (kept here by --keep-staging; on a real run it becomes a
+        # noncurrent version behind the delete marker).
+        staged = json.loads(self.s3.get_object(Bucket="crsw", Key=dep.record_key)["Body"].read())
+        self.assertEqual(staged["derived_from"], rec["derived_from"])
+        head = self.s3.head_object(Bucket="crsw", Key=dep.record_key)
+        self.assertEqual(head["Metadata"]["dataset-uuid"], dep.dataset_uuid)
+        self.assertEqual(head["Metadata"]["depositor"], "k1078591")
+
+    def test_missing_parent_is_a_warning_and_the_deposit_still_promotes(self):
+        dep = self.stage(derived_from=self.PARENT)
+        code, lines = self.run_cli("--dry-run")
+        self.assertEqual(code, 0, lines)
+        checked = next(l for l in lines if l["action"] == "checked")
+        self.assertTrue(checked["ok"])
+        self.assertTrue(any("no dataset record" in w for w in checked["warnings"]), checked)
+        self.assertEqual([l["identifier"] for l in lines if l["action"] == "reference_unresolved"],
+                         [self.PARENT])
+        self.assertNotIn("resolved_reference", [l["action"] for l in lines])
+        code, lines = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertNotIn("record_rewritten", [l["action"] for l in lines])
+        rec = json.loads(self.s3.get_object(
+            Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read())
+        self.assertEqual(rec["derived_from"],
+                         [{"kind": "dataset", "identifier": self.PARENT}])
+
+    def test_dry_run_reports_the_resolution_and_writes_nothing(self):
+        self.seed_parent()
+        dep = self.stage(derived_from=self.PARENT)
+        before = self.s3.get_object(Bucket="crsw", Key=dep.record_key)["Body"].read()
+        code, lines = self.run_cli("--dry-run")
+        self.assertEqual(code, 0)
+        res = [l for l in lines if l["action"] == "resolved_reference"]
+        self.assertEqual(len(res), 1)
+        self.assertTrue(res[0]["dry_run"])
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=dep.record_key)["Body"].read(),
+                         before)
+        self.assertEqual(self.keys_under("rs2/csac/green/"), [])
+
+    def test_already_resolved_reference_is_left_alone(self):
+        self.seed_parent()
+        from promoter.resolve import lookup
+        refs = [{"kind": "dataset", "identifier": self.PARENT,
+                 "dataset_uuid": "33333333-3333-4333-8333-333333333333", "version": "9-9"}]
+        out, resolved, unresolved = lookup(self.s3, "crsw", refs)
+        self.assertEqual((out, resolved, unresolved), (refs, [], []))
+        out, resolved, unresolved = lookup(self.s3, "crsw", [
+            {"kind": "dataset", "identifier": self.PARENT, "version": "9-9"}])
+        self.assertEqual(out[0]["dataset_uuid"], self.PARENT_UUID)
+        self.assertEqual(out[0]["version"], "9-9")     # kept: the depositor said which
+
+
 class TestRun(PromoterBase):
     def run_cli(self, *extra):
         env = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",

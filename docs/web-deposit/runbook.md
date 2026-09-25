@@ -229,6 +229,11 @@ Questions and where the answer is:
 - *Which records were rewritten when the vocabulary changed?*
   `audit --action record_rewritten`; the record's own
   `category_history` says what changed and why.
+- *What was dataset X derived from, and did the promoter find it?*
+  `audit --action resolved_reference --dataset <name>`: the parent's
+  identifier, UUID and version as filled in from the store (r8 §4);
+  `audit --action reference_unresolved` lists references whose parent
+  was not in the store, left as typed and promoted with a warning.
 - *What is in the store now?* `datasets`. It reads the bucket, so it is
   always current; there is no register to keep in step.
 - *Who created a deposit, or uploaded a file, before promotion?* The

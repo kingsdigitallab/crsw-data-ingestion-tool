@@ -6,7 +6,7 @@ promotion is still visible). Copies are server-side and idempotent, so
 a failed run can simply be re-run."""
 import hashlib
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from crsw_deposit import deposit_logic, keys, labels as labels_mod, record
 from crsw_web.deposits import Deposit, DepositStore
@@ -66,7 +66,8 @@ def _copy(client, bucket, src: str, dst: str, size: int,
 def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
             vocab_terms: Set[str], domain_codes: List[str],
             keep_staging: bool = False, single_copy_max: int = SINGLE_COPY_MAX,
-            copy_part: int = COPY_PART) -> Outcome:
+            copy_part: int = COPY_PART,
+            activity_codes: Optional[List[str]] = None) -> Outcome:
     if not rep.ok:
         raise PromotionError("refusing to promote a deposit with problems")
     client, bucket = store.client, store.bucket
@@ -76,6 +77,28 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
     staged_prefix = store.staged_key(dep.user, dep.id, dep.prefix)
 
     try:
+        # r8 §4 (decided): references the checks resolved are written to
+        # the staged record first, then promoted like everything else, so
+        # what was moved is what was checked.
+        if rep.resolved_derived_from is not None and rep.staged_record:
+            staged = dict(rep.staged_record)
+            staged["derived_from"] = rep.resolved_derived_from
+            data = deposit_logic.record_bytes(staged)
+            client.put_object(
+                Bucket=bucket, Key=dep.record_key, Body=data,
+                ContentType="application/json",
+                Metadata=labels_mod.object_labels(
+                    staged.get("dataset_uuid") or dep.dataset_uuid,
+                    hashlib.sha256(data).hexdigest(),
+                    dep.meta["sensitivity"], dep.user))
+            back = client.get_object(Bucket=bucket, Key=dep.record_key)["Body"].read()
+            if back != data:
+                raise PromotionError("staged record round-trip mismatch at %s"
+                                     % dep.record_key)
+            log.write("record_rewritten", dep, record=dep.record_key,
+                      where="staging", reason="resolved_reference",
+                      resolved=[r["identifier"] for r in rep.resolved_references])
+
         # Members first.
         for entry in dep.entries:
             src = staged_prefix + "/" + entry["path"]
@@ -107,10 +130,13 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
                 meta["vocabulary_version"] = rep.mapped_vocabulary_version
             log.write("stale_terms_mapped", dep, before=list(dep.meta["subject"]),
                       after=rep.mapped_subjects)
+        if rep.resolved_derived_from is not None:
+            meta["derived_from"] = rep.resolved_derived_from
         rec, union, added, updated = deposit_logic.assemble_record(
             meta, existing, dep.entries, dep.user, record.utc_now_iso(),
             dataset_uuid, created=staged_created)
-        errors, _ = record.validate_record(rec, vocab_terms, domain_codes)
+        errors, _ = record.validate_record(rec, vocab_terms, domain_codes,
+                                           activity_codes)
         if errors:
             raise PromotionError("assembled record invalid: %s" % "; ".join(errors))
         data = deposit_logic.record_bytes(rec)
