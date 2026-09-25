@@ -93,8 +93,9 @@ decision to make before the download page goes live, not a technical one.*
 *For the builder:* built 25 Sept (find and browse): `crsw_web/config.py`
 read keys and `CRSW_AMBER_ACCESS`; `crsw_web/s3.py::ReadOnly`;
 `crsw_web/access.py::may_download`; `crsw_web/catalogue.py` over the index;
-routes in `crsw_web/app.py`. Still to do: the streamed download route
-with the Range header, the nginx download limits, the whole-dataset zip.
+routes in `crsw_web/app.py`; the streamed download route with the Range
+header passed through, and the nginx download limits. Not built: the
+whole-dataset zip (per-file is the primary route; add when asked).
 
 ## 2. What does search read: the bucket every time, or an index?
 

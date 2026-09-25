@@ -285,6 +285,16 @@ unchanged until the key exists.
 | `/datasets.json?q=…` | the same rows as JSON; feeds the form's picker |
 | `/datasets/<identifier>` | the record's description, derived-from links both ways, provenance, files |
 | `/datasets/<identifier>/record` | the record as stored |
+| `/datasets/<identifier>/files/<path>` | one file, streamed from the store through the service |
+
+Downloads pass through the VM one 8 MiB chunk at a time and never touch
+its disk; a `Range` request is passed to the store, so a dropped
+download resumes. Only files the dataset record names are served, so
+the route cannot fetch an arbitrary key, and every download is one line
+in the container log (user, dataset, file, bytes, range). That log is
+the only download trail until eResearch central logging exists. The
+sidecar allows four concurrent downloads per proxy address and never
+spools a slow client's response to disk.
 
 The read client is wrapped so it can only get, head and list; a bug cannot
 write or delete with the read key however broad it is. This is what makes

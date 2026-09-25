@@ -205,8 +205,9 @@ The web service can also show what is in the store: with a read-only key
 configured it gains a "Find data" page (search and filters over the
 index), a page per dataset (description, what it was derived from and
 what was derived from it, how it was made, files), and the record as
-stored. Green files will be downloadable through the service; amber is
-described for everyone and served according to the Centre's decision.
+stored. Green files download through the service, resumably, without
+the VPN; amber is described for everyone and served according to the
+Centre's decision.
 Runbook, section 7.
 
 The vocabulary lives at

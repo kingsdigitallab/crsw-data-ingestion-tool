@@ -7,11 +7,15 @@ call into crsw_deposit. Run with:
 """
 import hashlib
 import logging
+from datetime import timezone
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import quote
 
+from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -29,6 +33,7 @@ from . import quota
 from .upload import TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
+DOWNLOAD_CHUNK = 8 * 1024 * 1024   # one chunk in memory at a time, never the file
 log = logging.getLogger("crsw_web")
 HERE = Path(__file__).resolve().parent
 SOURCE_TYPE_HELP = {
@@ -184,6 +189,74 @@ def create_app(settings: Optional[Settings] = None,
         if rec is None:
             raise HTTPException(status_code=404, detail="no such dataset")
         return rec
+
+    @app.get("/datasets/{identifier:path}/files/{member:path}")
+    def download(identifier: str, member: str, request: Request,
+                 user: User = Depends(current_user)):
+        """Stream one member of a dataset from the store to the browser
+        (finding-and-reuse.md §1: the Ceph gateway is VPN-only, so the
+        bytes pass through here; one chunk in memory, nothing on disk).
+        Only members the record's manifest names are served, so this
+        can never fetch an arbitrary key. A Range header is passed
+        through so a large download can resume."""
+        cat = need_read()
+        rec = load_record_or_404(cat, identifier)
+        refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings)
+        if refusal:
+            raise HTTPException(status_code=403, detail=refusal)
+        entry = next((f for f in rec.get("files") or [] if f.get("path") == member), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="no such file in this dataset")
+        args = {"Bucket": settings.s3_bucket, "Key": cat.member_key(identifier, member)}
+        wanted = request.headers.get("range")
+        if wanted:
+            args["Range"] = wanted
+        try:
+            obj = read_client.get_object(**args)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code == "InvalidRange":
+                return Response(status_code=416,
+                                headers={"Content-Range": "bytes */%d" % entry["bytes"]})
+            if code in ("NoSuchKey", "404", "NotFound"):
+                raise HTTPException(status_code=404,
+                                    detail="the record names this file but the store "
+                                           "has no object for it")
+            raise storage_error(exc)
+        except Exception as exc:
+            raise storage_error(exc)
+        name = member.rsplit("/", 1)[-1]
+        headers = {
+            "Content-Length": str(obj["ContentLength"]),
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "attachment; filename=\"%s\"; filename*=UTF-8''%s"
+                                   % (name.encode("ascii", "replace").decode(), quote(name)),
+        }
+        if obj.get("ETag"):
+            headers["ETag"] = obj["ETag"]
+        if obj.get("LastModified"):
+            headers["Last-Modified"] = format_datetime(
+                obj["LastModified"].astimezone(timezone.utc), usegmt=True)
+        status = 200
+        if obj.get("ContentRange"):
+            status = 206
+            headers["Content-Range"] = obj["ContentRange"]
+        body = obj["Body"]
+
+        def chunks():
+            try:
+                for chunk in body.iter_chunks(DOWNLOAD_CHUNK):
+                    yield chunk
+            finally:
+                body.close()
+
+        log.info("download user=%s dataset=%s member=%s bytes=%s range=%s",
+                 user.username, identifier, member, obj["ContentLength"], wanted or "-")
+        # Always an attachment of unspecified type: the browser saves it
+        # as named and never renders it, and the type table on the host
+        # (Windows says .csv is Excel) cannot leak into the response.
+        return StreamingResponse(chunks(), status_code=status, headers=headers,
+                                 media_type="application/octet-stream")
 
     @app.get("/datasets/{identifier:path}/record")
     def dataset_record(identifier: str, user: User = Depends(current_user)):

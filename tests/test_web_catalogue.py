@@ -179,6 +179,75 @@ class TestFind(CatalogueBase):
         self.assertEqual(c.get("/datasets/" + GREEN).status_code, 200)
 
 
+class TestDownload(CatalogueBase):
+    """Streamed through the service, resumable, only what the record
+    names, only what the amber rule allows."""
+
+    def test_full_download_headers_and_bytes(self):
+        c = self.app()
+        r = c.get("/datasets/%s/files/events.csv" % GREEN)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.content, b"x" * 1200)
+        self.assertEqual(r.headers["content-length"], "1200")
+        self.assertEqual(r.headers["accept-ranges"], "bytes")
+        self.assertEqual(r.headers["content-type"], "application/octet-stream")
+        self.assertIn('filename="events.csv"', r.headers["content-disposition"])
+        self.assertIn("filename*=UTF-8''events.csv", r.headers["content-disposition"])
+        self.assertTrue(r.headers.get("etag"))
+        self.assertTrue(r.headers.get("last-modified"))
+        r = c.get("/datasets/%s/files/notes/readme.md" % GREEN)
+        self.assertEqual((r.status_code, r.content), (200, b"x" * 40))
+        self.assertIn('filename="readme.md"', r.headers["content-disposition"])
+
+    def test_range_resumes_and_a_bad_range_is_416(self):
+        c = self.app()
+        r = c.get("/datasets/%s/files/events.csv" % GREEN, headers={"Range": "bytes=2-5"})
+        self.assertEqual(r.status_code, 206, r.text)
+        self.assertEqual(r.content, b"xxxx")
+        self.assertEqual(r.headers["content-range"], "bytes 2-5/1200")
+        self.assertEqual(r.headers["content-length"], "4")
+        r = c.get("/datasets/%s/files/events.csv" % GREEN, headers={"Range": "bytes=5000-6000"})
+        self.assertEqual(r.status_code, 416)
+        self.assertEqual(r.headers["content-range"], "bytes */1200")
+
+    def test_only_members_the_record_names_are_served(self):
+        self.s3.put_object(Bucket="crsw", Key=GREEN + "/extra.bin", Body=b"secret")
+        c = self.app()
+        self.assertEqual(c.get("/datasets/%s/files/extra.bin" % GREEN).status_code, 404)
+        self.assertEqual(c.get("/datasets/%s/files/../events.csv" % GREEN).status_code, 404)
+        self.assertEqual(c.get("/datasets/%s/files/dataset.events.json" % GREEN).status_code, 404)
+        # Named by the record but gone from the store: says so, not 500.
+        self.s3.delete_object(Bucket="crsw", Key=GREEN + "/notes/readme.md")
+        r = c.get("/datasets/%s/files/notes/readme.md" % GREEN)
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("no object", r.json()["detail"])
+
+    def test_amber_by_policy(self):
+        url = "/datasets/%s/files/t1.txt" % AMBER
+        r = self.app().get(url)
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("steward", r.json()["detail"])
+        self.assertEqual(self.app(amber_access="all").get(url).status_code, 200)
+        self.assertEqual(self.app(amber_access="groups",
+                                  dev_groups=("er_prj_kdl_slavery",)).get(url).status_code, 403)
+        r = self.app(amber_access="groups",
+                     dev_groups=("er_prj_kdl_slavery_rs1",)).get(url)
+        self.assertEqual((r.status_code, r.content), (200, b"x" * 9))
+        # Green is never gated.
+        self.assertEqual(self.app(amber_access="groups").get(
+            "/datasets/%s/files/events.csv" % GREEN).status_code, 200)
+
+    def test_only_the_read_client_is_used(self):
+        staging = mock.MagicMock()
+        staging.get_object.side_effect = AssertionError("staging client must not serve downloads")
+        c = TestClient(create_app(Settings(**READ), s3_client=staging, vocab_dict=VOCAB,
+                                  read_client=s3mod.ReadOnly(self.s3)))
+        r = c.get("/datasets/%s/files/events.csv" % GREEN)
+        self.assertEqual(r.status_code, 200)
+        staging.get_object.assert_not_called()
+        staging.put_object.assert_not_called()
+
+
 class TestCatalogueCache(CatalogueBase):
     def test_refreshes_after_the_interval_and_keeps_rows_on_failure(self):
         clock = {"now": 0.0}
