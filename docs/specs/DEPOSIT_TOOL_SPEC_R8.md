@@ -299,6 +299,14 @@ Stop at each and wait for review.
 
 ## 8. Open questions
 
+- **Known defect, to fix in step 3.** The CLI's "Parent object key" prompt
+  and `crsw_web.metadata` both store `derived_from` as a bare string, which
+  `validate_record` rejects, and the browser form never sends the field.
+  Neither route calls `reference_from_text`; only the 0.5 upgrader does.
+- **Finding the parent.** How a depositor finds the identifier to reference
+  (a picker fed by an index the promoter writes) and where the read path
+  lives are planned in `docs/web-deposit/finding-and-reuse.md` §§2–3.
+
 - **Closed list or free text for `activity`?** The list above is a
   guess; RS3's geospatial steps (reproject, mosaic, resample) will want
   their own terms. Vocabulary-managed seems right, but the steward review

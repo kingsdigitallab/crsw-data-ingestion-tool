@@ -46,7 +46,7 @@ cd $DIR && git checkout <tag>
 
 Security group: web VM allows TCP `CRSW_HTTP_PORT` from the proxy ranges only, plus SSH from the admin range. Internal VM allows SSH from the admin range only.
 
-Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githubusercontent.com` (the vocabulary, fetched on every promoter run and every ten minutes by the web service), plus `github.com`, Docker Hub and PyPI for the clone and the image build. Neither VM needs any other egress.
+Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githubusercontent.com` (the vocabulary, fetched on every promoter run and every ten minutes by the web service), plus `github.com`, Docker Hub and PyPI for the clone and the image build. Neither VM needs any other egress today. When natural-language search is built (`finding-and-reuse.md` §5) the internal VM will also need HTTPS to the KCL LLM platform host; bundle that with the read-key ask.
 
 ## 2. Web VM
 
