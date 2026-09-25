@@ -122,6 +122,65 @@
   $("pick-folder").addEventListener("change", function () { addFiles(this.files, true); this.value = ""; });
   $("clear-files").addEventListener("click", function () { files = []; renderFiles(0); });
 
+  // ----- the upstream-dataset picker (read role only) -------------------
+  // Searches /datasets.json and appends the chosen identifier as a new
+  // line of the derived-from box, so the reference is found, not typed.
+  (function () {
+    var open = $("picker-open"), panel = $("picker-panel"), q = $("picker-q"),
+        list = $("picker-results"), box = $("derived_from");
+    if (!open) return;
+    var timer = null, seq = 0;
+    function addLine(identifier) {
+      var lines = box.value.split(/?
+/).filter(function (l) { return l.trim(); });
+      if (lines.indexOf(identifier) < 0) lines.push(identifier);
+      box.value = lines.join("
+") + "
+";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      panel.hidden = true;
+      open.hidden = false;
+      box.focus();
+    }
+    function render(items) {
+      list.textContent = "";
+      if (!items.length) {
+        var none = document.createElement("li"); none.className = "empty";
+        none.textContent = q.value.trim() ? "Nothing matches." : "No datasets in the index yet.";
+        list.appendChild(none);
+        return;
+      }
+      items.forEach(function (d) {
+        var li = document.createElement("li");
+        var b = document.createElement("button"); b.type = "button";
+        var name = document.createElement("strong"); name.textContent = d.dataset + " ";
+        var tag = document.createElement("span"); tag.className = "tag sens " + d.sensitivity; tag.textContent = d.sensitivity;
+        var id = document.createElement("code"); id.textContent = d.identifier;
+        var ab = document.createElement("small"); ab.textContent = d.abstract || "";
+        b.appendChild(name); b.appendChild(tag); b.appendChild(document.createElement("br"));
+        b.appendChild(id); b.appendChild(document.createElement("br")); b.appendChild(ab);
+        b.addEventListener("click", function () { addLine(d.identifier); });
+        li.appendChild(b); list.appendChild(li);
+      });
+    }
+    function search() {
+      var mine = ++seq;
+      fetch("/datasets.json?limit=20&q=" + encodeURIComponent(q.value.trim()), { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : { datasets: [] }; })
+        .then(function (body) { if (mine === seq) render(body.datasets || []); })
+        .catch(function () { if (mine === seq) render([]); });
+    }
+    open.addEventListener("click", function () {
+      panel.hidden = false; open.hidden = true; q.focus(); search();
+    });
+    q.addEventListener("input", function () {
+      clearTimeout(timer); timer = setTimeout(search, 200);
+    });
+    q.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") { panel.hidden = true; open.hidden = false; }
+    });
+  })();
+
   // ----- errors ---------------------------------------------------------
   function clearErrors() {
     form.querySelectorAll(".field").forEach(function (f) {

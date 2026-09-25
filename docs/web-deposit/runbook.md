@@ -282,7 +282,7 @@ unchanged until the key exists.
 | Route | What |
 |---|---|
 | `/datasets` | search box and filters (strand, state, sensitivity, subject) over the index |
-| `/datasets.json?q=…` | the same rows as JSON; feeds the form's picker |
+| `/datasets.json?q=…` | the same rows as JSON; feeds the form's "Find a dataset in the store" picker under the derived-from box |
 | `/datasets/<identifier>` | the record's description, derived-from links both ways, provenance, files |
 | `/datasets/<identifier>/record` | the record as stored |
 | `/datasets/<identifier>/files/<path>` | one file, streamed from the store through the service |

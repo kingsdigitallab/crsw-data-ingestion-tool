@@ -82,6 +82,17 @@ details.origin { border: 1px solid var(--rule); padding: .6rem 1rem; margin: 0 0
 details.origin > summary { cursor: pointer; font-weight: 600; }
 details.origin[open] > summary { margin-bottom: .5rem; }
 details.origin .field { margin-bottom: 1rem; }
+.picker { margin-top: .4rem; }
+button.link { font: inherit; background: none; border: 0; padding: 0; color: var(--action); text-decoration: underline; cursor: pointer; }
+.picker-panel { margin-top: .5rem; border: 1px solid var(--rule); background: var(--surface); padding: .6rem .75rem; }
+.picker-panel input[type=search] { width: 100%; }
+.picker-results { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 16rem; overflow: auto; }
+.picker-results li { border-top: 1px solid var(--rule); }
+.picker-results li.empty { padding: .4rem 0; color: var(--muted); font-family: var(--serif); }
+.picker-results button { font: inherit; text-align: left; width: 100%; background: none; border: 0; padding: .45rem .2rem; cursor: pointer; line-height: 1.35; }
+.picker-results button:hover, .picker-results button:focus-visible { background: var(--page); }
+.picker-results small { color: var(--muted); display: block; margin-top: .15rem; }
+.picker-results code { font-size: .85rem; }
 .error { color: var(--danger); font-size: .92rem; margin: .35rem 0 0; }
 .field.invalid input, .field.invalid select, .field.invalid textarea { border-color: var(--danger); }
 

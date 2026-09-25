@@ -66,7 +66,8 @@ reproduce a problem when asking for support.
 A first deposit also asks two origin questions, both skippable: what this
 dataset was derived from (a dataset identifier such as
 `rs2/csac/amber/1_interim/csac` for something already in the store, or a
-URL or citation for something outside it, one per line), and whether a
+URL or citation for something outside it, one per line; the web form can
+look the identifier up for you), and whether a
 script or notebook you can name produced it (the tool, its repository and
 commit, and the kind of step). If a script made this, name it: the commit
 is what lets someone in five years check out exactly what ran. A pipeline

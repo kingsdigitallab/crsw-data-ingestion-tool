@@ -157,8 +157,9 @@ free once the index exists.
 
 *For the builder:* r8 steps 3 and 4 built 25 Sept (`record.references_from_lines`
 shared by `deposit.py` and `crsw_web/metadata.py`; `promoter/resolve.py`);
-still to do: a `/datasets` JSON endpoint the form's picker reads, once the
-read key exists.
+the picker (built 25 Sept, `/datasets.json` and the "Find a dataset in
+the store" panel under the form's derived-from box, shown only when the
+read role is on).
 
 ## 4. How do deposits meet cdisaw-parquet, keeping the core corpus distinct?
 

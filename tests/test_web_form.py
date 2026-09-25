@@ -60,6 +60,19 @@ class TestForm(unittest.TestCase):
         self.assertIn('name="provenance_commit"', html)
         for a in vocab.activities(VOCAB):
             self.assertIn('value="%s"' % a["code"], html)
+        # No read role: no picker, and nothing in the page calls /datasets.json.
+        self.assertNotIn('id="picker"', html)
+
+    def test_picker_appears_with_the_read_role(self):
+        client = TestClient(create_app(
+            Settings(**dict(SETTINGS, read_s3_access_key="r", read_s3_secret_key="r")),
+            s3_client=self.s3, vocab_dict=VOCAB, read_client=object()))
+        html = client.get("/").text
+        self.assertIn('id="picker"', html)
+        self.assertIn("Find a dataset in the store", html)
+        self.assertIn('href="/datasets"', html)
+        js = client.get("/static/deposit.js").text
+        self.assertIn("/datasets.json?limit=20&q=", js)
 
     def test_rules_embedded_from_crsw_deposit(self):
         html = self.client.get("/").text
