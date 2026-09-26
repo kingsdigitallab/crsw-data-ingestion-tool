@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search inside documents · CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="/">CRSW data deposit</a>
+    <nav class="nav"><a href="/datasets">Find data</a> <a href="/search" aria-current="page">Search inside</a> <a href="/">Deposit</a></nav>
+    <span class="who">Signed in as <strong>{{ user.username }}</strong></span>
+  </div>
+</header>
+
+<main class="page single wide">
+  <article class="find">
+    <h1>Search inside documents</h1>
+    <p class="lede">What the deposited documents say, not only what their descriptions say. {{ stats.passages }} passage{% if stats.passages != 1 %}s{% endif %} from {{ stats.files }} file{% if stats.files != 1 %}s{% endif %} in {{ stats.datasets }} dataset{% if stats.datasets != 1 %}s{% endif %}.</p>
+    {% if error %}<p class="notice">{{ error }}</p>{% endif %}
+
+    <form class="ask" method="get" action="/search">
+      <div class="field">
+        <label for="q">What are you looking for?</label>
+        <input id="q" name="q" type="search" value="{{ q }}" placeholder="a phrase, a name, a question in your own words" maxlength="500">
+        <p class="hint">Your words and the passages that come closest are read by KCL's own AI service. You only see passages from files you could download.</p>
+      </div>
+      <div class="actions"><button class="primary" type="submit">Search</button></div>
+    </form>
+    {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+
+    {% if q %}
+    <p class="count">{{ results|length }} passage{% if results|length != 1 %}s{% endif %}</p>
+    {% if results %}
+    <ol class="hits">
+      {% for h in results %}
+      <li>
+        <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}<span class="score">{{ h.score }}</span></p>
+        <blockquote>{{ h.text }}</blockquote>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="empty">Nothing close enough.</p>
+    {% endif %}
+    {% endif %}
+  </article>
+</main>
+</body>
+</html>

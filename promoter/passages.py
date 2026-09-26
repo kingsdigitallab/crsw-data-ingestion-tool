@@ -73,9 +73,14 @@ def extract(member: str, data: bytes) -> Optional[List[Page]]:
 
 def _pdf_pages(data: bytes) -> List[Page]:
     from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(data))
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        pages = list(reader.pages)
+    except Exception as e:                          # not a PDF this can open
+        log.warning("PDF unreadable: %s", e)
+        return []
     out: List[Page] = []
-    for i, page in enumerate(reader.pages, start=1):
+    for i, page in enumerate(pages, start=1):
         try:
             text = page.extract_text() or ""
         except Exception as e:                      # one bad page, not the file
@@ -88,7 +93,11 @@ def _pdf_pages(data: bytes) -> List[Page]:
 
 def _docx_pages(data: bytes) -> List[Page]:
     import docx
-    document = docx.Document(io.BytesIO(data))
+    try:
+        document = docx.Document(io.BytesIO(data))
+    except Exception as e:                          # not a Word file this can open
+        log.warning("Word file unreadable: %s", e)
+        return []
     parts = [p.text for p in document.paragraphs if p.text.strip()]
     for table in document.tables:
         for row in table.rows:

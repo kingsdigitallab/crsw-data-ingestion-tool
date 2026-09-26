@@ -367,3 +367,20 @@ datasets with a notice. The log line per question records the user, the
 question's length, the steps that ran and the result count, never the
 question. Everything above is off when the two variables are blank, and the
 find page is then exactly as before.
+
+**Searching inside documents.** With `CRSW_PASSAGES=1` as well (and the
+promoter writing passages, section 6), the service keeps a copy of
+`index/passages/` in one DuckDB file on the `passages` volume
+(`CRSW_PASSAGES_PATH`, default `/data/passages.duckdb`) and adds
+"Search inside" to the navigation: `/search?q=…` embeds the words,
+finds the closest passages, keeps only those whose file the download
+rule would serve this person, reranks the top twenty and shows dataset,
+file, page and passage. The copy refreshes on the index cycle, fetching
+only files whose ETag changed; delete the volume (or the file) and it is
+rebuilt from the bucket on the next request. Sizes: about 3 KB per
+passage on the volume; a million passages is roughly 3 GB, so ask for a
+volume sized to the document count. The log line per search records the
+user, the length of the words, the steps that ran and the hit count,
+never the words. With `CRSW_AMBER_ACCESS=off` no amber passage is even
+queried; `CRSW_LLM_SENSITIVITIES` says whose passages may be sent to the
+reranker. Everything is off with `CRSW_PASSAGES` blank or `0`.

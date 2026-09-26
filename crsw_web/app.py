@@ -25,7 +25,8 @@ from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
 from .catalogue import Catalogue
-from .llm import Platform
+from .llm import Platform, PlatformError
+from .passages import open_index
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
@@ -63,7 +64,7 @@ def client_rules() -> Dict:
 
 def create_app(settings: Optional[Settings] = None,
                s3_client=None, vocab_dict: Optional[Dict] = None,
-               read_client=None, platform=None) -> FastAPI:
+               read_client=None, platform=None, passage_index=None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
@@ -79,6 +80,13 @@ def create_app(settings: Optional[Settings] = None,
         platform = Platform.from_settings(settings)
     if catalogue is None:
         platform = None
+    # The VM's copy of the passages, for search inside documents.
+    if passage_index is None and platform is not None and settings.passages_enabled:
+        passage_index = open_index(read_client, settings.s3_bucket, settings.index_prefix,
+                                   settings.passages_path, settings.index_refresh_seconds,
+                                   settings.llm_embed_dims or None)
+    if platform is None:
+        passage_index = None
     if vocab_dict is None:
         # fetch -> cache -> bundled. The cache write is best-effort, so a
         # read-only container root just means the bundled copy is used.
@@ -99,10 +107,13 @@ def create_app(settings: Optional[Settings] = None,
     app.state.vocab_cache = vocab_cache
     app.state.catalogue = catalogue
     app.state.platform = platform
+    app.state.passage_index = passage_index
     read_enabled = catalogue is not None
     ask_enabled = platform is not None
+    passages_enabled = passage_index is not None
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
+    templates.env.globals["passages_enabled"] = passages_enabled
 
     # --- Phase 3: the browser form ----------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -221,6 +232,77 @@ def create_app(settings: Optional[Settings] = None,
         rows = cat.search(limit=limit,
                           **search_args(q, strand, state, sensitivity, subject, project))
         return {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
+
+    # --- search inside documents (finding-and-reuse.md §7) ------------------
+
+    SEARCH_TOP = 20          # passages the reranker reads
+
+    def need_passages():
+        if passage_index is None:
+            raise HTTPException(status_code=404, detail="Not Found")
+        return passage_index
+
+    def search_passages(user: User, q: str, limit: int) -> Dict:
+        """Closest passages of files this user may download, best first.
+        The question is embedded, the copy searched, the download rule
+        applied to each hit, then the reranker reads the top few."""
+        index = need_passages()
+        cat = need_read()
+        q = " ".join((q or "").split())[:500]
+        out = {"q": q, "results": [], "notice": None, "steps": [], "stats": index.stats()}
+        if not q:
+            return out
+        try:
+            vec = platform.embed([q])[0]
+        except PlatformError as e:
+            out["notice"] = "Search inside documents is unavailable (%s)." % e
+            return out
+        out["steps"].append("meaning")
+        # With amber served to nobody, do not even pull amber rows.
+        sens = ("green",) if settings.amber_access == "off" else None
+        hits = index.search(vec, limit=limit * 5, sensitivities=sens)
+        allowed = []
+        for h in hits:
+            strand = (h["identifier"] or "").split("/", 1)[0]
+            if may_download(user, h["sensitivity"], strand, settings) is None:
+                allowed.append(h)
+        top, tail = allowed[:SEARCH_TOP], allowed[SEARCH_TOP:]
+        if platform.rerank_model and len(top) > 1:
+            sendable = [i for i, h in enumerate(top)
+                        if h["sensitivity"] in settings.llm_sensitivities]
+            if len(sendable) > 1:
+                try:
+                    order = platform.rerank(q, [top[i]["text"] for i in sendable])
+                    held = [top[i] for i in range(len(top)) if i not in sendable]
+                    top = [top[sendable[j]] for j in order] + held
+                    out["steps"].append("rerank")
+                except PlatformError as e:
+                    out["notice"] = "The reranker is unavailable (%s)." % e
+        results = (top + tail)[:limit]
+        for h in results:
+            row = cat.get(h["identifier"]) or {}
+            h["dataset"] = row.get("dataset") or h["identifier"].rsplit("/", 1)[-1]
+            h["score"] = round(float(h["score"]), 3)
+        out["results"] = results
+        log.info("search user=%s chars=%d steps=%s hits=%d shown=%d",
+                 user.username, len(q), "+".join(out["steps"]) or "-", len(hits), len(results))
+        return out
+
+    @app.get("/search", response_class=HTMLResponse)
+    def search_page(request: Request, q: str = "", user: User = Depends(current_user)):
+        found = search_passages(user, q, limit=20)
+        return templates.TemplateResponse(request, "search.html", {
+            "user": user, **found, "error": passage_index.error,
+        })
+
+    @app.get("/search.json")
+    def search_json(q: str = "", limit: int = 20, user: User = Depends(current_user)):
+        found = search_passages(user, q, limit=max(1, min(limit, 100)))
+        return {"q": found["q"], "notice": found["notice"], "steps": found["steps"],
+                "stats": found["stats"],
+                "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
+                                                     "position", "text", "score", "sensitivity")}
+                             for h in found["results"]]}
 
     def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:
         if cat.get(identifier) is None and not keys.dataset_prefix_ok(identifier):

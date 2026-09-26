@@ -1,7 +1,10 @@
 # CRSW web deposit stack. From the repo root:
 #   docker compose -f deploy/compose.yaml up --build
-# Reads ../.env for the service key (never committed). No volumes: nothing
-# in flight touches disk.
+# Reads ../.env for the service key (never committed). No volume carries
+# anything in flight: uploads and downloads never touch disk. The one
+# volume, `passages`, holds the rebuildable copy of the promoter's
+# passages for search inside documents (CRSW_PASSAGES=1); delete it and
+# the service rebuilds it from the bucket.
 name: crsw-deposit
 
 # Container logs are the only thing on the web VM that can grow; cap them so
@@ -27,6 +30,8 @@ services:
     expose:
       - "8000"
     read_only: true    # and no tmpfs, deliberately: uploads must not touch disk
+    volumes:
+      - passages:/data   # only the passages copy (CRSW_PASSAGES_PATH); never a file in flight
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
@@ -77,3 +82,6 @@ services:
       PROMOTER_LOG_PATH: /dev/stdout
     command: ["python", "-m", "promoter", "run", "--env-file", "/dev/null"]
     read_only: true
+
+volumes:
+  passages:

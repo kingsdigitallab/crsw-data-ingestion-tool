@@ -207,8 +207,8 @@ keeps one vector per dataset beside the index, made from the record's
 title, abstract and subject terms (never a file), for meaning-based
 search. With `PROMOTER_PASSAGES=1` it also reads the text of deposited
 documents (plain text, Markdown, PDF, Word) of the allowed sensitivities,
-splits it into passages and embeds those under `index/passages/`, the
-groundwork for searching inside documents. See the runbook, section 6.
+splits it into passages and embeds those under `index/passages/`. See
+the runbook, section 6.
 
 The web service can also show what is in the store: with a read-only key
 configured it gains a "Find data" page (search and filters over the
@@ -221,7 +221,9 @@ takes a question in plain words: the question becomes filters the
 researcher can see and adjust, and datasets are ranked by meaning.
 Every step, and every sensitivity whose metadata may be sent, is a
 switch in the environment (`docs/web-deposit/finding-and-reuse.md`
-§5; §7 plans search inside the documents themselves).
+§5). With `CRSW_PASSAGES=1` it also keeps a copy of the promoter's
+passages on the VM and offers "Search inside": what the deposited
+documents say, shown only for files the reader could download (§7).
 Runbook, section 7.
 
 The vocabulary lives at

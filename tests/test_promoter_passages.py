@@ -202,7 +202,10 @@ class TestPassages(PassagesBase):
         s = self.written(out)[0]
         self.assertEqual((s["files_kept"], s["files_read"], s["embedded"], s["kept"], s["passages"]),
                          (3, 2, 2, 2, 4))
-        self.assertEqual(sorted(self.sent), ["# More text", "different words now"])
+        # (The dataset's own text may be re-sent too, if the record's modified
+        # stamp moved on; only the passages are of interest here.)
+        self.assertEqual(sorted(t for t in self.sent if not t.startswith("promo\n")),
+                         ["# More text", "different words now"])
         # A different cut re-embeds everything; nothing is dropped until a
         # member leaves the record (which deposits never do).
         self.sent.clear()

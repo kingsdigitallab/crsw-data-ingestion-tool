@@ -262,8 +262,9 @@ lists will govern file contents when section 7 is built.
 4. **Then.** Question-to-filter and embeddings (section 5, A and B) once the
    platform credentials are in hand. *Built 26 September.*
 5. **Next.** Searching inside documents (section 7): the promoter's passage
-   step first (*built 26 September*), then the VM copy and the search mode,
-   both behind switches, on green data until the Centre answers on amber.
+   step first, then the VM copy and the search mode, both behind switches, on
+   green data until the Centre answers on amber. *Built 26 September, off by
+   default on both VMs until switched on.*
 6. **Later.** The cdisaw-parquet datasets tab; the contributed-data pathway;
    answering; the catalogue platform harvesting the index.
 
@@ -331,8 +332,7 @@ checksum, so nothing is embedded twice. The passage index, on Ceph and on the
 VM, is a cache like the dataset index: rebuildable from the files with one
 promoter command, never the truth.
 
-*For the builder (promoter side built 26 September; the VM copy and the
-search mode next):* `promoter/passages.py` reads plain text, Markdown, PDF
+*For the builder (built 26 September, both sides):* `promoter/passages.py` reads plain text, Markdown, PDF
 (text layer, `pypdf`) and Word (`python-docx`), splits into passages of 350
 words with a 50-word overlap and the page each starts on, embeds them and
 writes `index/passages/<identifier>.parquet`. One departure from the choice
@@ -344,9 +344,17 @@ one marker row so it is not fetched again. Switches: `PROMOTER_PASSAGES` (off
 by default), `PROMOTER_LLM_SENSITIVITIES`, `PROMOTER_PASSAGES_EXCLUDE`, and
 caps `PROMOTER_PASSAGES_MAX_FILE_BYTES` / `_MAX_PER_DATASET`. A promotion
 runs it for the datasets it promoted; `promoter passages [--dataset ID |
---strand rsN]` rebuilds. Checkpoint 5 is the VM copy (DuckDB with its `vss`
-extension, one file under a volume, refreshed from the bucket on the index
-cycle) and the search mode on the find page, gated by `access.may_download`,
-skipping marker rows. Answering (section 5 C) follows once passages are
-searchable: the model writes a short answer from the top passages with
-citations to file and page.
+--strand rsN]` rebuilds. On the web side `crsw_web/passages.py` keeps the
+copy in one DuckDB file on the `passages` volume (`CRSW_PASSAGES_PATH`),
+refreshed on the index cycle by ETag so only changed files are fetched, marker
+rows left out, and searched with DuckDB's fixed-size array cosine similarity
+rather than the `vss` extension: no extension to install means no egress the
+VM may lack, and a full scan is milliseconds at a hundred thousand passages;
+`vss` is the step up past a million. `/search` (and `/search.json`) embeds
+the question, takes the closest passages, keeps only those whose file
+`access.may_download` would serve this person (with `CRSW_AMBER_ACCESS=off`
+amber rows are not even queried), reranks the top twenty (passages of the
+allowed sensitivities only) and shows dataset, file with a download link,
+page and the passage. Switch: `CRSW_PASSAGES` (off by default; needs the read
+role and the platform). Answering (section 5 C) follows: the model writes a
+short answer from the top passages with citations to file and page.

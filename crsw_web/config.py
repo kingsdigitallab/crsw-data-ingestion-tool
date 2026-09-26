@@ -77,6 +77,12 @@ class Settings:
     llm_embed_dims: int = 1024             # must match the promoter's
     llm_timeout_seconds: int = 20
     llm_sensitivities: Tuple[str, ...] = ("green",)
+    # Searching inside documents (finding-and-reuse.md §7): the VM's copy
+    # of the promoter's passages, and the /search page. Off by default.
+    # The path needs a writable volume (deploy/compose.yaml mounts one);
+    # without it the copy lives in memory and is rebuilt at each start.
+    passages: bool = False
+    passages_path: str = "/data/passages.duckdb"
 
     @property
     def read_enabled(self) -> bool:
@@ -85,6 +91,10 @@ class Settings:
     @property
     def ask_enabled(self) -> bool:
         return self.read_enabled and bool(self.llm_base_url and self.llm_api_key)
+
+    @property
+    def passages_enabled(self) -> bool:
+        return self.passages and self.ask_enabled and bool(self.llm_embed_model)
 
     def trusted_proxy_networks(self):
         return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
@@ -207,6 +217,8 @@ class Settings:
             llm_embed_dims=llm_dims,
             llm_timeout_seconds=opt_int("LLM_TIMEOUT_SECONDS", cls.llm_timeout_seconds),
             llm_sensitivities=llm_sens,
+            passages=get("PASSAGES") == "1",
+            passages_path=get("PASSAGES_PATH", cls.passages_path),
         )
 
 

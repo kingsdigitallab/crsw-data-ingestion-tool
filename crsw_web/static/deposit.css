@@ -40,6 +40,11 @@ code { font-family: var(--mono); font-size: .92em; }
 .search { margin: 1.25rem 0; }
 .ask { margin: 1.25rem 0 .5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--rule); }
 .understood { font-family: var(--serif); margin: .5rem 0; }
+ol.hits { list-style: none; margin: 1rem 0 0; padding: 0; }
+ol.hits li { border-top: 1px solid var(--rule); padding: .9rem 0; }
+ol.hits .where { margin: 0 0 .4rem; }
+ol.hits .where .score { color: var(--muted); margin-left: .5rem; }
+ol.hits blockquote { margin: 0; padding: 0 0 0 .9rem; border-left: 3px solid var(--rule); font-family: var(--serif); line-height: 1.5; max-width: 72ch; }
 .search .actions { margin-top: .5rem; }
 .count { color: var(--muted); font-family: var(--serif); }
 .results td:first-child a { font-weight: 600; }
