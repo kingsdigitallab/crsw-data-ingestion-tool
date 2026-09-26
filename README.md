@@ -205,7 +205,10 @@ as JSON lines and Parquet under `index/`, for search tools to read
 straight from the bucket. With the KCL LLM platform configured it also
 keeps one vector per dataset beside the index, made from the record's
 title, abstract and subject terms (never a file), for meaning-based
-search. See the runbook, section 6.
+search. With `PROMOTER_PASSAGES=1` it also reads the text of deposited
+documents (plain text, Markdown, PDF, Word) of the allowed sensitivities,
+splits it into passages and embeds those under `index/passages/`, the
+groundwork for searching inside documents. See the runbook, section 6.
 
 The web service can also show what is in the store: with a read-only key
 configured it gains a "Find data" page (search and filters over the

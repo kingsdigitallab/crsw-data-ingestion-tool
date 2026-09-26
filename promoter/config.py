@@ -45,6 +45,16 @@ class PromoterConfig:
     # the platform. Green only until the Centre allows amber.
     llm_sensitivities: Tuple[str, ...] = ("green",)
 
+    # Searching inside documents (finding-and-reuse.md §7): off unless
+    # PROMOTER_PASSAGES=1, and then only for datasets of the allowed
+    # sensitivities that are not excluded. Caps so one mistaken deposit
+    # cannot fill the VM: a file over the size cap is skipped, and the
+    # walk stops at the passage cap.
+    passages: bool = False
+    passages_max_file_bytes: int = 50 * 1024 * 1024
+    passages_max_per_dataset: int = 20000
+    passages_exclude: Tuple[str, ...] = ()
+
     @property
     def llm_enabled(self) -> bool:
         return bool(self.llm_base_url and self.llm_api_key)
@@ -52,6 +62,10 @@ class PromoterConfig:
     @property
     def embed_enabled(self) -> bool:
         return self.llm_enabled and bool(self.llm_embed_model)
+
+    @property
+    def passages_enabled(self) -> bool:
+        return self.passages and self.embed_enabled
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
@@ -98,6 +112,8 @@ class PromoterConfig:
             raise ConfigError("%sLLM_SENSITIVITIES may only name %s, got %r"
                               % (ENV_PREFIX, "/".join(keys.SENSITIVITIES), ", ".join(bad)))
         dims = opt_int("LLM_EMBED_DIMS")
+        max_file = opt_int("PASSAGES_MAX_FILE_BYTES")
+        max_passages = opt_int("PASSAGES_MAX_PER_DATASET")
         return cls(
             s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
             s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
@@ -115,6 +131,13 @@ class PromoterConfig:
             llm_embed_model=env.get(ENV_PREFIX + "LLM_EMBED_MODEL", "arc:embedvl").strip(),
             llm_embed_dims=1024 if dims is None else dims,
             llm_sensitivities=sens,
+            passages=(env.get(ENV_PREFIX + "PASSAGES") or "").strip() == "1",
+            passages_max_file_bytes=cls.passages_max_file_bytes if max_file is None else max_file,
+            passages_max_per_dataset=(cls.passages_max_per_dataset if max_passages is None
+                                      else max_passages),
+            passages_exclude=tuple(
+                p.strip().strip("/") for p in
+                (env.get(ENV_PREFIX + "PASSAGES_EXCLUDE") or "").split(",") if p.strip()),
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:

@@ -214,6 +214,7 @@ $P datasets --env-file /dev/null                       # every record in place: 
 $P datasets --strand rs2 --json --env-file /dev/null
 $P index --env-file /dev/null                          # rebuild the index by hand (see below)
 $P index --embed --env-file /dev/null                  # ... and the embeddings behind meaning-based search
+$P passages [--dataset ID | --strand rsN] --env-file /dev/null   # passages of every text-bearing file (PROMOTER_PASSAGES=1)
 ```
 
 **The index.** After any real run that promoted or rewrote a record, the
@@ -248,6 +249,25 @@ precision, and a failure is logged as `embeddings_failed` without
 changing the run's exit code. `$P index --embed` rebuilds by hand. On the
 laptop, before the internal VM can reach the platform, that command with
 the key in `.env.promoter` does the same job.
+
+**Passages (searching inside documents; `finding-and-reuse.md` §7).** With
+`PROMOTER_PASSAGES=1` as well, a promotion also reads each promoted
+dataset's text-bearing files (plain text, Markdown, the text layer of
+PDFs, Word; never tables or images), splits them into passages of about
+350 words, embeds those and writes `index/passages/<identifier>.parquet`
+(one row per passage: file, page, position, the text, the vector). Only
+datasets of the sensitivities in `PROMOTER_LLM_SENSITIVITIES` are read,
+never one under `PROMOTER_PASSAGES_EXCLUDE`, a file over
+`PROMOTER_PASSAGES_MAX_FILE_BYTES` is skipped and the walk stops at
+`PROMOTER_PASSAGES_MAX_PER_DATASET`; the log line per dataset
+(`passages_written`) counts each of those, and `files_no_text` is the
+number of PDFs with no text layer, which is the size of any future OCR
+job. Incremental by each file's checksum, so a re-deposit re-reads only
+what changed. `passages_failed` is logged without changing the exit
+code. `$P passages` rebuilds for every record in place, or one dataset
+or strand; the first run over a backlog of long documents is the one
+slow job, and it resumes where it stopped because each dataset's file is
+written as it finishes.
 
 On the VM every promoter command runs inside the container like this:
 the host has Docker and nothing else, no Python with boto3, and the key

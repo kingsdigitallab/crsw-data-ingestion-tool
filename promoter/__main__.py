@@ -15,7 +15,12 @@ after any real run that promoted or rewrote a record. With
 PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY set, those runs also
 refresh embeddings.parquet beside the index (one vector per record of
 the sensitivities PROMOTER_LLM_SENSITIVITIES allows, green by default);
-`python -m promoter index --embed` does the same by hand.
+`python -m promoter index --embed` does the same by hand. With
+PROMOTER_PASSAGES=1 as well, a promotion also reads the dataset's
+text-bearing files, splits them into passages and embeds those
+(`index/passages/<identifier>.parquet`, finding-and-reuse.md §7);
+`python -m promoter passages [--dataset ID | --strand rsN]` rebuilds
+them for every record in place.
 
 A deposit whose derived_from names another dataset in the store has the
 parent's uuid and version filled in before promotion (r8 §4): logged as
@@ -34,7 +39,7 @@ import getpass
 import json
 import sys
 
-from crsw_deposit import record, vocab
+from crsw_deposit import keys, record, vocab
 from crsw_web import s3 as s3mod
 from crsw_web.config import load_dotenv
 from crsw_web.deposits import DepositStore
@@ -43,6 +48,7 @@ from crsw_web.llm import Platform
 from . import audit
 from . import embed as embed_mod
 from . import index as index_mod
+from . import passages as passages_mod
 from . import recategorise as recat
 from .checks import check
 from .config import ConfigError, PromoterConfig
@@ -107,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     ix.add_argument("--embed", action="store_true",
                     help="also refresh embeddings.parquet through the LLM platform "
                          "(needs PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY)")
+
+    ps = sub.add_parser("passages", help="rebuild the passages behind search inside "
+                                         "documents (needs PROMOTER_PASSAGES=1)")
+    ps.add_argument("--env-file", default=".env.promoter",
+                    help="local env file to load (default .env.promoter)")
+    ps.add_argument("--dataset", help="only this dataset identifier")
+    ps.add_argument("--strand", help="only this strand (rs1-rs4)")
     return p
 
 
@@ -157,6 +170,55 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int) -> None:
         log.write("embeddings_written", **summary)
 
 
+def _write_passages(cfg, client, log, prefixes) -> None:
+    """After a real run: passages for the datasets it promoted. Each
+    dataset is its own unit of work and its own log line; a failure is
+    logged and the next dataset still runs."""
+    if not cfg.passages_enabled or not prefixes:
+        return
+    platform = Platform.from_settings(cfg)
+    try:
+        for prefix in prefixes:
+            rec = _record_in_place(client, cfg.s3_bucket, prefix)
+            if rec is None:
+                log.write("passages_skipped", prefix=prefix, reason="no record in place")
+                continue
+            reason = _passages_skip_reason(cfg, prefix, rec)
+            if reason:
+                log.write("passages_skipped", prefix=prefix, reason=reason)
+                continue
+            try:
+                s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, prefix, rec,
+                                         platform, cfg.llm_embed_model,
+                                         cfg.llm_embed_dims or None,
+                                         cfg.passages_max_file_bytes,
+                                         cfg.passages_max_per_dataset)
+            except Exception as e:
+                log.write("passages_failed", prefix=prefix, error=str(e))
+                continue
+            log.write("passages_written", **s.as_dict())
+    finally:
+        platform.close()
+
+
+def _record_in_place(client, bucket, prefix):
+    key = prefix + "/" + keys.record_filename(prefix.rsplit("/", 1)[-1])
+    try:
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        rec, _ = record.upgrade_record(json.loads(body.decode("utf-8")))
+        return rec
+    except Exception:
+        return None
+
+
+def _passages_skip_reason(cfg, prefix, rec):
+    if rec.get("sensitivity") not in cfg.llm_sensitivities:
+        return "sensitivity %s not in PROMOTER_LLM_SENSITIVITIES" % rec.get("sensitivity")
+    if passages_mod.excluded(prefix, cfg.passages_exclude):
+        return "excluded by PROMOTER_PASSAGES_EXCLUDE"
+    return None
+
+
 def _refresh_embeddings(cfg, client, rows_) -> dict:
     """Embed what changed and rewrite embeddings.parquet. Only record
     metadata goes to the platform (promoter/embed.py, text_for)."""
@@ -194,6 +256,7 @@ def cmd_run(args) -> int:
 
     refused = 0
     promoted = 0
+    promoted_prefixes = []
     seen = 0
     for dep in list_deposits(store, user=args.user, deposit_id=args.deposit):
         seen += 1
@@ -224,10 +287,12 @@ def cmd_run(args) -> int:
                       activity_codes=vocab.activity_codes(vocab_dict))
         if out.promoted:
             promoted += 1
+            promoted_prefixes.append(dep.prefix)
         else:
             refused += 1
 
     _write_index(cfg, client, log, args.dry_run, promoted)
+    _write_passages(cfg, client, log, promoted_prefixes)
     log.write("finish", seen=seen, promoted=promoted, refused_or_failed=refused,
               dry_run=args.dry_run)
     return _write_audit(cfg, client, log, args.dry_run, 1 if refused else 0)
@@ -334,12 +399,55 @@ def cmd_datasets(args) -> int:
     return 0
 
 
+def cmd_passages(args) -> int:
+    cfg, client = _connect(args)
+    if not cfg.passages_enabled:
+        print("PROMOTER_PASSAGES=1 plus PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY and "
+              "PROMOTER_LLM_EMBED_MODEL are needed for passages", file=sys.stderr)
+        return 2
+    platform = Platform.from_settings(cfg)
+    failed = 0
+    totals = {"datasets": 0, "skipped": 0, "passages": 0, "embedded": 0, "kept": 0,
+              "files_no_text": 0, "files_other": 0, "files_too_big": 0}
+    try:
+        for ref, rec, _labels in index_mod.read_records(client, cfg.s3_bucket, args.strand):
+            if args.dataset and ref.prefix != args.dataset:
+                continue
+            reason = _passages_skip_reason(cfg, ref.prefix, rec) if rec else "record unreadable"
+            if reason:
+                totals["skipped"] += 1
+                print(json.dumps({"action": "passages_skipped", "prefix": ref.prefix,
+                                  "reason": reason}, ensure_ascii=False))
+                continue
+            try:
+                s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix,
+                                         rec, platform, cfg.llm_embed_model,
+                                         cfg.llm_embed_dims or None,
+                                         cfg.passages_max_file_bytes,
+                                         cfg.passages_max_per_dataset)
+            except Exception as e:
+                failed += 1
+                print(json.dumps({"action": "passages_failed", "prefix": ref.prefix,
+                                  "error": str(e)}, ensure_ascii=False))
+                continue
+            totals["datasets"] += 1
+            for k in ("passages", "embedded", "kept", "files_no_text", "files_other",
+                      "files_too_big"):
+                totals[k] += getattr(s, k)
+            print(json.dumps({"action": "passages_written", **s.as_dict()}, ensure_ascii=False))
+    finally:
+        platform.close()
+    print(json.dumps({"action": "passages_finished", "failed": failed, **totals},
+                     ensure_ascii=False))
+    return 1 if failed else 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return {"run": cmd_run, "recategorise": cmd_recategorise,
                 "audit": cmd_audit, "datasets": cmd_datasets,
-                "index": cmd_index}[args.command](args)
+                "index": cmd_index, "passages": cmd_passages}[args.command](args)
     except ConfigError as e:
         print("config error: %s" % e, file=sys.stderr)
         return 2

@@ -262,8 +262,8 @@ lists will govern file contents when section 7 is built.
 4. **Then.** Question-to-filter and embeddings (section 5, A and B) once the
    platform credentials are in hand. *Built 26 September.*
 5. **Next.** Searching inside documents (section 7): the promoter's passage
-   step first, then the VM copy and the search mode, both behind switches, on
-   green data until the Centre answers on amber.
+   step first (*built 26 September*), then the VM copy and the search mode,
+   both behind switches, on green data until the Centre answers on amber.
 6. **Later.** The cdisaw-parquet datasets tab; the contributed-data pathway;
    answering; the catalogue platform harvesting the index.
 
@@ -331,11 +331,22 @@ checksum, so nothing is embedded twice. The passage index, on Ceph and on the
 VM, is a cache like the dataset index: rebuildable from the files with one
 promoter command, never the truth.
 
-*For the builder:* checkpoint 4 is the promoter step (`promoter/passages.py`;
-extraction with `pypdf` and `python-docx`, chunking by words with overlap,
-`promoter passages [--dataset ID]`, and the after-run hook); checkpoint 5 the
-VM copy (DuckDB with its `vss` extension, one file under a volume, refreshed
-from the bucket on the index cycle) and the search mode on the find page,
-gated by `access.may_download`. Answering (section 5 C) follows once passages
-are searchable: the model writes a short answer from the top passages with
+*For the builder (promoter side built 26 September; the VM copy and the
+search mode next):* `promoter/passages.py` reads plain text, Markdown, PDF
+(text layer, `pypdf`) and Word (`python-docx`), splits into passages of 350
+words with a 50-word overlap and the page each starts on, embeds them and
+writes `index/passages/<identifier>.parquet`. One departure from the choice
+above: the file sits under the index prefix, not beside the record, so a
+dataset prefix holds only what its depositor put there and the web VM's
+read-scoped key over `index/` covers it without a wider grant. Incremental by
+the record's checksum per file; a file read and found to have no text leaves
+one marker row so it is not fetched again. Switches: `PROMOTER_PASSAGES` (off
+by default), `PROMOTER_LLM_SENSITIVITIES`, `PROMOTER_PASSAGES_EXCLUDE`, and
+caps `PROMOTER_PASSAGES_MAX_FILE_BYTES` / `_MAX_PER_DATASET`. A promotion
+runs it for the datasets it promoted; `promoter passages [--dataset ID |
+--strand rsN]` rebuilds. Checkpoint 5 is the VM copy (DuckDB with its `vss`
+extension, one file under a volume, refreshed from the bucket on the index
+cycle) and the search mode on the find page, gated by `access.may_download`,
+skipping marker rows. Answering (section 5 C) follows once passages are
+searchable: the model writes a short answer from the top passages with
 citations to file and page.
