@@ -31,7 +31,7 @@ Your deposit lands in a holding area first. Within about five minutes an automat
 
 ## Finding and downloading
 
-Choose **Find data** in the top bar. Search by a word from the name or description, or filter by strand, subject or whether the data is green or amber. Open a dataset to read its description, see what it was made from and what has been made from it, and download any file. A large download that is interrupted can be resumed. Amber data is listed for everyone; whether you can download it depends on the Centre's rule, and the page tells you who to ask.
+Choose **Find data** in the top bar. Search by a word from the name or description, or filter by strand, subject or whether the data is green or amber. Where the Centre has switched it on, you can also type a question in your own words, such as "anything on deaths in armed conflicts since 1990": the page shows how it understood you, fills in the filters to match, and puts the closest datasets first. Your question and the descriptions of likely matches are read by KCL's own AI service; the files themselves never are. Open a dataset to read its description, see what it was made from and what has been made from it, and download any file. A large download that is interrupted can be resumed. Amber data is listed for everyone; whether you can download it depends on the Centre's rule, and the page tells you who to ask.
 
 ## If something goes wrong
 

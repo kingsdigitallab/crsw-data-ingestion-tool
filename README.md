@@ -202,7 +202,10 @@ and when, survives the VM. `python -m promoter audit` reads it back
 datasets` lists every record in place. After any run that changed a
 record the promoter also rewrites an index of every record in place,
 as JSON lines and Parquet under `index/`, for search tools to read
-straight from the bucket. See the runbook, section 6.
+straight from the bucket. With the KCL LLM platform configured it also
+keeps one vector per dataset beside the index, made from the record's
+title, abstract and subject terms (never a file), for meaning-based
+search. See the runbook, section 6.
 
 The web service can also show what is in the store: with a read-only key
 configured it gains a "Find data" page (search and filters over the
@@ -210,7 +213,12 @@ index), a page per dataset (description, what it was derived from and
 what was derived from it, how it was made, files), and the record as
 stored. Green files download through the service, resumably, without
 the VPN; amber is described for everyone and served according to the
-Centre's decision.
+Centre's decision. With the KCL LLM platform configured the page also
+takes a question in plain words: the question becomes filters the
+researcher can see and adjust, and datasets are ranked by meaning.
+Every step, and every sensitivity whose metadata may be sent, is a
+switch in the environment (`docs/web-deposit/finding-and-reuse.md`
+§5; §7 plans search inside the documents themselves).
 Runbook, section 7.
 
 The vocabulary lives at

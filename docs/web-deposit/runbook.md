@@ -46,7 +46,7 @@ cd $DIR && git checkout <tag>
 
 Security group: web VM allows TCP `CRSW_HTTP_PORT` from the proxy ranges only, plus SSH from the admin range. Internal VM allows SSH from the admin range only.
 
-Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githubusercontent.com` (the vocabulary, fetched on every promoter run and every ten minutes by the web service), plus `github.com`, Docker Hub and PyPI for the clone and the image build. Neither VM needs any other egress today. When natural-language search is built (`finding-and-reuse.md` §5) the internal VM will also need HTTPS to the KCL LLM platform host; bundle that with the read-key ask.
+Outbound, both VMs need HTTPS (443) to `rgw.ceph.er.kcl.ac.uk` and to `raw.githubusercontent.com` (the vocabulary, fetched on every promoter run and every ten minutes by the web service), plus `github.com`, Docker Hub and PyPI for the clone and the image build. With the KCL LLM platform configured (section 7, "asking in plain words"; `finding-and-reuse.md` §5) both VMs also need HTTPS to `ai.create.kcl.ac.uk`: the internal VM to embed records after a promotion, the web VM to read a question. Neither VM needs any other egress. If the platform host is blocked, leave the `*_LLM_*` variables blank and everything else runs as before; the ask is one line to eResearch.
 
 ## 2. Web VM
 
@@ -60,6 +60,8 @@ curl -s localhost:8080/health
 ```
 
 The read role (section 7) stays off on the VM until eResearch issue the read-scoped key: leave `CRSW_READ_S3_ACCESS_KEY` and `CRSW_READ_S3_SECRET_KEY` blank. **Never put a personal key on the web VM**; a personal key can write anywhere, and the staging-only design depends on the VM holding nothing that can.
+
+The same goes for the LLM platform key: `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KEY` on the VM should be a key issued to the project, not a person's, so it can be rotated when people change. Blank keeps "ask in your own words" off; the find page still works.
 
 `/health` is the only path nginx serves to a source outside `CRSW_TRUSTED_PROXY_CIDRS`; every other path answers 403 from the VM itself, which is the allow-list working. The same CIDR value must be in `.env` (the app's peer check) and exported in the shell (the nginx sidecar), and the export is needed again for every later `docker compose` command.
 
@@ -211,6 +213,7 @@ $P audit --user k1078591 --json --env-file /dev/null   # raw JSON lines for pipi
 $P datasets --env-file /dev/null                       # every record in place: depositor, created, modified, files, bytes
 $P datasets --strand rs2 --json --env-file /dev/null
 $P index --env-file /dev/null                          # rebuild the index by hand (see below)
+$P index --embed --env-file /dev/null                  # ... and the embeddings behind meaning-based search
 ```
 
 **The index.** After any real run that promoted or rewrote a record, the
@@ -231,6 +234,20 @@ promoter key, DuckDB reads it straight from the bucket:
 CREATE SECRET ceph (TYPE S3, KEY_ID '...', SECRET '...', ENDPOINT 'rgw.ceph.er.kcl.ac.uk', URL_STYLE 'path');
 SELECT identifier, dataset, depositor, files, bytes FROM read_parquet('s3://crsw/index/datasets.parquet');
 ```
+
+**The embeddings.** With `PROMOTER_LLM_BASE_URL`, `PROMOTER_LLM_API_KEY`
+and `PROMOTER_LLM_EMBED_MODEL` set, the same runs also refresh
+`index/embeddings.parquet`: one vector per dataset, made by the KCL LLM
+platform from the record's title, abstract, subject terms and source
+note, never from a file. Only records of the sensitivities in
+`PROMOTER_LLM_SENSITIVITIES` (green by default) are sent; the others get
+a row with no vector. The work is incremental (a row is kept when its
+identifier, modified stamp, model and vector length are unchanged), the
+vectors are cut to `PROMOTER_LLM_EMBED_DIMS` numbers and stored at half
+precision, and a failure is logged as `embeddings_failed` without
+changing the run's exit code. `$P index --embed` rebuilds by hand. On the
+laptop, before the internal VM can reach the platform, that command with
+the key in `.env.promoter` does the same job.
 
 On the VM every promoter command runs inside the container like this:
 the host has Docker and nothing else, no Python with boto3, and the key
@@ -307,4 +324,26 @@ Centre decides; `groups` uses the proxy's groups header and
 To ask eResearch for, in one go: a read-scoped key for the web VM over
 `index/` and the four strand prefixes (never `staging/`); the groups header
 the proxy can forward; whether the proxy buffers or time-limits large
-responses.
+responses; HTTPS from both VMs to `ai.create.kcl.ac.uk`.
+
+**Asking in plain words.** With `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KEY`
+set (and the read role on), the find page gains "Ask in your own words".
+A question goes through three steps, each of which can fail or be switched
+off on its own without breaking the page:
+
+| Step | Model | Switch | What is sent |
+|---|---|---|---|
+| filter | `CRSW_LLM_CHAT_MODEL` (`arc:lite`) | blank the name | the question, the vocabulary lists |
+| meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embedvl`) | blank the name | the question; needs `index/embeddings.parquet` |
+| rerank | `CRSW_LLM_RERANK_MODEL` (`arc:rerankvl`) | blank the name | the question and the title plus abstract of up to twenty candidates |
+
+Only abstracts of the sensitivities in `CRSW_LLM_SENSITIVITIES` (green by
+default) are sent to the reranker; `CRSW_LLM_EMBED_DIMS` must match the
+promoter's. The page shows "Understood as: strand rs2, subject
+armed-conflict, from 1990" and fills the search form with those values so
+the researcher can adjust and press Search; a dataset named in the question
+always comes first, and a filter that matches nothing relaxes to the closest
+datasets with a notice. The log line per question records the user, the
+question's length, the steps that ran and the result count, never the
+question. Everything above is off when the two variables are blank, and the
+find page is then exactly as before.
