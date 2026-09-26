@@ -1,0 +1,139 @@
+"""The platform client: one POST per call, batching, strict parsing,
+every failure a PlatformError. No network: httpx.MockTransport."""
+import json
+import unittest
+
+try:
+    import httpx
+    from crsw_web import llm
+    HAVE = True
+except ImportError:            # pragma: no cover
+    HAVE = False
+
+
+def fake_platform(handler):
+    """A Platform whose HTTP goes to `handler(request) -> httpx.Response`."""
+    return llm.Platform("https://ai.example/api/v1", "sk-test",
+                        transport=httpx.MockTransport(handler))
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestEmbed(unittest.TestCase):
+    def test_batches_in_order_with_the_bearer_key(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            body = json.loads(request.content)
+            data = [{"index": i, "embedding": [float(len(t)), 1.0]}
+                    for i, t in enumerate(body["input"])]
+            data.reverse()                      # out of order on purpose
+            return httpx.Response(200, json={"data": data, "model": body["model"]})
+
+        p = fake_platform(handler)
+        texts = ["a" * n for n in range(1, 71)]
+        vectors = p.embed(texts)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(seen[0].url.path, "/api/v1/embeddings")
+        self.assertEqual(seen[0].headers["authorization"], "Bearer sk-test")
+        self.assertEqual(json.loads(seen[0].content)["model"], "arc:embedvl")
+        self.assertEqual([v[0] for v in vectors], [float(n) for n in range(1, 71)])
+        self.assertEqual(p.embed([]), [])
+
+    def test_failures_are_platform_errors(self):
+        p = fake_platform(lambda r: httpx.Response(503, text="down"))
+        with self.assertRaises(llm.PlatformError) as cm:
+            p.embed(["x"])
+        self.assertIn("HTTP 503", str(cm.exception))
+        p = fake_platform(lambda r: httpx.Response(200, json={"data": []}))
+        with self.assertRaises(llm.PlatformError):
+            p.embed(["x"])
+
+        def boom(request):
+            raise httpx.ConnectError("no route")
+        with self.assertRaises(llm.PlatformError) as cm:
+            fake_platform(boom).embed(["x"])
+        self.assertIn("unreachable", str(cm.exception))
+
+    def test_from_settings_is_off_without_url_and_key(self):
+        class S:
+            llm_base_url = ""
+            llm_api_key = ""
+        self.assertIsNone(llm.Platform.from_settings(S()))
+        S.llm_base_url, S.llm_api_key = "https://ai.example/api/v1/", "k"
+        S.llm_embed_model = "other:model"
+        p = llm.Platform.from_settings(S())
+        self.assertEqual((p.base_url, p.embed_model, p.chat_model),
+                         ("https://ai.example/api/v1", "other:model", "arc:lite"))
+        p.close()
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestFilterFor(unittest.TestCase):
+    ARGS = dict(strands=("rs1", "rs2"), states=("0_raw", "2_final"),
+                sensitivities=("green", "amber"),
+                subjects=("armed-conflict", "forced-labour"), projects=("csac",))
+
+    def reply(self, content):
+        def handler(request):
+            self.request = json.loads(request.content)
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return fake_platform(handler)
+
+    def test_values_outside_the_vocabulary_are_dropped(self):
+        p = self.reply('<think>hmm</think>```json\n{"strand": "rs2", "state": "9_x", '
+                       '"subject": ["armed-conflict"], "project": "nope", '
+                       '"words": "one two three four five six seven", '
+                       '"year_from": "1990", "year_to": "nineteen"}\n```')
+        f = p.filter_for("deaths in conflicts since 1990", **self.ARGS)
+        self.assertEqual(f, {"strand": "rs2", "subject": "armed-conflict",
+                             "words": "one two three four five six", "year_from": "1990"})
+        self.assertEqual(self.request["model"], "arc:lite")
+        self.assertEqual(self.request["temperature"], 0)
+        system = self.request["messages"][0]["content"]
+        self.assertIn("armed-conflict, forced-labour", system)
+        self.assertIn("csac", system)
+        self.assertEqual(self.request["messages"][1]["content"], "deaths in conflicts since 1990")
+
+    def test_prose_around_the_object_and_no_object(self):
+        p = self.reply('Sure. Here it is: {"sensitivity": "green"} Hope that helps.')
+        self.assertEqual(p.filter_for("q", **self.ARGS), {"sensitivity": "green"})
+        p = self.reply("I do not know.")
+        self.assertEqual(p.filter_for("q", **self.ARGS), {})
+        p = self.reply("[1, 2]")
+        self.assertEqual(p.filter_for("q", **self.ARGS), {})
+
+    def test_missing_message_is_an_error(self):
+        p = fake_platform(lambda r: httpx.Response(200, json={"choices": []}))
+        with self.assertRaises(llm.PlatformError):
+            p.filter_for("q", **self.ARGS)
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestRerank(unittest.TestCase):
+    def test_orders_by_score_and_fills_in_the_rest(self):
+        def handler(request):
+            body = json.loads(request.content)
+            self.assertEqual(body["query"], "q")
+            self.assertEqual(body["top_n"], 4)
+            return httpx.Response(200, json={"results": [
+                {"index": 2, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.4},
+                {"index": 7, "relevance_score": 1.0}]})       # 7 is out of range
+        p = fake_platform(handler)
+        self.assertEqual(p.rerank("q", ["a", "b", "c", "d"]), [2, 0, 1, 3])
+        self.assertEqual(p.rerank("q", []), [])
+
+    def test_bad_reply_is_an_error(self):
+        p = fake_platform(lambda r: httpx.Response(404, text="no such route"))
+        with self.assertRaises(llm.PlatformError):
+            p.rerank("q", ["a"])
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestParseJsonObject(unittest.TestCase):
+    def test_shapes(self):
+        self.assertEqual(llm.parse_json_object('{"a": 1}'), {"a": 1})
+        self.assertEqual(llm.parse_json_object('```\n{"a": 1}\n```'), {"a": 1})
+        self.assertEqual(llm.parse_json_object('x {"a": {"b": 2}} y'), {"a": {"b": 2}})
+        self.assertIsNone(llm.parse_json_object("nothing"))
+        self.assertIsNone(llm.parse_json_object("{broken"))

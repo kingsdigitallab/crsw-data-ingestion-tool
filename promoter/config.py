@@ -30,6 +30,18 @@ class PromoterConfig:
     audit_prefix: str = "audit/promoter"
     # Where the index of every record in place is written; blank disables.
     index_prefix: str = "index"
+    # The KCL LLM platform, for the embeddings behind meaning-based search
+    # (finding-and-reuse.md §5). Off unless both URL and key are set.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_embed_model: str = "arc:embedvl"
+    # Whether amber titles and abstracts may be sent to the platform: a
+    # Centre decision, so off until it is taken.
+    llm_embed_amber: bool = False
+
+    @property
+    def embed_enabled(self) -> bool:
+        return bool(self.llm_base_url and self.llm_api_key)
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
@@ -64,6 +76,11 @@ class PromoterConfig:
                 raise ConfigError("%sAUTHORISED must map users to lists of "
                                   "strands" % ENV_PREFIX)
             authorised = parsed
+        llm_url = (env.get(ENV_PREFIX + "LLM_BASE_URL") or "").strip()
+        llm_key = (env.get(ENV_PREFIX + "LLM_API_KEY") or "").strip()
+        if bool(llm_url) != bool(llm_key):
+            raise ConfigError("%sLLM_BASE_URL and %sLLM_API_KEY must be set together "
+                              "(both blank turns embeddings off)" % (ENV_PREFIX, ENV_PREFIX))
         return cls(
             s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
             s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
@@ -76,6 +93,10 @@ class PromoterConfig:
             log_path=(env.get(ENV_PREFIX + "LOG_PATH") or "promoter.log").strip(),
             audit_prefix=env.get(ENV_PREFIX + "AUDIT_PREFIX", "audit/promoter").strip().strip("/"),
             index_prefix=env.get(ENV_PREFIX + "INDEX_PREFIX", "index").strip().strip("/"),
+            llm_base_url=llm_url,
+            llm_api_key=llm_key,
+            llm_embed_model=(env.get(ENV_PREFIX + "LLM_EMBED_MODEL") or "arc:embedvl").strip(),
+            llm_embed_amber=(env.get(ENV_PREFIX + "LLM_EMBED_AMBER") or "").strip() == "1",
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:

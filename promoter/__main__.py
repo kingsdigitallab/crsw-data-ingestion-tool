@@ -11,7 +11,11 @@ the bucket. `python -m promoter datasets [--strand rsN] [--json]`: every
 dataset record in place. `python -m promoter index`: rebuild the index
 of every record in place (datasets.jsonl and datasets.parquet under
 PROMOTER_INDEX_PREFIX); run and recategorise rewrite it themselves
-after any real run that promoted or rewrote a record.
+after any real run that promoted or rewrote a record. With
+PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY set, those runs also
+refresh embeddings.parquet beside the index (one vector per green
+record, amber too only with PROMOTER_LLM_EMBED_AMBER=1);
+`python -m promoter index --embed` does the same by hand.
 
 A deposit whose derived_from names another dataset in the store has the
 parent's uuid and version filled in before promotion (r8 §4): logged as
@@ -34,8 +38,10 @@ from crsw_deposit import record, vocab
 from crsw_web import s3 as s3mod
 from crsw_web.config import load_dotenv
 from crsw_web.deposits import DepositStore
+from crsw_web.llm import Platform
 
 from . import audit
+from . import embed as embed_mod
 from . import index as index_mod
 from . import recategorise as recat
 from .checks import check
@@ -98,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
     ix = sub.add_parser("index", help="rebuild the index of every record in place")
     ix.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
+    ix.add_argument("--embed", action="store_true",
+                    help="also refresh embeddings.parquet through the LLM platform "
+                         "(needs PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY)")
     return p
 
 
@@ -139,6 +148,24 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int) -> None:
     log.write("index_written", datasets=len(rows_), **keys_)
     if keys_["parquet"] is None:
         log.write("index_parquet_skipped", reason="pyarrow is not installed")
+    if cfg.embed_enabled:
+        try:
+            summary = _refresh_embeddings(cfg, client, rows_)
+        except Exception as e:
+            log.write("embeddings_failed", error=str(e))
+            return
+        log.write("embeddings_written", **summary)
+
+
+def _refresh_embeddings(cfg, client, rows_) -> dict:
+    """Embed what changed and rewrite embeddings.parquet. Only record
+    metadata goes to the platform (promoter/embed.py, text_for)."""
+    platform = Platform.from_settings(cfg)
+    try:
+        return embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
+                                 platform, cfg.llm_embed_model, cfg.llm_embed_amber)
+    finally:
+        platform.close()
 
 
 def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
@@ -260,6 +287,15 @@ def cmd_index(args) -> int:
     if keys_["parquet"] is None:
         print("pyarrow is not installed: only the JSON lines index was written",
               file=sys.stderr)
+    if args.embed:
+        if not cfg.embed_enabled:
+            print("PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY are not set: "
+                  "no embeddings can be made", file=sys.stderr)
+            return 2
+        summary = _refresh_embeddings(cfg, client, rows_)
+        print(json.dumps({"action": "embeddings_written", **summary}, ensure_ascii=False))
+        if summary["key"] is None:
+            print("pyarrow is not installed: embeddings were not written", file=sys.stderr)
     return 0
 
 
