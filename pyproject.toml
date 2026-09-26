@@ -22,6 +22,7 @@ web = [
     "jinja2>=3.1",
     "pyarrow>=17",          # the promoter's Parquet index (promoter/index.py)
     "httpx>=0.27",          # the KCL LLM platform client (crsw_web/llm.py)
+    "numpy>=1.26",          # ranking by embedding (crsw_web/catalogue.py)
 ]
 dev = [
     "pytest>=8",

@@ -25,6 +25,7 @@ from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
 from .catalogue import Catalogue
+from .llm import Platform
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
@@ -62,7 +63,7 @@ def client_rules() -> Dict:
 
 def create_app(settings: Optional[Settings] = None,
                s3_client=None, vocab_dict: Optional[Dict] = None,
-               read_client=None) -> FastAPI:
+               read_client=None, platform=None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
@@ -73,6 +74,11 @@ def create_app(settings: Optional[Settings] = None,
     catalogue = (Catalogue(read_client, settings.s3_bucket, settings.index_prefix,
                            settings.index_refresh_seconds)
                  if read_client is not None else None)
+    # Asking in plain words: the KCL LLM platform, only with the read role.
+    if platform is None and catalogue is not None and settings.ask_enabled:
+        platform = Platform.from_settings(settings)
+    if catalogue is None:
+        platform = None
     if vocab_dict is None:
         # fetch -> cache -> bundled. The cache write is best-effort, so a
         # read-only container root just means the bundled copy is used.
@@ -92,7 +98,9 @@ def create_app(settings: Optional[Settings] = None,
     app.state.settings = settings
     app.state.vocab_cache = vocab_cache
     app.state.catalogue = catalogue
+    app.state.platform = platform
     read_enabled = catalogue is not None
+    ask_enabled = platform is not None
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
 
@@ -154,12 +162,38 @@ def create_app(settings: Optional[Settings] = None,
                     sensitivity=sensitivity or None, subject=subject or None,
                     project=project or None)
 
+    def asked(cat: Catalogue, user: User, ask: str, limit: Optional[int] = None):
+        """Rows for a question in plain words, or None when asking is off
+        or the question is blank (the ordinary search then applies)."""
+        ask = " ".join((ask or "").split())
+        if not ask or not ask_enabled:
+            return None
+        ans = cat.ask(ask, platform, limit=limit, include_amber=settings.llm_ask_amber)
+        # The question itself is not logged: it may say what someone is
+        # working on. Its length and the steps that ran are enough.
+        log.info("ask user=%s chars=%d steps=%s results=%d notice=%s",
+                 user.username, len(ask), "+".join(ans.steps) or "-", len(ans.rows),
+                 "yes" if ans.notice else "no")
+        return ans
+
     @app.get("/datasets", response_class=HTMLResponse)
     def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
                       sensitivity: str = "", subject: str = "", project: str = "",
-                      user: User = Depends(current_user)):
+                      ask: str = "", user: User = Depends(current_user)):
         cat = need_read()
-        results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
+        ask = " ".join(ask.split())
+        ans = asked(cat, user, ask)
+        if ans is not None:
+            results = ans.rows
+            # The filter the question became is shown as the filled-in form,
+            # so the user can adjust it and press Search.
+            f = ans.filter
+            q, strand, state = f.get("words", ""), f.get("strand", ""), f.get("state", "")
+            sensitivity, subject, project = (f.get("sensitivity", ""), f.get("subject", ""),
+                                             f.get("project", ""))
+        else:
+            ask = ""
+            results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
         return templates.TemplateResponse(request, "datasets.html", {
             "user": user, "q": q, "strand": strand, "state": state,
             "sensitivity": sensitivity, "subject": subject,
@@ -168,14 +202,23 @@ def create_app(settings: Optional[Settings] = None,
             "results": results,
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
             "built_at": cat.built_at(), "error": cat.error,
+            "ask_enabled": ask_enabled, "ask": ask,
+            "understood": ans.understood() if ans is not None else "",
+            "ask_notice": ans.notice if ans is not None else None,
         })
 
     @app.get("/datasets.json")
     def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",
-                      subject: str = "", project: str = "", limit: int = 50,
+                      subject: str = "", project: str = "", limit: int = 50, ask: str = "",
                       user: User = Depends(current_user)):
         cat = need_read()
-        rows = cat.search(limit=max(1, min(limit, 500)),
+        limit = max(1, min(limit, 500))
+        ans = asked(cat, user, ask, limit=limit)
+        if ans is not None:
+            return {"datasets": [public_row(r) for r in ans.rows], "built_at": cat.built_at(),
+                    "understood": ans.understood(), "filter": ans.filter,
+                    "steps": ans.steps, "notice": ans.notice}
+        rows = cat.search(limit=limit,
                           **search_args(q, strand, state, sensitivity, subject, project))
         return {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
 

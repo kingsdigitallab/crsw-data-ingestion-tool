@@ -63,10 +63,26 @@ class Settings:
     amber_access: str = "off"
     amber_group_template: str = "er_prj_kdl_slavery_{strand}"
     dev_groups: Tuple[str, ...] = ()       # placeholder-mode group membership
+    # The KCL LLM platform behind "ask in your own words" on the find page
+    # (finding-and-reuse.md §5). Off unless URL and key are both set, and
+    # useless without the read role. Only the question, the vocabulary
+    # lists and candidate abstracts are sent; amber abstracts only when
+    # llm_ask_amber (a Centre decision).
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_chat_model: str = "arc:lite"
+    llm_embed_model: str = "arc:embedvl"
+    llm_rerank_model: str = "arc:rerankvl"
+    llm_timeout_seconds: int = 20
+    llm_ask_amber: bool = False
 
     @property
     def read_enabled(self) -> bool:
         return bool(self.read_s3_access_key and self.read_s3_secret_key)
+
+    @property
+    def ask_enabled(self) -> bool:
+        return self.read_enabled and bool(self.llm_base_url and self.llm_api_key)
 
     def trusted_proxy_networks(self):
         return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]
@@ -118,6 +134,10 @@ class Settings:
             raise ConfigError("%sREAD_S3_ACCESS_KEY and %sREAD_S3_SECRET_KEY must be "
                               "set together (both blank turns the read role off)"
                               % (ENV_PREFIX, ENV_PREFIX))
+        llm_url, llm_key = get("LLM_BASE_URL"), get("LLM_API_KEY")
+        if bool(llm_url) != bool(llm_key):
+            raise ConfigError("%sLLM_BASE_URL and %sLLM_API_KEY must be set together "
+                              "(both blank turns asking off)" % (ENV_PREFIX, ENV_PREFIX))
         amber_access = get("AMBER_ACCESS", "off")
         if amber_access not in AMBER_ACCESS:
             raise ConfigError("%sAMBER_ACCESS must be one of %s, got %r"
@@ -164,6 +184,13 @@ class Settings:
             amber_access=amber_access,
             amber_group_template=amber_template,
             dev_groups=tuple(g.strip() for g in get("DEV_GROUPS").split(",") if g.strip()),
+            llm_base_url=llm_url,
+            llm_api_key=llm_key,
+            llm_chat_model=get("LLM_CHAT_MODEL", cls.llm_chat_model),
+            llm_embed_model=get("LLM_EMBED_MODEL", cls.llm_embed_model),
+            llm_rerank_model=get("LLM_RERANK_MODEL", cls.llm_rerank_model),
+            llm_timeout_seconds=opt_int("LLM_TIMEOUT_SECONDS", cls.llm_timeout_seconds),
+            llm_ask_amber=get("LLM_ASK_AMBER") == "1",
         )
 
 

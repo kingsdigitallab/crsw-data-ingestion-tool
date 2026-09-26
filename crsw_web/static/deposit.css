@@ -38,6 +38,8 @@ code { font-family: var(--mono); font-size: .92em; }
 .nav a[aria-current] { color: var(--ink); text-decoration: none; font-weight: 600; }
 .page.single.wide { grid-template-columns: minmax(0, 1120px); }
 .search { margin: 1.25rem 0; }
+.ask { margin: 1.25rem 0 .5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--rule); }
+.understood { font-family: var(--serif); margin: .5rem 0; }
 .search .actions { margin-top: .5rem; }
 .count { color: var(--muted); font-family: var(--serif); }
 .results td:first-child a { font-weight: 600; }

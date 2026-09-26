@@ -21,6 +21,21 @@
     <p class="lede">Every dataset in the Centre's shared store, from the records the deposit tools write.{% if built_at %} Index built {{ built_at[:16].replace("T", " ") }} UTC.{% endif %}</p>
     {% if error %}<p class="notice">{{ error }}</p>{% endif %}
 
+    {% if ask_enabled %}
+    <form class="ask" method="get" action="/datasets">
+      <div class="field">
+        <label for="ask">Ask in your own words</label>
+        <input id="ask" name="ask" type="search" value="{{ ask }}" placeholder="for example: anything on deaths in armed conflicts since 1990" maxlength="500">
+        <p class="hint">Your question, the subject list and the summaries of likely matches go to KCL's own AI service to be read. Files never do.</p>
+      </div>
+      <div class="actions"><button class="primary" type="submit">Ask</button></div>
+    </form>
+    {% if ask %}
+    <p class="understood">Understood as: {{ understood }}. If that is not what you meant, adjust the filters below and press Search.</p>
+    {% endif %}
+    {% if ask_notice %}<p class="notice">{{ ask_notice }}</p>{% endif %}
+    {% endif %}
+
     <form class="search" method="get" action="/datasets">
       <div class="field">
         <label for="q">Search</label>
