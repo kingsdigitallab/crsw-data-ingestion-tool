@@ -25,6 +25,7 @@ DEFAULT_CHAT_MODEL = "arc:lite"
 DEFAULT_EMBED_MODEL = "arc:embedvl"
 DEFAULT_RERANK_MODEL = "arc:rerankvl"
 DEFAULT_TIMEOUT = 20.0
+DEFAULT_EMBED_DIMS = 1024   # keep the first N numbers of each vector (see embed)
 EMBED_BATCH = 32
 
 # The filter a question is turned into. Each value is checked against
@@ -61,13 +62,16 @@ class Platform:
                  chat_model: str = DEFAULT_CHAT_MODEL,
                  embed_model: str = DEFAULT_EMBED_MODEL,
                  rerank_model: str = DEFAULT_RERANK_MODEL,
-                 timeout: float = DEFAULT_TIMEOUT, transport=None):
+                 timeout: float = DEFAULT_TIMEOUT, embed_dims: Optional[int] = None,
+                 transport=None):
         if not base_url or not api_key:
             raise ValueError("base_url and api_key are required")
         self.base_url = base_url.rstrip("/")
-        self.chat_model = chat_model
-        self.embed_model = embed_model
-        self.rerank_model = rerank_model
+        # A blank model name switches that function off (the caller checks).
+        self.chat_model = chat_model or ""
+        self.embed_model = embed_model or ""
+        self.rerank_model = rerank_model or ""
+        self.embed_dims = embed_dims or None
         self._client = httpx.Client(
             base_url=self.base_url, timeout=timeout, transport=transport,
             headers={"Authorization": "Bearer " + api_key,
@@ -86,6 +90,7 @@ class Platform:
                    embed_model=getattr(settings, "llm_embed_model", DEFAULT_EMBED_MODEL),
                    rerank_model=getattr(settings, "llm_rerank_model", DEFAULT_RERANK_MODEL),
                    timeout=getattr(settings, "llm_timeout_seconds", DEFAULT_TIMEOUT),
+                   embed_dims=getattr(settings, "llm_embed_dims", None),
                    transport=transport)
 
     def close(self) -> None:
@@ -112,7 +117,11 @@ class Platform:
 
     def embed(self, texts: Sequence[str], batch: int = EMBED_BATCH) -> List[List[float]]:
         """One vector per text, in order. Sent in batches so a full
-        rebuild of a large index is a few dozen requests, not thousands."""
+        rebuild of a large index is a few dozen requests, not thousands.
+        With `embed_dims` set, each vector is cut to its first N numbers
+        and scaled back to unit length: the Qwen embedding models are
+        trained so a truncated vector still ranks well, and half the
+        numbers is half the storage on the VM and in the bucket."""
         out: List[List[float]] = []
         texts = list(texts)
         for start in range(0, len(texts), batch):
@@ -128,8 +137,15 @@ class Platform:
                 vec = d.get("embedding")
                 if not isinstance(vec, list) or not vec:
                     raise PlatformError("embeddings reply had an empty vector")
-                out.append([float(x) for x in vec])
+                out.append(self._cut([float(x) for x in vec]))
         return out
+
+    def _cut(self, vec: List[float]) -> List[float]:
+        if not self.embed_dims or len(vec) <= self.embed_dims:
+            return vec
+        vec = vec[:self.embed_dims]
+        norm = sum(x * x for x in vec) ** 0.5 or 1.0
+        return [x / norm for x in vec]
 
     # --- question to filter -------------------------------------------------
 

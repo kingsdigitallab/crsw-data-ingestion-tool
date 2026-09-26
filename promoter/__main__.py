@@ -13,8 +13,8 @@ of every record in place (datasets.jsonl and datasets.parquet under
 PROMOTER_INDEX_PREFIX); run and recategorise rewrite it themselves
 after any real run that promoted or rewrote a record. With
 PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY set, those runs also
-refresh embeddings.parquet beside the index (one vector per green
-record, amber too only with PROMOTER_LLM_EMBED_AMBER=1);
+refresh embeddings.parquet beside the index (one vector per record of
+the sensitivities PROMOTER_LLM_SENSITIVITIES allows, green by default);
 `python -m promoter index --embed` does the same by hand.
 
 A deposit whose derived_from names another dataset in the store has the
@@ -163,7 +163,8 @@ def _refresh_embeddings(cfg, client, rows_) -> dict:
     platform = Platform.from_settings(cfg)
     try:
         return embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
-                                 platform, cfg.llm_embed_model, cfg.llm_embed_amber)
+                                 platform, cfg.llm_embed_model,
+                                 set(cfg.llm_sensitivities), cfg.llm_embed_dims or None)
     finally:
         platform.close()
 
@@ -289,8 +290,8 @@ def cmd_index(args) -> int:
               file=sys.stderr)
     if args.embed:
         if not cfg.embed_enabled:
-            print("PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY are not set: "
-                  "no embeddings can be made", file=sys.stderr)
+            print("PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY and PROMOTER_LLM_EMBED_MODEL "
+                  "must all be set for embeddings", file=sys.stderr)
             return 2
         summary = _refresh_embeddings(cfg, client, rows_)
         print(json.dumps({"action": "embeddings_written", **summary}, ensure_ascii=False))

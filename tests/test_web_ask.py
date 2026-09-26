@@ -35,10 +35,14 @@ def bag(text):
 class FakePlatform:
     """Records what it was sent; each method can be told to fail."""
 
-    def __init__(self, filter_reply=None, fail=(), reverse=False):
+    chat_model, embed_model, rerank_model = "arc:lite", "arc:embedvl", "arc:rerankvl"
+
+    def __init__(self, filter_reply=None, fail=(), reverse=False, off=()):
         self.filter_reply = filter_reply or {}
         self.fail = set(fail)
         self.reverse = reverse              # a reranker that disagrees, so it shows
+        for name in off:                    # a blank model name is the off switch
+            setattr(self, name + "_model", "")
         self.filter_calls, self.embed_calls, self.rerank_calls = [], [], []
 
     def filter_for(self, question, strands, states, sensitivities, subjects, projects):
@@ -76,7 +80,7 @@ class AskBase(CatalogueBase):
 
     def embed_store(self, include_amber=False):
         embed_mod.refresh(self.s3, "crsw", "index", self.index_rows, FakePlatform(),
-                          "toy", include_amber)
+                          "toy", {"green", "amber"} if include_amber else {"green"})
 
     def app(self, platform=None, **overrides):
         settings = Settings(**dict(ASK, **overrides))
@@ -115,14 +119,18 @@ class TestAskOff(AskBase):
         env["CRSW_LLM_BASE_URL"] = "https://ai.example/api/v1"
         s = Settings.from_env(env)
         self.assertEqual((s.llm_chat_model, s.llm_embed_model, s.llm_rerank_model,
-                          s.llm_timeout_seconds, s.llm_ask_amber),
-                         ("arc:lite", "arc:embedvl", "arc:rerankvl", 20, False))
+                          s.llm_embed_dims, s.llm_timeout_seconds, s.llm_sensitivities),
+                         ("arc:lite", "arc:embedvl", "arc:rerankvl", 1024, 20, ("green",)))
         self.assertFalse(s.ask_enabled)                  # no read role
         env.update({"CRSW_READ_S3_ACCESS_KEY": "r", "CRSW_READ_S3_SECRET_KEY": "r",
-                    "CRSW_LLM_ASK_AMBER": "1"})
+                    "CRSW_LLM_SENSITIVITIES": "green, amber", "CRSW_LLM_EMBED_DIMS": "0",
+                    "CRSW_LLM_RERANK_MODEL": ""})
         s = Settings.from_env(env)
         self.assertTrue(s.ask_enabled)
-        self.assertTrue(s.llm_ask_amber)
+        self.assertEqual((s.llm_sensitivities, s.llm_embed_dims, s.llm_rerank_model),
+                         (("green", "amber"), 0, ""))
+        with self.assertRaises(ConfigError):
+            Settings.from_env(dict(env, CRSW_LLM_SENSITIVITIES="green,red"))
 
 
 class TestAsk(AskBase):
@@ -188,7 +196,7 @@ class TestAsk(AskBase):
         self.ids(c, ask="transcripts of interviews with survivors")
         self.assertFalse(any("Interview" in d for _, docs in p.rerank_calls for d in docs))
         p = FakePlatform()
-        c = self.app(platform=p, llm_ask_amber=True)
+        c = self.app(platform=p, llm_sensitivities=("green", "amber"))
         ids = self.ids(c, ask="transcripts of interviews with survivors")
         self.assertIn(AMBER, ids)
         self.assertTrue(any("Interview" in d for _, docs in p.rerank_calls for d in docs))
@@ -219,6 +227,26 @@ class TestAsk(AskBase):
         body = self.app(platform=p).get("/datasets.json", params={"ask": "cleaned"}).json()
         self.assertEqual(body["steps"], [])
         self.assertEqual(sorted(d["identifier"] for d in body["datasets"]), sorted([CLEAN, GREEN]))
+
+    def test_each_function_switches_off_by_a_blank_model_name(self):
+        self.embed_store()
+        p = FakePlatform(filter_reply={"words": "conflict"}, off=("chat",))
+        body = self.app(platform=p).get("/datasets.json", params={"ask": "conflict deaths"}).json()
+        self.assertEqual(body["steps"], ["meaning", "rerank"])
+        self.assertEqual(p.filter_calls, [])
+        self.assertIsNone(body["notice"])                # off is not a failure
+        p = FakePlatform(off=("embed",))          # "csac" matches two green rows by words
+        body = self.app(platform=p).get("/datasets.json", params={"ask": "csac data"}).json()
+        self.assertEqual(body["steps"], ["filter", "rerank"])
+        self.assertEqual(p.embed_calls, [])
+        p = FakePlatform(off=("rerank",))
+        body = self.app(platform=p).get("/datasets.json", params={"ask": "conflict deaths"}).json()
+        self.assertEqual(body["steps"], ["filter", "meaning"])
+        self.assertEqual(p.rerank_calls, [])
+        p = FakePlatform(off=("chat", "embed", "rerank"))
+        body = self.app(platform=p).get("/datasets.json", params={"ask": "cleaned"}).json()
+        self.assertEqual(body["steps"], [])
+        self.assertEqual(len(body["datasets"]), 2)      # the words still match
 
     def test_without_an_embeddings_file(self):
         p = FakePlatform(filter_reply={"sensitivity": "amber"})

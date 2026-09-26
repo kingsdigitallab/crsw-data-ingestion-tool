@@ -66,15 +66,17 @@ class Settings:
     # The KCL LLM platform behind "ask in your own words" on the find page
     # (finding-and-reuse.md §5). Off unless URL and key are both set, and
     # useless without the read role. Only the question, the vocabulary
-    # lists and candidate abstracts are sent; amber abstracts only when
-    # llm_ask_amber (a Centre decision).
+    # lists and candidate abstracts are sent; abstracts only of the
+    # sensitivities in llm_sensitivities (green until the Centre allows
+    # amber). A blank model name switches that function off.
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_chat_model: str = "arc:lite"
     llm_embed_model: str = "arc:embedvl"
     llm_rerank_model: str = "arc:rerankvl"
+    llm_embed_dims: int = 1024             # must match the promoter's
     llm_timeout_seconds: int = 20
-    llm_ask_amber: bool = False
+    llm_sensitivities: Tuple[str, ...] = ("green",)
 
     @property
     def read_enabled(self) -> bool:
@@ -93,6 +95,12 @@ class Settings:
 
         def get(name, default=""):
             return (env.get(ENV_PREFIX + name) or default).strip()
+
+        def get_set(name, default):
+            """Like get, but a variable set to blank stays blank: for the
+            model names, where blank is the off switch."""
+            raw = env.get(ENV_PREFIX + name)
+            return default if raw is None else raw.strip()
 
         def opt_int(name, default=None):
             raw = get(name)
@@ -138,6 +146,13 @@ class Settings:
         if bool(llm_url) != bool(llm_key):
             raise ConfigError("%sLLM_BASE_URL and %sLLM_API_KEY must be set together "
                               "(both blank turns asking off)" % (ENV_PREFIX, ENV_PREFIX))
+        llm_sens = tuple(s.strip() for s in get("LLM_SENSITIVITIES", "green").split(",")
+                         if s.strip())
+        bad = [s for s in llm_sens if s not in ("green", "amber")]
+        if bad:
+            raise ConfigError("%sLLM_SENSITIVITIES may only name green/amber, got %r"
+                              % (ENV_PREFIX, ", ".join(bad)))
+        llm_dims = opt_int("LLM_EMBED_DIMS", cls.llm_embed_dims)
         amber_access = get("AMBER_ACCESS", "off")
         if amber_access not in AMBER_ACCESS:
             raise ConfigError("%sAMBER_ACCESS must be one of %s, got %r"
@@ -186,11 +201,12 @@ class Settings:
             dev_groups=tuple(g.strip() for g in get("DEV_GROUPS").split(",") if g.strip()),
             llm_base_url=llm_url,
             llm_api_key=llm_key,
-            llm_chat_model=get("LLM_CHAT_MODEL", cls.llm_chat_model),
-            llm_embed_model=get("LLM_EMBED_MODEL", cls.llm_embed_model),
-            llm_rerank_model=get("LLM_RERANK_MODEL", cls.llm_rerank_model),
+            llm_chat_model=get_set("LLM_CHAT_MODEL", cls.llm_chat_model),
+            llm_embed_model=get_set("LLM_EMBED_MODEL", cls.llm_embed_model),
+            llm_rerank_model=get_set("LLM_RERANK_MODEL", cls.llm_rerank_model),
+            llm_embed_dims=llm_dims,
             llm_timeout_seconds=opt_int("LLM_TIMEOUT_SECONDS", cls.llm_timeout_seconds),
-            llm_ask_amber=get("LLM_ASK_AMBER") == "1",
+            llm_sensitivities=llm_sens,
         )
 
 

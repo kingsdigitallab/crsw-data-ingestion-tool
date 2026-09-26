@@ -55,6 +55,21 @@ class TestEmbed(unittest.TestCase):
             fake_platform(boom).embed(["x"])
         self.assertIn("unreachable", str(cm.exception))
 
+    def test_dims_cut_and_rescaled(self):
+        def handler(request):
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [3.0, 4.0, 9.0, 9.0]}]})
+        p = llm.Platform("https://ai.example/api/v1", "k", embed_dims=2,
+                         transport=httpx.MockTransport(handler))
+        self.assertEqual(p.embed(["x"]), [[0.6, 0.8]])
+        p = llm.Platform("https://ai.example/api/v1", "k", embed_dims=8,
+                         transport=httpx.MockTransport(handler))
+        self.assertEqual(p.embed(["x"]), [[3.0, 4.0, 9.0, 9.0]])    # shorter: untouched
+
+    def test_blank_model_names_are_kept_blank(self):
+        p = llm.Platform("https://ai.example", "k", chat_model="", rerank_model=None)
+        self.assertEqual((p.chat_model, p.rerank_model, p.embed_model), ("", "", "arc:embedvl"))
+        p.close()
+
     def test_from_settings_is_off_without_url_and_key(self):
         class S:
             llm_base_url = ""
@@ -62,9 +77,10 @@ class TestEmbed(unittest.TestCase):
         self.assertIsNone(llm.Platform.from_settings(S()))
         S.llm_base_url, S.llm_api_key = "https://ai.example/api/v1/", "k"
         S.llm_embed_model = "other:model"
+        S.llm_embed_dims = 512
         p = llm.Platform.from_settings(S())
-        self.assertEqual((p.base_url, p.embed_model, p.chat_model),
-                         ("https://ai.example/api/v1", "other:model", "arc:lite"))
+        self.assertEqual((p.base_url, p.embed_model, p.chat_model, p.embed_dims),
+                         ("https://ai.example/api/v1", "other:model", "arc:lite", 512))
         p.close()
 
 

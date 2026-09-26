@@ -72,9 +72,24 @@ class TestIndexEmbed(EmbedBase):
         code, out = self.cli(["index", "--embed"])
         self.assertEqual(code, 2)
         self.assertNotIn("index/embeddings.parquet", self.keys_under("index/"))
-        # Half a configuration is a configuration error.
+        # Half a configuration is a configuration error; so is a sensitivity
+        # that does not exist; a blank model name switches embedding off.
         with self.assertRaises(ConfigError):
             PromoterConfig.from_env(dict(self.ENV, PROMOTER_LLM_API_KEY="k"))
+        with self.assertRaises(ConfigError):
+            PromoterConfig.from_env(dict(self.ENV, **LLM_ENV, PROMOTER_LLM_SENSITIVITIES="red"))
+        cfg = PromoterConfig.from_env(dict(self.ENV, **LLM_ENV))
+        self.assertEqual((cfg.llm_sensitivities, cfg.llm_embed_dims, cfg.embed_enabled),
+                         (("green",), 1024, True))
+        cfg = PromoterConfig.from_env(dict(self.ENV, **LLM_ENV, PROMOTER_LLM_EMBED_MODEL=""))
+        self.assertTrue(cfg.llm_enabled)
+        self.assertFalse(cfg.embed_enabled)
+        code, out = self.cli(["index", "--embed"], env=dict(LLM_ENV, PROMOTER_LLM_EMBED_MODEL=""))
+        self.assertEqual(code, 2)
+        self.stage(dataset="quiet")
+        code, out = self.cli(["run"], env=dict(LLM_ENV, PROMOTER_LLM_EMBED_MODEL=""))
+        self.assertEqual(code, 0)
+        self.assertNotIn("embeddings", "".join(out))
 
     def test_first_build_embeds_green_only_from_metadata(self):
         self.put_parent()
@@ -82,7 +97,7 @@ class TestIndexEmbed(EmbedBase):
         code, out = self.cli(["index", "--embed"], env=LLM_ENV)
         self.assertEqual(code, 0, out)
         s = self.summary(out)
-        self.assertEqual((s["datasets"], s["embedded"], s["kept"], s["skipped_amber"],
+        self.assertEqual((s["datasets"], s["embedded"], s["kept"], s["skipped"],
                           s["dropped"], s["dimension"], s["key"]),
                          (2, 1, 0, 1, 0, 3, "index/embeddings.parquet"))
         rows = self.table()
@@ -92,6 +107,9 @@ class TestIndexEmbed(EmbedBase):
         self.assertEqual(rows[DEST]["model"], "arc:embedvl")
         self.assertEqual(rows[DEST]["dimension"], 3)
         self.assertEqual(len(rows[DEST]["embedding"]), 3)
+        # Stored at half precision: close, not equal.
+        self.assertAlmostEqual(rows[DEST]["embedding"][1], 0.5, places=3)
+        self.assertEqual(rows[DEST]["embedding"][2], -1.0)
         self.assertEqual(rows[DEST]["dataset_uuid"], self.jsonl_uuid(DEST))
         # What went to the platform: title, abstract, subjects. No file names.
         self.assertEqual(len(self.sent), 1)
@@ -118,9 +136,10 @@ class TestIndexEmbed(EmbedBase):
         self.assertEqual((s["embedded"], s["kept"]), (0, 1))
         self.assertEqual(self.sent, [])
         # Amber allowed now: the parent is embedded, the green row kept.
-        code, out = self.cli(["index", "--embed"], env=dict(LLM_ENV, PROMOTER_LLM_EMBED_AMBER="1"))
+        code, out = self.cli(["index", "--embed"],
+                             env=dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green, amber"))
         s = self.summary(out)
-        self.assertEqual((s["embedded"], s["kept"], s["skipped_amber"]), (1, 1, 0))
+        self.assertEqual((s["embedded"], s["kept"], s["skipped"]), (1, 1, 0))
         self.assertIsNotNone(self.table()[PARENT]["embedding"])
         # Allowed no longer: the amber vector is removed again.
         self.cli(["index", "--embed"], env=LLM_ENV)
@@ -128,22 +147,33 @@ class TestIndexEmbed(EmbedBase):
         # A record modified since is re-embedded.
         self.sent.clear()
         self.put_parent(abstract="new words " * 10, modified="2026-02-02T00:00:00Z")
-        code, out = self.cli(["index", "--embed"], env=dict(LLM_ENV, PROMOTER_LLM_EMBED_AMBER="1"))
+        code, out = self.cli(["index", "--embed"],
+                             env=dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green,amber"))
         self.assertEqual(self.summary(out)["embedded"], 1)
         self.assertIn("new words", self.sent[0])
         # A model change re-embeds everything.
         self.sent.clear()
         code, out = self.cli(["index", "--embed"],
-                             env=dict(LLM_ENV, PROMOTER_LLM_EMBED_AMBER="1",
+                             env=dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green,amber",
                                       PROMOTER_LLM_EMBED_MODEL="other:v2"))
         s = self.summary(out)
         self.assertEqual((s["embedded"], s["kept"]), (2, 0))
         self.assertEqual({r["model"] for r in self.table().values()}, {"other:v2"})
+        # So does a change of vector length (the stub gives 3; ask for 2).
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"],
+                             env=dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green,amber",
+                                      PROMOTER_LLM_EMBED_MODEL="other:v2",
+                                      PROMOTER_LLM_EMBED_DIMS="2"))
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (2, 0))
         # A dataset gone from the store is dropped from the file.
         self.s3.delete_object(Bucket="crsw", Key=PARENT + "/dataset.parent.json")
-        code, out = self.cli(["index", "--embed"], env=dict(LLM_ENV, PROMOTER_LLM_EMBED_MODEL="other:v2"))
+        code, out = self.cli(["index", "--embed"],
+                             env=dict(LLM_ENV, PROMOTER_LLM_EMBED_MODEL="other:v2",
+                                      PROMOTER_LLM_EMBED_DIMS="2"))
         s = self.summary(out)
         self.assertEqual((s["datasets"], s["dropped"], s["kept"]), (1, 1, 1))
+        self.assertEqual(self.table()[DEST]["cut"], 2)
         self.assertEqual(list(self.table()), [DEST])
 
     def test_a_run_refreshes_embeddings_and_a_failure_is_only_logged(self):

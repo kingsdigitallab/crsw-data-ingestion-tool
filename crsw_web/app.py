@@ -168,7 +168,7 @@ def create_app(settings: Optional[Settings] = None,
         ask = " ".join((ask or "").split())
         if not ask or not ask_enabled:
             return None
-        ans = cat.ask(ask, platform, limit=limit, include_amber=settings.llm_ask_amber)
+        ans = cat.ask(ask, platform, limit=limit, sensitivities=settings.llm_sensitivities)
         # The question itself is not logged: it may say what someone is
         # working on. Its length and the steps that ran are enough.
         log.info("ask user=%s chars=%d steps=%s results=%d notice=%s",

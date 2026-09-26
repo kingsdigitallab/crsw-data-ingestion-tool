@@ -2,7 +2,9 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Union
+from typing import Dict, List, Mapping, Optional, Tuple, Union
+
+from crsw_deposit import keys
 
 ENV_PREFIX = "PROMOTER_"
 REQUIRED = ("S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET",
@@ -34,14 +36,22 @@ class PromoterConfig:
     # (finding-and-reuse.md §5). Off unless both URL and key are set.
     llm_base_url: str = ""
     llm_api_key: str = ""
+    # A blank model name switches that function off.
     llm_embed_model: str = "arc:embedvl"
-    # Whether amber titles and abstracts may be sent to the platform: a
-    # Centre decision, so off until it is taken.
-    llm_embed_amber: bool = False
+    # Keep the first N numbers of each vector (0 = all). Half the numbers
+    # at half precision is a quarter of the storage; see crsw_web/llm.py.
+    llm_embed_dims: int = 1024
+    # Which sensitivities' metadata (and, later, contents) may be sent to
+    # the platform. Green only until the Centre allows amber.
+    llm_sensitivities: Tuple[str, ...] = ("green",)
+
+    @property
+    def llm_enabled(self) -> bool:
+        return bool(self.llm_base_url and self.llm_api_key)
 
     @property
     def embed_enabled(self) -> bool:
-        return bool(self.llm_base_url and self.llm_api_key)
+        return self.llm_enabled and bool(self.llm_embed_model)
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
@@ -81,6 +91,13 @@ class PromoterConfig:
         if bool(llm_url) != bool(llm_key):
             raise ConfigError("%sLLM_BASE_URL and %sLLM_API_KEY must be set together "
                               "(both blank turns embeddings off)" % (ENV_PREFIX, ENV_PREFIX))
+        sens = tuple(s.strip() for s in (env.get(ENV_PREFIX + "LLM_SENSITIVITIES") or "green").split(",")
+                     if s.strip())
+        bad = [s for s in sens if s not in keys.SENSITIVITIES]
+        if bad:
+            raise ConfigError("%sLLM_SENSITIVITIES may only name %s, got %r"
+                              % (ENV_PREFIX, "/".join(keys.SENSITIVITIES), ", ".join(bad)))
+        dims = opt_int("LLM_EMBED_DIMS")
         return cls(
             s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
             s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
@@ -95,8 +112,9 @@ class PromoterConfig:
             index_prefix=env.get(ENV_PREFIX + "INDEX_PREFIX", "index").strip().strip("/"),
             llm_base_url=llm_url,
             llm_api_key=llm_key,
-            llm_embed_model=(env.get(ENV_PREFIX + "LLM_EMBED_MODEL") or "arc:embedvl").strip(),
-            llm_embed_amber=(env.get(ENV_PREFIX + "LLM_EMBED_AMBER") or "").strip() == "1",
+            llm_embed_model=env.get(ENV_PREFIX + "LLM_EMBED_MODEL", "arc:embedvl").strip(),
+            llm_embed_dims=1024 if dims is None else dims,
+            llm_sensitivities=sens,
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:

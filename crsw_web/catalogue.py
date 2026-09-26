@@ -271,25 +271,28 @@ class Catalogue:
         return out
 
     def ask(self, question: str, platform, limit: Optional[int] = None,
-            include_amber: bool = False) -> Answer:
+            sensitivities: Sequence[str] = ("green",)) -> Answer:
         """A question in plain words to rows in order. Filter first (the
         model picks from the vocabulary; anything else is dropped), then
         rank by meaning where vectors exist, rows without a vector by the
         words, then the reranker over the top few. Each step that fails
-        leaves a notice and the rest still runs."""
+        leaves a notice and the rest still runs; a step whose model name
+        is blank is switched off and simply does not run. Abstracts of
+        only the given sensitivities are ever sent to the reranker."""
         question = " ".join((question or "").split())[:500]
         ans = Answer(rows=[])
         if not question:
             return ans
         notices = []
-        try:
-            ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
-                                             keys.SENSITIVITIES, self.subjects(),
-                                             self.projects())
-            ans.steps.append("filter")
-        except PlatformError as e:
-            notices.append("The question could not be interpreted (%s); "
-                           "matching on its words instead." % e)
+        if getattr(platform, "chat_model", True):
+            try:
+                ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
+                                                 keys.SENSITIVITIES, self.subjects(),
+                                                 self.projects())
+                ans.steps.append("filter")
+            except PlatformError as e:
+                notices.append("The question could not be interpreted (%s); "
+                               "matching on its words instead." % e)
         f = ans.filter
         candidates = [r for r in self.search(strand=f.get("strand"), state=f.get("state"),
                                              sensitivity=f.get("sensitivity"),
@@ -304,7 +307,7 @@ class Catalogue:
                            "datasets instead.")
         words, all_of = (f["words"], True) if f.get("words") else (question, False)
         ranked: List[Dict] = []
-        if self.has_vectors():
+        if self.has_vectors() and getattr(platform, "embed_model", True):
             try:
                 vec = platform.embed([question])[0]
                 by_id = {r["identifier"]: r for r in candidates}
@@ -318,17 +321,17 @@ class Catalogue:
         rows = ranked + rest
         if not rows and f and not f.get("words"):
             rows = candidates          # the filter alone was the answer
-        rows = self._rerank(question, platform, rows, include_amber, ans, notices)
+        if getattr(platform, "rerank_model", True):
+            rows = self._rerank(question, platform, rows, set(sensitivities), ans, notices)
         named = [r for r in rows if name_match(r, question)]
         rows = named + [r for r in rows if r not in named]
         ans.rows = rows[:limit] if limit else rows
         ans.notice = " ".join(notices) or None
         return ans
 
-    def _rerank(self, question, platform, rows, include_amber, ans, notices) -> List[Dict]:
+    def _rerank(self, question, platform, rows, sensitivities, ans, notices) -> List[Dict]:
         top, tail = rows[:RERANK_TOP], rows[RERANK_TOP:]
-        sendable = [i for i, r in enumerate(top)
-                    if include_amber or r.get("sensitivity") != "amber"]
+        sendable = [i for i, r in enumerate(top) if r.get("sensitivity") in sensitivities]
         if len(sendable) < 2:
             return rows
         docs = [(top[i].get("dataset") or "") + ". " + (top[i].get("abstract") or "")
