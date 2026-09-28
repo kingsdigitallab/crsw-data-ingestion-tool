@@ -388,7 +388,11 @@ link on each result asks the chat model, on the click and not before,
 for one sentence on what connects the passage to the question; the page
 calls it "the model's reading", since a vector match has no reasoning
 to show, and it is offered only for passages of the sensitivities in
-`CRSW_LLM_SENSITIVITIES`.
+`CRSW_LLM_SENSITIVITIES`. Results found by meaning alone are folded under
+"N more passages, close in meaning only" whenever a words match exists, or
+when they fall more than 0.05 below the best of them: on a corpus of
+similar documents every passage is nearly equally close to any question,
+and the fold keeps those near-ties out of the way without dropping them.
 The copy refreshes on the index cycle, fetching
 only files whose ETag changed; delete the volume (or the file) and it is
 rebuilt from the bucket on the next request. Sizes: about 3 KB per

@@ -47,6 +47,8 @@ ol.hits .where .score { color: var(--muted); margin-left: .5rem; }
 ol.hits blockquote { margin: 0; padding: 0 0 0 .9rem; border-left: 3px solid var(--rule); font-family: var(--serif); line-height: 1.5; max-width: 72ch; }
 ol.hits .where .why { color: var(--muted); font-family: var(--serif); margin-left: .6rem; }
 ol.hits .where .why-ask { margin-left: .6rem; }
+details.weak { margin-top: 1rem; border-top: 1px solid var(--rule); padding-top: .6rem; }
+details.weak summary { cursor: pointer; color: var(--muted); font-family: var(--serif); }
 ol.hits .why-said { margin: .5rem 0 0 .9rem; color: var(--muted); font-family: var(--serif); max-width: 72ch; }
 .ask .actions .sort { margin-left: 1rem; color: var(--muted); }
 .ask .actions .sort label { margin-left: .5rem; color: inherit; font-weight: normal; }

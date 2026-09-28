@@ -37,17 +37,32 @@
     </form>
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
-    {% if q %}
-    <p class="count">{{ results|length }} passage{% if results|length != 1 %}s{% endif %}</p>
-    {% if results %}
-    <ol class="hits">
-      {% for h in results %}
+    {% macro hit(h) %}
       <li>
         <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}<span class="why">{% if h.why == "phrase" %}contains your exact words{% elif h.why == "words" %}contains all your words{% else %}closest in meaning{% endif %}</span><span class="score">{{ h.score }}</span>{% if can_explain and h.sensitivity in sensitivities %} <button type="button" class="link why-ask" data-identifier="{{ h.identifier }}" data-member="{{ h.member }}" data-position="{{ h.position }}">Why this?</button>{% endif %}</p>
         <blockquote>{% for s in h.sentences %}{% if s.marked %}<mark class="{{ s.how }}" title="{% if s.how == 'meaning' %}closest in meaning to what you asked{% elif s.how == 'phrase' %}contains your exact words{% else %}contains all your words{% endif %}">{{ s.text|emphasise(q) }}</mark>{% else %}{{ s.text|emphasise(q) }}{% endif %} {% endfor %}</blockquote>
         <p class="why-said" hidden aria-live="polite"></p>
       </li>
-      {% endfor %}
+    {% endmacro %}
+
+    {% if q %}
+    <p class="count">{{ results|length }} passage{% if results|length != 1 %}s{% endif %}</p>
+    {% if strong %}
+    <ol class="hits">
+      {% for h in strong %}{{ hit(h) }}{% endfor %}
+    </ol>
+    {% if weak %}
+    <details class="weak">
+      <summary>{{ weak|length }} more passage{% if weak|length != 1 %}s{% endif %}, close in meaning only</summary>
+      <ol class="hits">
+        {% for h in weak %}{{ hit(h) }}{% endfor %}
+      </ol>
+    </details>
+    {% endif %}
+    {% elif weak %}
+    <p class="notice">Nothing contains your words. These are the passages closest in meaning, which may not be close at all.</p>
+    <ol class="hits">
+      {% for h in weak %}{{ hit(h) }}{% endfor %}
     </ol>
     {% else %}
     <p class="empty">Nothing close enough.</p>

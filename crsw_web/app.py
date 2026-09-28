@@ -248,6 +248,7 @@ def create_app(settings: Optional[Settings] = None,
     # --- search inside documents (finding-and-reuse.md §7) ------------------
 
     SEARCH_TOP = 20          # passages the reranker reads
+    WEAK_BAND = 0.05         # a meaning-only result this far below the best is "weak"
 
     def need_passages():
         if passage_index is None:
@@ -345,7 +346,18 @@ def create_app(settings: Optional[Settings] = None,
                         s["marked"], s["how"] = marked, ("meaning" if marked else None)
                     i += n
                 out["steps"].append("highlight")
+        # Meaning-only results are near-ties on a homogeneous corpus; those
+        # more than WEAK_BAND below the best meaning score are folded away
+        # on the page (never dropped). With word matches present, every
+        # meaning-only result is weak by comparison.
+        has_words = any(h["why"] != "meaning" for h in results)
+        best = max((float(h["score"]) for h in results if h["why"] == "meaning"), default=0.0)
+        for h in results:
+            h["weak"] = (h["why"] == "meaning" and
+                         (has_words or float(h["score"]) < best - WEAK_BAND))
         out["results"] = results
+        out["strong"] = [h for h in results if not h["weak"]]
+        out["weak"] = [h for h in results if h["weak"]]
         log.info("search user=%s chars=%d steps=%s hits=%d shown=%d",
                  user.username, len(q), "+".join(out["steps"]) or "-", len(hits), len(results))
         return out
@@ -395,7 +407,7 @@ def create_app(settings: Optional[Settings] = None,
                 "stats": found["stats"], "sort": found["sort"],
                 "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
                                                      "position", "text", "score", "sensitivity",
-                                                     "why", "sentences")}
+                                                     "why", "weak", "sentences")}
                              for h in found["results"]]}
 
     def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:
