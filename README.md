@@ -222,8 +222,9 @@ researcher can see and adjust, and datasets are ranked by meaning.
 Every step, and every sensitivity whose metadata may be sent, is a
 switch in the environment (`docs/web-deposit/finding-and-reuse.md`
 §5). With `CRSW_PASSAGES=1` it also keeps a copy of the promoter's
-passages on the VM and offers "Search inside": what the deposited
-documents say, shown only for files the reader could download (§7).
+passages on the VM and offers "Search inside content": what the
+deposited documents say, shown only for files the reader could
+download, with the closest sentence of each passage marked (§7).
 Runbook, section 7.
 
 The vocabulary lives at

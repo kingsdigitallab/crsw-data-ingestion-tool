@@ -372,10 +372,13 @@ find page is then exactly as before.
 promoter writing passages, section 6), the service keeps a copy of
 `index/passages/` in one DuckDB file on the `passages` volume
 (`CRSW_PASSAGES_PATH`, default `/data/passages.duckdb`) and adds
-"Search inside" to the navigation: `/search?q=…` embeds the words,
-finds the closest passages, keeps only those whose file the download
-rule would serve this person, reranks the top twenty and shows dataset,
-file, page and passage. The copy refreshes on the index cycle, fetching
+"Search inside content" to the navigation: `/search?q=…` embeds the
+words, finds the closest passages, keeps only those whose file the
+download rule would serve this person, reranks the top twenty and shows
+dataset, file, page and passage. To say why a passage matched, the
+sentences of the passages shown go to the embedding model in one more
+call and each passage's closest sentence is marked; the question's own
+words are bold wherever they appear. A one-sentence passage is not sent. The copy refreshes on the index cycle, fetching
 only files whose ETag changed; delete the volume (or the file) and it is
 rebuilt from the bucket on the next request. Sizes: about 3 KB per
 passage on the volume; a million passages is roughly 3 GB, so ask for a

@@ -45,6 +45,8 @@ ol.hits li { border-top: 1px solid var(--rule); padding: .9rem 0; }
 ol.hits .where { margin: 0 0 .4rem; }
 ol.hits .where .score { color: var(--muted); margin-left: .5rem; }
 ol.hits blockquote { margin: 0; padding: 0 0 0 .9rem; border-left: 3px solid var(--rule); font-family: var(--serif); line-height: 1.5; max-width: 72ch; }
+ol.hits mark, .hint mark { background: #fff3b0; color: inherit; padding: 0 .12em; }
+ol.hits b, .hint b { font-weight: 600; }
 .search .actions { margin-top: .5rem; }
 .count { color: var(--muted); font-family: var(--serif); }
 .results td:first-child a { font-weight: 600; }

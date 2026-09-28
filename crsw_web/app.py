@@ -16,6 +16,7 @@ from urllib.parse import quote
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from markupsafe import Markup, escape
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -26,7 +27,7 @@ from .access import may_download
 from .auth import User, make_authenticator, peer_address
 from .catalogue import Catalogue
 from .llm import Platform, PlatformError
-from .passages import open_index
+from .passages import open_index, split_sentences, mark_closest, word_pattern
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
@@ -114,6 +115,15 @@ def create_app(settings: Optional[Settings] = None,
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals["passages_enabled"] = passages_enabled
+
+    def emphasise(text: str, question: str) -> Markup:
+        """The text escaped, with the question's words in <b>."""
+        pat = word_pattern(question)
+        safe = escape(text or "")
+        if pat is None:
+            return safe
+        return Markup(pat.sub(lambda m: "<b>%s</b>" % escape(m.group(0)), str(safe)))
+    templates.env.filters["emphasise"] = emphasise
 
     # --- Phase 3: the browser form ----------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -283,6 +293,25 @@ def create_app(settings: Optional[Settings] = None,
             row = cat.get(h["identifier"]) or {}
             h["dataset"] = row.get("dataset") or h["identifier"].rsplit("/", 1)[-1]
             h["score"] = round(float(h["score"]), 3)
+            h["sentences"] = [{"text": s, "marked": False} for s in split_sentences(h["text"])]
+        # Which sentence of each passage is closest: one call for them all.
+        # A passage of one sentence has nothing to choose and is not sent.
+        todo = [h for h in results if len(h["sentences"]) > 1]
+        if todo:
+            texts = [s["text"] for h in todo for s in h["sentences"]]
+            try:
+                vectors = platform.embed(texts)
+            except PlatformError as e:
+                out["notice"] = ((out["notice"] + " ") if out["notice"] else "") + \
+                    "Highlighting is unavailable (%s)." % e
+            else:
+                i = 0
+                for h in todo:
+                    n = len(h["sentences"])
+                    for s, marked in zip(h["sentences"], mark_closest(vectors[i:i + n], vec)):
+                        s["marked"] = marked
+                    i += n
+                out["steps"].append("highlight")
         out["results"] = results
         log.info("search user=%s chars=%d steps=%s hits=%d shown=%d",
                  user.username, len(q), "+".join(out["steps"]) or "-", len(hits), len(results))
@@ -301,7 +330,8 @@ def create_app(settings: Optional[Settings] = None,
         return {"q": found["q"], "notice": found["notice"], "steps": found["steps"],
                 "stats": found["stats"],
                 "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
-                                                     "position", "text", "score", "sensitivity")}
+                                                     "position", "text", "score", "sensitivity",
+                                                     "sentences")}
                              for h in found["results"]]}
 
     def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:

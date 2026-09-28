@@ -19,6 +19,7 @@ the same rule as downloads."""
 import io
 import logging
 import os
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence
@@ -36,6 +37,66 @@ log = logging.getLogger("crsw.passages")
 
 COLUMNS = ("identifier", "dataset_uuid", "sensitivity", "member", "checksum", "page",
            "position", "words", "text", "dimension")
+
+# --- saying why a passage matched -------------------------------------------------
+# A vector cannot say which words matched; it can say which sentence of a
+# passage is closest to the question. The sentences are embedded (one call
+# for every passage shown) and the closest is marked on the page.
+
+# A break after . ? or ! (a closing quote or bracket may follow it) when a
+# capital, digit, quote or bracket starts the next sentence, or at a line
+# break. Python lookbehinds are fixed-width, hence the two alternatives.
+_SENTENCE_END = re.compile(
+    r"(?:(?<=[.?!])|(?<=[.?!][\"')\]]))\s+(?=[A-Z0-9\"'(\[])|\n+")
+_STEM = 5     # a question word matches on its first five letters
+# Question words that say nothing about the passage.
+_STOP = frozenset("""that this with from have were what when which where about into than
+then they them their does been being will would could should there these those
+also only some such very much more most over under between after before because
+while during through your ours mine each every other others same both either
+neither whether whose whom here just like make made many used using data""".split())
+
+
+def split_sentences(text: str) -> List[str]:
+    """Sentences of a passage, plain: a break after . ? or ! when a
+    capital, digit or quote follows, or at a line break. Never empty."""
+    parts = [p.strip() for p in _SENTENCE_END.split(text or "") if p and p.strip()]
+    return parts or [(text or "").strip()]
+
+
+def mark_closest(vectors: Sequence[Sequence[float]], question: Sequence[float],
+                 margin: float = 0.03, at_most: int = 2) -> List[bool]:
+    """Which sentences to mark: the one closest to the question, and the
+    next within `margin` of it so a two-sentence idea is not cut in half,
+    never more than `at_most` (a highlight of half a passage is none)."""
+    import numpy as np
+    if not vectors:
+        return []
+    m = np.asarray(vectors, dtype=np.float32)
+    q = np.asarray(question, dtype=np.float32)
+    if m.ndim != 2 or m.shape[1] != q.shape[0]:
+        return [False] * len(vectors)
+    norms = np.linalg.norm(m, axis=1); norms[norms == 0] = 1.0
+    scores = (m @ q) / norms / (float(np.linalg.norm(q)) or 1.0)
+    best = float(scores.max())
+    chosen = [i for i in np.argsort(-scores)[:at_most] if scores[i] >= best - margin]
+    return [i in chosen for i in range(len(vectors))]
+
+
+def word_pattern(question: str) -> Optional["re.Pattern"]:
+    """A regex for the question's words as they appear in a passage:
+    words of four letters or more match on their first five letters
+    (so "verified" finds "verification"), shorter words whole."""
+    stems = set()
+    for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", question or ""):
+        w = w.lower().strip("'-")
+        if len(w) >= 4 and w not in _STOP:
+            stems.add(w[:_STEM])
+    if not stems:
+        return None
+    alts = sorted(stems, key=len, reverse=True)
+    return re.compile(r"\b(" + "|".join(re.escape(s) for s in alts) + r")[a-z0-9'-]*",
+                      re.IGNORECASE)
 
 
 class PassageIndex:

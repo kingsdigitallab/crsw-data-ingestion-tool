@@ -14,7 +14,8 @@ if HAVE_WEB:
     from crsw_web import s3 as s3mod
     from crsw_web.app import create_app
     from crsw_web.config import Settings
-    from crsw_web.passages import PassageIndex, open_index
+    from crsw_web.passages import (PassageIndex, open_index, split_sentences, mark_closest,
+                                   word_pattern)
     from promoter import passages as pmod
     from promoter import index as index_mod
 
@@ -84,7 +85,7 @@ class TestOff(SearchBase):
                                   read_client=s3mod.ReadOnly(self.s3), platform=FakePlatform()))
         self.assertEqual(c.get("/search", params={"q": "x"}).status_code, 404)
         self.assertEqual(c.get("/search.json", params={"q": "x"}).status_code, 404)
-        self.assertNotIn("Search inside", c.get("/datasets").text)
+        self.assertNotIn("Search inside content", c.get("/datasets").text)
         # Switched on but no platform: still off.
         c = TestClient(create_app(Settings(**dict(READ, passages=True)), s3_client=self.s3,
                                   vocab_dict=VOCAB, read_client=s3mod.ReadOnly(self.s3)))
@@ -167,17 +168,59 @@ class TestCopy(SearchBase):
         self.assertEqual((ix.path, ix.dims), (self.path, DIM))
 
 
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestWhy(unittest.TestCase):
+    def test_split_sentences(self):
+        self.assertEqual(split_sentences("One. Two? Three! four. Five"),
+                         ["One.", "Two?", "Three! four.", "Five"])
+        self.assertEqual(split_sentences("Sidecar spec v0.5. Next item"), ["Sidecar spec v0.5.", "Next item"])
+        self.assertEqual(split_sentences("line one\nline two"), ["line one", "line two"])
+        self.assertEqual(split_sentences('He said "Go." "Now."'), ['He said "Go."', '"Now."'])
+        self.assertEqual(split_sentences("test data"), ["test data"])
+        self.assertEqual(split_sentences(""), [""])
+
+    def test_mark_closest(self):
+        q = [1.0, 0.0]
+        self.assertEqual(mark_closest([[1.0, 0.0], [0.0, 1.0], [0.99, 0.1]], q), [True, False, True])
+        self.assertEqual(mark_closest([[1.0, 0.0], [0.0, 1.0]], q, margin=0.0), [True, False])
+        self.assertEqual(mark_closest([[1.0, 0.0], [0.99, 0.1], [0.98, 0.15], [1.0, 0.01]], q),
+                         [True, False, False, True])                     # at most two
+        self.assertEqual(mark_closest([], q), [])
+        self.assertEqual(mark_closest([[1.0, 0.0, 0.0]], q), [False])      # wrong length
+
+    def test_word_pattern(self):
+        pat = word_pattern("how are uploads verified, e.g. by size?")
+        found = [m.group(0) for m in pat.finditer("Upload verification compares sizes; verified by the promoter. Size matters.")]
+        self.assertEqual(found, ["Upload", "verification", "sizes", "verified", "Size"])
+        self.assertIsNone(word_pattern("a an of"))
+        self.assertIsNone(word_pattern("what about this and that"))     # stop words only
+        self.assertIsNone(word_pattern(""))
+        self.assertEqual(word_pattern("CSAC").pattern.count("csac"), 1)
+
+
 class TestSearchPage(SearchBase):
     def test_search_by_meaning_with_the_download_rule(self):
         self.write_passages((CLEAN, GREEN, AMBER), ("green", "amber"))
         p = FakePlatform()
         c = self.app(platform=p)
         html = c.get("/datasets").text
-        self.assertIn('href="/search">Search inside</a>', html)
+        self.assertIn('href="/search">Search inside content</a>', html)
+        for path in ("/", "/datasets/" + GREEN):
+            self.assertIn('href="/search">Search inside content</a>', c.get(path).text, path)
         body = self.hits(c, "conflict deaths per year")
-        self.assertEqual(body["steps"], ["meaning", "rerank"])
+        self.assertEqual(body["steps"], ["meaning", "rerank", "highlight"])
         self.assertEqual([h["identifier"] for h in body["passages"]], [CLEAN, GREEN])
         self.assertEqual(body["passages"][0]["member"], "method.txt")
+        # Why it matched: the closest sentence of the two-sentence passage.
+        sentences = body["passages"][0]["sentences"]
+        self.assertEqual([s["text"] for s in sentences],
+                         ["Conflict deaths are counted per year from the CSAC database.",
+                          "Each event is coded by location and actor."])
+        self.assertEqual([s["marked"] for s in sentences], [True, False])
+        # The sentences went to the platform once, all together; the
+        # one-sentence passage was not sent.
+        self.assertEqual(p.embed_calls[-1], [s["text"] for s in sentences])
+        self.assertEqual(len(p.embed_calls), 2)               # question, then sentences
         self.assertEqual(body["passages"][0]["dataset"], "csac-clean")
         self.assertIn("Conflict deaths", body["passages"][0]["text"])
         self.assertEqual(body["stats"]["passages"], 3)        # held, but amber never queried
@@ -207,10 +250,37 @@ class TestSearchPage(SearchBase):
         html = c.get("/search", params={"q": "battles and massacres"}).text
         self.assertIn("2 passages from 2 files in 2 datasets", html)
         self.assertIn('<a href="/datasets/%s/files/notes/readme.md">notes/readme.md</a>' % GREEN, html)
-        self.assertIn("battles and massacres", html)
+        self.assertIn("<b>battles</b> and <b>massacres</b>", html)
+        self.assertIn("<h1>Search inside content</h1>", html)
+        # The two-sentence passage: its closest sentence marked, the question's
+        # stem bold inside it (deaths -> "death" stem matches "deaths").
+        html = c.get("/search", params={"q": "conflict deaths"}).text
+        self.assertIn("<mark><b>Conflict</b> <b>deaths</b> are counted per year from the CSAC database.</mark>", html)
+        self.assertIn(" Each event is coded by location and actor. ", html)
+        self.assertNotIn("<mark>Each event", html)
+        # HTML in a passage is escaped, not rendered.
+        self.put_member(GREEN, "notes/readme.md", b"# Events\nSee <script>alert(1)</script> for battles.\n")
+        self.write_passages((GREEN,))
+        html = self.app(platform=FakePlatform(), passages_path=os.path.join(self.tmp.name, "e.duckdb")).get(
+            "/search", params={"q": "battles"}).text
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>alert", html)
         html = c.get("/search").text
         self.assertIn('id="q"', html)
         self.assertNotIn("Nothing close enough", html)
+        # Only the highlighting call down: passages unmarked, a notice.
+        class FlakyPlatform(FakePlatform):
+            def embed(self, texts, batch=32):
+                if self.embed_calls:
+                    self.embed_calls.append(list(texts))
+                    raise PlatformError("platform returned HTTP 503 for /embeddings")
+                return super().embed(texts, batch)
+        from crsw_web.llm import PlatformError
+        body = self.hits(self.app(platform=FlakyPlatform()), "conflict deaths per year")
+        self.assertEqual(body["steps"], ["meaning", "rerank"])
+        self.assertIn("Highlighting is unavailable", body["notice"])
+        self.assertTrue(body["passages"])
+        self.assertFalse(any(s["marked"] for h in body["passages"] for s in h["sentences"]))
         # Embedding down: a notice, not an error.
         p = FakePlatform(fail=("embed",))
         body = self.hits(self.app(platform=p), "battles")
@@ -221,10 +291,10 @@ class TestSearchPage(SearchBase):
         self.assertIn("unavailable", r.text)
         # Reranker down or off: the vector order stands.
         body = self.hits(self.app(platform=FakePlatform(fail=("rerank",))), "battles")
-        self.assertEqual(body["steps"], ["meaning"])
+        self.assertEqual(body["steps"], ["meaning", "highlight"])
         self.assertIn("reranker", body["notice"])
         body = self.hits(self.app(platform=FakePlatform(off=("rerank",))), "battles")
-        self.assertEqual((body["steps"], body["notice"]), (["meaning"], None))
+        self.assertEqual((body["steps"], body["notice"]), (["meaning", "highlight"], None))
         # The reranker's order wins.
         body = self.hits(self.app(platform=FakePlatform(reverse=True)), "conflict deaths per year")
         self.assertEqual([h["identifier"] for h in body["passages"]], [GREEN, CLEAN])
