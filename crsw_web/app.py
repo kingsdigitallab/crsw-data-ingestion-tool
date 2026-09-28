@@ -7,6 +7,7 @@ call into crsw_deposit. Run with:
 """
 import hashlib
 import logging
+import re
 from datetime import timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -27,7 +28,8 @@ from .access import may_download
 from .auth import User, make_authenticator, peer_address
 from .catalogue import Catalogue
 from .llm import Platform, PlatformError
-from .passages import open_index, split_sentences, mark_closest, word_pattern
+from .passages import (open_index, split_sentences, mark_closest, word_pattern,
+                       question_stems)
 from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
@@ -270,13 +272,19 @@ def create_app(settings: Optional[Settings] = None,
         out["steps"].append("meaning")
         # With amber served to nobody, do not even pull amber rows.
         sens = ("green",) if settings.amber_access == "off" else None
-        hits = index.search(vec, limit=limit * 5, sensitivities=sens)
+        stems = question_stems(q)
+        hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems)
         allowed = []
         for h in hits:
             strand = (h["identifier"] or "").split("/", 1)[0]
             if may_download(user, h["sensitivity"], strand, settings) is None:
                 allowed.append(h)
-        top, tail = allowed[:SEARCH_TOP], allowed[SEARCH_TOP:]
+        # Passages that contain the words asked stay in front; the reranker
+        # orders only those found by meaning.
+        pinned = [h for h in allowed if h["why"] != "meaning"]
+        rest = [h for h in allowed if h["why"] == "meaning"]
+        room = max(0, SEARCH_TOP - len(pinned))
+        top, tail = rest[:room], rest[room:]
         if platform.rerank_model and len(top) > 1:
             sendable = [i for i, h in enumerate(top)
                         if h["sensitivity"] in settings.llm_sensitivities]
@@ -288,15 +296,31 @@ def create_app(settings: Optional[Settings] = None,
                     out["steps"].append("rerank")
                 except PlatformError as e:
                     out["notice"] = "The reranker is unavailable (%s)." % e
-        results = (top + tail)[:limit]
+        results = (pinned + top + tail)[:limit]
+        pat = word_pattern(q)
+        phrase_re = re.compile(re.escape(q), re.IGNORECASE) if q else None
         for h in results:
             row = cat.get(h["identifier"]) or {}
             h["dataset"] = row.get("dataset") or h["identifier"].rsplit("/", 1)[-1]
             h["score"] = round(float(h["score"]), 3)
-            h["sentences"] = [{"text": s, "marked": False} for s in split_sentences(h["text"])]
-        # Which sentence of each passage is closest: one call for them all.
-        # A passage of one sentence has nothing to choose and is not sent.
-        todo = [h for h in results if len(h["sentences"]) > 1]
+            h["sentences"] = [{"text": s, "marked": False, "how": None}
+                              for s in split_sentences(h["text"])]
+            # A passage found by its words is marked by its words: the
+            # sentences holding the phrase, else every telling word. No
+            # call to the platform needed to say why.
+            if h["why"] == "phrase":
+                for s in h["sentences"]:
+                    if phrase_re.search(s["text"]):
+                        s["marked"], s["how"] = True, "phrase"
+            if h["why"] == "words" or (h["why"] == "phrase"
+                                        and not any(s["marked"] for s in h["sentences"])):
+                for s in h["sentences"]:
+                    found = {m.group(1).lower() for m in pat.finditer(s["text"])} if pat else set()
+                    if stems and found.issuperset(stems):
+                        s["marked"], s["how"] = True, "words"
+        # Which sentence of each passage found by meaning is closest: one
+        # call for them all. A one-sentence passage has nothing to choose.
+        todo = [h for h in results if h["why"] == "meaning" and len(h["sentences"]) > 1]
         if todo:
             texts = [s["text"] for h in todo for s in h["sentences"]]
             try:
@@ -309,7 +333,7 @@ def create_app(settings: Optional[Settings] = None,
                 for h in todo:
                     n = len(h["sentences"])
                     for s, marked in zip(h["sentences"], mark_closest(vectors[i:i + n], vec)):
-                        s["marked"] = marked
+                        s["marked"], s["how"] = marked, ("meaning" if marked else None)
                     i += n
                 out["steps"].append("highlight")
         out["results"] = results
@@ -331,7 +355,7 @@ def create_app(settings: Optional[Settings] = None,
                 "stats": found["stats"],
                 "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
                                                      "position", "text", "score", "sensitivity",
-                                                     "sentences")}
+                                                     "why", "sentences")}
                              for h in found["results"]]}
 
     def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:

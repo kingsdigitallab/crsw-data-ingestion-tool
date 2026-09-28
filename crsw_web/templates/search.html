@@ -25,7 +25,7 @@
       <div class="field">
         <label for="q">What are you looking for?</label>
         <input id="q" name="q" type="search" value="{{ q }}" placeholder="a phrase, a name, a question in your own words" maxlength="500">
-        <p class="hint">Your words and the passages that come closest are read by KCL's own AI service. You only see passages from files you could download. In each passage the sentence closest to what you asked is <mark>marked</mark> and your own words are in <b>bold</b>.</p>
+        <p class="hint">Passages containing your exact words come first, then passages containing all of them, then those closest in meaning. Your words and those passages are read by KCL's own AI service; you only see passages from files you could download. In each passage the sentence that holds <mark class="phrase">your words</mark> or comes <mark class="meaning">closest in meaning</mark> is marked, and your own words are in <b>bold</b>.</p>
       </div>
       <div class="actions"><button class="primary" type="submit">Search</button></div>
     </form>
@@ -37,8 +37,8 @@
     <ol class="hits">
       {% for h in results %}
       <li>
-        <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}<span class="score">{{ h.score }}</span></p>
-        <blockquote>{% for s in h.sentences %}{% if s.marked %}<mark>{{ s.text|emphasise(q) }}</mark>{% else %}{{ s.text|emphasise(q) }}{% endif %} {% endfor %}</blockquote>
+        <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}<span class="why">{% if h.why == "phrase" %}contains your exact words{% elif h.why == "words" %}contains all your words{% else %}closest in meaning{% endif %}</span><span class="score">{{ h.score }}</span></p>
+        <blockquote>{% for s in h.sentences %}{% if s.marked %}<mark class="{{ s.how }}" title="{% if s.how == 'meaning' %}closest in meaning to what you asked{% elif s.how == 'phrase' %}contains your exact words{% else %}contains all your words{% endif %}">{{ s.text|emphasise(q) }}</mark>{% else %}{{ s.text|emphasise(q) }}{% endif %} {% endfor %}</blockquote>
       </li>
       {% endfor %}
     </ol>

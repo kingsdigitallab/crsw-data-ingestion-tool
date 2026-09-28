@@ -15,7 +15,7 @@ if HAVE_WEB:
     from crsw_web.app import create_app
     from crsw_web.config import Settings
     from crsw_web.passages import (PassageIndex, open_index, split_sentences, mark_closest,
-                                   word_pattern)
+                                   word_pattern, question_stems)
     from promoter import passages as pmod
     from promoter import index as index_mod
 
@@ -34,6 +34,10 @@ class SearchBase(AskBase):
         self.put_member(GREEN, "notes/readme.md",
                         b"# Events\nThe events file lists battles and massacres with dates.\n")
         self.put_member(AMBER, "t1.txt", b"Interview with a survivor of forced marriage.\n")
+        self.put_member(GREEN, "notes/method.md",
+                        b"# Method\nFields populate automatically where possible; the rest are typed. "
+                        b"Dates were checked against the archive.\n")
+        self.put_member(GREEN, "tiny.txt", b"test data\n")
         self.rows_by_id = {r["identifier"]: r for r in index_mod.rows(self.s3, "crsw")}
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, "copy", "passages.duckdb")
@@ -111,7 +115,7 @@ class TestCopy(SearchBase):
         ix = self.index()
         s = ix.sync()
         self.assertEqual((s["loaded"], s["dropped"], s["unchanged"], s["skipped"]), (2, 0, 0, 0))
-        self.assertEqual(ix.stats(), {"passages": 2, "datasets": 2, "files": 2})
+        self.assertEqual(ix.stats(), {"passages": 4, "datasets": 2, "files": 4})
         self.assertEqual(ix.dims, DIM)
         self.assertTrue(os.path.exists(self.path))
         # Nothing changed: nothing fetched.
@@ -121,29 +125,43 @@ class TestCopy(SearchBase):
         self.write_passages((CLEAN, AMBER), ("green", "amber"))
         s = ix.sync()
         self.assertEqual((s["loaded"], s["unchanged"]), (2, 1))
-        self.assertEqual(ix.stats()["passages"], 3)
+        self.assertEqual(ix.stats()["passages"], 5)
         found = ix.search(bag("Different words about deaths in war"), limit=1)
         self.assertEqual((found[0]["identifier"], found[0]["member"]), (CLEAN, "method.txt"))
         # The file is deleted from the bucket: dropped from the copy.
         self.s3.delete_object(Bucket="crsw", Key=pmod.passages_key(PREFIX, AMBER))
         s = ix.sync()
         self.assertEqual(s["dropped"], 1)
-        self.assertEqual(ix.stats()["passages"], 2)
+        self.assertEqual(ix.stats()["passages"], 4)
         # Reopened from disk: still there, no reload needed.
         ix2 = self.index()
         self.assertEqual(ix2.sync()["unchanged"], 2)
-        self.assertEqual(ix2.stats()["passages"], 2)
+        self.assertEqual(ix2.stats()["passages"], 4)
 
     def test_marker_rows_and_wrong_dims_are_left_out(self):
         self.put_member(GREEN, "scan.pdf", b"%PDF-1.4 nothing")       # unreadable: no text
         self.write_passages((GREEN,))
         ix = self.index()
         self.assertEqual(ix.sync()["loaded"], 1)
-        self.assertEqual(ix.stats(), {"passages": 1, "datasets": 1, "files": 1})
+        self.assertEqual(ix.stats(), {"passages": 3, "datasets": 1, "files": 3})
         # A vector of the wrong length is refused quietly.
         self.assertEqual(ix.search([1.0] * (DIM + 1)), [])
         self.assertEqual(ix.search(bag("battles"), sensitivities=["amber"]), [])
-        self.assertEqual(len(ix.search(bag("battles"), sensitivities=["green"])), 1)
+        found = ix.search(bag("battles"), sensitivities=["green"])
+        # The two-word passage is left out unless the words asked are in it.
+        self.assertEqual(sorted(h["member"] for h in found), ["notes/method.md", "notes/readme.md"])
+        self.assertEqual([h["why"] for h in found], ["meaning", "meaning"])
+        found = ix.search(bag("x"), phrase="TEST data", stems=["test"])
+        self.assertEqual([(h["member"], h["why"]) for h in found][0], ("tiny.txt", "phrase"))
+        # Phrase first, then every word, then meaning.
+        found = ix.search(bag("battles"), phrase="populate automatically where possible",
+                          stems=question_stems("populate automatically where possible"))
+        self.assertEqual([(h["member"], h["why"]) for h in found][:1], [("notes/method.md", "phrase")])
+        found = ix.search(bag("battles"), phrase="possible to populate",
+                          stems=question_stems("possible to populate"))
+        self.assertEqual([(h["member"], h["why"]) for h in found][:1], [("notes/method.md", "words")])
+        self.assertEqual(ix.search(bag("battles"), phrase="100% _sure_", stems=["100%"]),
+                         ix.search(bag("battles")))       # odd characters do not break it
 
     def test_listing_failure_keeps_the_copy(self):
         self.write_passages()
@@ -157,7 +175,7 @@ class TestCopy(SearchBase):
         ix._client = Broken()
         self.assertEqual(ix.sync()["loaded"], 0)
         self.assertIn("listing failed", ix.error)
-        self.assertEqual(ix.stats()["passages"], 2)
+        self.assertEqual(ix.stats()["passages"], 4)
 
     def test_open_index_falls_back_to_memory(self):
         bad = os.path.join(self.tmp.name, "afile")
@@ -194,6 +212,8 @@ class TestWhy(unittest.TestCase):
         self.assertEqual(found, ["Upload", "verification", "sizes", "verified", "Size"])
         self.assertIsNone(word_pattern("a an of"))
         self.assertIsNone(word_pattern("what about this and that"))     # stop words only
+        self.assertEqual(question_stems("Populate automatically, where possible!"),
+                         ["popul", "autom", "possi"])
         self.assertIsNone(word_pattern(""))
         self.assertEqual(word_pattern("CSAC").pattern.count("csac"), 1)
 
@@ -209,32 +229,36 @@ class TestSearchPage(SearchBase):
             self.assertIn('href="/search">Search inside content</a>', c.get(path).text, path)
         body = self.hits(c, "conflict deaths per year")
         self.assertEqual(body["steps"], ["meaning", "rerank", "highlight"])
-        self.assertEqual([h["identifier"] for h in body["passages"]], [CLEAN, GREEN])
-        self.assertEqual(body["passages"][0]["member"], "method.txt")
+        self.assertEqual([h["member"] for h in body["passages"]][:2], ["method.txt", "notes/method.md"])
+        self.assertEqual(body["passages"][0]["why"], "words")          # conflict, deaths, year
+        self.assertEqual(body["passages"][1]["why"], "meaning")
         # Why it matched: the closest sentence of the two-sentence passage.
         sentences = body["passages"][0]["sentences"]
         self.assertEqual([s["text"] for s in sentences],
                          ["Conflict deaths are counted per year from the CSAC database.",
                           "Each event is coded by location and actor."])
-        self.assertEqual([s["marked"] for s in sentences], [True, False])
-        # The sentences went to the platform once, all together; the
-        # one-sentence passage was not sent.
-        self.assertEqual(p.embed_calls[-1], [s["text"] for s in sentences])
+        self.assertEqual([(s["marked"], s["how"]) for s in sentences], [(True, "words"), (False, None)])
+        # Only the passages found by meaning went back to the platform for
+        # their closest sentence, all together; the one found by its words
+        # did not need to.
         self.assertEqual(len(p.embed_calls), 2)               # question, then sentences
+        self.assertNotIn(sentences[0]["text"], p.embed_calls[-1])
+        self.assertIn("Dates were checked against the archive.", p.embed_calls[-1])
         self.assertEqual(body["passages"][0]["dataset"], "csac-clean")
         self.assertIn("Conflict deaths", body["passages"][0]["text"])
-        self.assertEqual(body["stats"]["passages"], 3)        # held, but amber never queried
-        # Amber served to all: its passage appears and can be reranked only
-        # when amber may be sent.
+        self.assertEqual(body["stats"]["passages"], 5)        # held, but amber never queried
+        # Amber served to all: its passage appears; its text goes to the
+        # reranker only when amber may be sent (a query that finds it by
+        # meaning, not by its words, so it is among what is reranked).
         c = self.app(platform=FakePlatform(), amber_access="all")
         body = self.hits(c, "survivor of forced marriage")
         self.assertIn(AMBER, [h["identifier"] for h in body["passages"]])
         p = FakePlatform()
-        self.app(platform=p, amber_access="all").get("/search.json", params={"q": "survivor"})
+        self.app(platform=p, amber_access="all").get("/search.json", params={"q": "interview transcripts"})
         self.assertFalse(any("survivor" in d.lower() for _, docs in p.rerank_calls for d in docs))
         p = FakePlatform()
         self.app(platform=p, amber_access="all",
-                 llm_sensitivities=("green", "amber")).get("/search.json", params={"q": "survivor"})
+                 llm_sensitivities=("green", "amber")).get("/search.json", params={"q": "interview transcripts"})
         self.assertTrue(any("survivor" in d.lower() for _, docs in p.rerank_calls for d in docs))
         # Groups: only the strand's members see the amber passage.
         c = self.app(platform=FakePlatform(), amber_access="groups",
@@ -244,20 +268,39 @@ class TestSearchPage(SearchBase):
                      dev_groups=("er_prj_kdl_slavery_rs1",))
         self.assertIn(AMBER, [h["identifier"] for h in self.hits(c, "survivor")["passages"]])
 
+    def test_typing_back_a_phrase_finds_it_and_marks_it(self):
+        self.write_passages((CLEAN, GREEN))
+        p = FakePlatform(reverse=True)                  # a reranker that would bury it
+        body = self.hits(self.app(platform=p), "populate automatically where possible")
+        first = body["passages"][0]
+        self.assertEqual((first["member"], first["why"]), ("notes/method.md", "phrase"))
+        self.assertEqual([(s["marked"], s["how"]) for s in first["sentences"]],
+                         [(True, "phrase"), (False, None)])
+        # The two-word passage is not among the results at all.
+        self.assertNotIn("tiny.txt", [h["member"] for h in body["passages"]])
+        # ...unless those are the words asked for.
+        body = self.hits(self.app(platform=FakePlatform()), "test data")
+        self.assertEqual((body["passages"][0]["member"], body["passages"][0]["why"]), ("tiny.txt", "phrase"))
+        html = self.app(platform=FakePlatform()).get(
+            "/search", params={"q": "populate automatically where possible"}).text
+        self.assertIn('<mark class="phrase" title="contains your exact words"># Method Fields <b>populate</b> <b>automatically</b> where <b>possible</b>; the rest are typed.</mark>', html)
+        self.assertIn('<span class="why">contains your exact words</span>', html)
+        self.assertIn('<span class="why">closest in meaning</span>', html)
+
     def test_page_and_degradation(self):
         self.write_passages()
         c = self.app(platform=FakePlatform())
         html = c.get("/search", params={"q": "battles and massacres"}).text
-        self.assertIn("2 passages from 2 files in 2 datasets", html)
+        self.assertIn("4 passages from 4 files in 2 datasets", html)
         self.assertIn('<a href="/datasets/%s/files/notes/readme.md">notes/readme.md</a>' % GREEN, html)
         self.assertIn("<b>battles</b> and <b>massacres</b>", html)
         self.assertIn("<h1>Search inside content</h1>", html)
         # The two-sentence passage: its closest sentence marked, the question's
         # stem bold inside it (deaths -> "death" stem matches "deaths").
         html = c.get("/search", params={"q": "conflict deaths"}).text
-        self.assertIn("<mark><b>Conflict</b> <b>deaths</b> are counted per year from the CSAC database.</mark>", html)
+        self.assertIn('<mark class="phrase" title="contains your exact words"><b>Conflict</b> <b>deaths</b> are counted per year from the CSAC database.</mark>', html)
         self.assertIn(" Each event is coded by location and actor. ", html)
-        self.assertNotIn("<mark>Each event", html)
+        self.assertNotIn(">Each event", html.split("</mark>")[0])
         # HTML in a passage is escaped, not rendered.
         self.put_member(GREEN, "notes/readme.md", b"# Events\nSee <script>alert(1)</script> for battles.\n")
         self.write_passages((GREEN,))
@@ -280,7 +323,7 @@ class TestSearchPage(SearchBase):
         self.assertEqual(body["steps"], ["meaning", "rerank"])
         self.assertIn("Highlighting is unavailable", body["notice"])
         self.assertTrue(body["passages"])
-        self.assertFalse(any(s["marked"] for h in body["passages"] for s in h["sentences"]))
+        self.assertFalse(any(s["how"] == "meaning" for h in body["passages"] for s in h["sentences"]))
         # Embedding down: a notice, not an error.
         p = FakePlatform(fail=("embed",))
         body = self.hits(self.app(platform=p), "battles")
@@ -295,9 +338,13 @@ class TestSearchPage(SearchBase):
         self.assertIn("reranker", body["notice"])
         body = self.hits(self.app(platform=FakePlatform(off=("rerank",))), "battles")
         self.assertEqual((body["steps"], body["notice"]), (["meaning", "highlight"], None))
-        # The reranker's order wins.
-        body = self.hits(self.app(platform=FakePlatform(reverse=True)), "conflict deaths per year")
-        self.assertEqual([h["identifier"] for h in body["passages"]], [GREEN, CLEAN])
+        # The reranker's order wins among passages found by meaning.
+        straight = [h["member"] for h in self.hits(self.app(platform=FakePlatform()), "archive")["passages"]
+                    if h["why"] == "meaning"]
+        reversed_ = [h["member"] for h in self.hits(self.app(platform=FakePlatform(reverse=True)), "archive")["passages"]
+                     if h["why"] == "meaning"]
+        self.assertGreater(len(straight), 1)
+        self.assertEqual(reversed_, straight[::-1])
         # Nothing in the copy yet: an empty page, no error.
         self.s3.delete_object(Bucket="crsw", Key=pmod.passages_key(PREFIX, CLEAN))
         self.s3.delete_object(Bucket="crsw", Key=pmod.passages_key(PREFIX, GREEN))

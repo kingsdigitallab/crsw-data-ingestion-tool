@@ -83,15 +83,22 @@ def mark_closest(vectors: Sequence[Sequence[float]], question: Sequence[float],
     return [i in chosen for i in range(len(vectors))]
 
 
-def word_pattern(question: str) -> Optional["re.Pattern"]:
-    """A regex for the question's words as they appear in a passage:
-    words of four letters or more match on their first five letters
-    (so "verified" finds "verification"), shorter words whole."""
-    stems = set()
+def question_stems(question: str) -> List[str]:
+    """The question's telling words, cut to their first five letters, so
+    "verified" and "verification" are the same stem. Stop words and
+    anything under four letters are left out."""
+    stems = []
     for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", question or ""):
         w = w.lower().strip("'-")
-        if len(w) >= 4 and w not in _STOP:
-            stems.add(w[:_STEM])
+        if len(w) >= 4 and w not in _STOP and w[:_STEM] not in stems:
+            stems.append(w[:_STEM])
+    return stems
+
+
+def word_pattern(question: str) -> Optional["re.Pattern"]:
+    """A regex for the question's words as they appear in a passage
+    (question_stems, each continued to the end of the word)."""
+    stems = question_stems(question)
     if not stems:
         return None
     alts = sorted(stems, key=len, reverse=True)
@@ -231,28 +238,57 @@ class PassageIndex:
 
     # --- search ----------------------------------------------------------------------
 
+    MIN_WORDS = 6    # a shorter passage is shown only when it contains the words asked
+
     def search(self, vector: Sequence[float], limit: int = 20,
-               sensitivities: Optional[Sequence[str]] = None) -> List[Dict]:
-        """Closest passages, best first, each a dict with a `score`."""
+               sensitivities: Optional[Sequence[str]] = None,
+               phrase: str = "", stems: Sequence[str] = ()) -> List[Dict]:
+        """Passages, best first, each a dict with a `score` (cosine) and a
+        `why`: "phrase" when the passage contains the words as typed,
+        "words" when it contains every telling word of the question, else
+        "meaning". Phrase hits come first, then words, then the rest by
+        meaning, so a passage someone has seen and types back is found.
+        A passage under MIN_WORDS is noise to a vector and is shown only
+        on a phrase or words match."""
         self._maybe_sync()
         if not self.dims or not self._has_table():
             return []
         vec = [float(x) for x in vector]
         if len(vec) != self.dims:
             return []
-        where, params = "", [vec]
+        params: List = [vec]
+        phrase = " ".join((phrase or "").split())
+        if phrase:
+            phrase_sql = "text ILIKE ?"
+            params.append("%" + phrase.replace("%", "").replace("_", " ") + "%")
+        else:
+            phrase_sql = "FALSE"
+        if stems:
+            words_sql = " AND ".join("regexp_matches(text, ?)" for _ in stems)
+            params.extend(r"(?i)\b" + re.escape(s) for s in stems)
+        else:
+            words_sql = "FALSE"
+        where = " WHERE (words >= %d OR phrase OR allwords)" % self.MIN_WORDS
         if sensitivities is not None:
             sens = list(sensitivities) or [""]
-            where = " WHERE sensitivity IN (%s)" % ", ".join("?" for _ in sens)
+            where += " AND sensitivity IN (%s)" % ", ".join("?" for _ in sens)
             params += sens
         params.append(int(limit))
         rows = self._con.execute(
-            "SELECT identifier, dataset_uuid, sensitivity, member, page, position, words, text, "
-            "array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score FROM passages%s "
-            "ORDER BY score DESC LIMIT ?" % (self.dims, where), params).fetchall()
+            "SELECT * FROM (SELECT identifier, dataset_uuid, sensitivity, member, page, position, "
+            "words, text, array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score, "
+            "(%s) AS phrase, (%s) AS allwords FROM passages)%s "
+            "ORDER BY phrase DESC, allwords DESC, score DESC LIMIT ?"
+            % (self.dims, phrase_sql, words_sql, where), params).fetchall()
         names = ("identifier", "dataset_uuid", "sensitivity", "member", "page", "position",
-                 "words", "text", "score")
-        return [dict(zip(names, r)) for r in rows]
+                 "words", "text", "score", "phrase", "allwords")
+        out = []
+        for r in rows:
+            d = dict(zip(names, r))
+            d["why"] = "phrase" if d.pop("phrase") else ("words" if d.pop("allwords", False) else "meaning")
+            d.pop("allwords", None)
+            out.append(d)
+        return out
 
     def stats(self) -> Dict:
         self._maybe_sync()
