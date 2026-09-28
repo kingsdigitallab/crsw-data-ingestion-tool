@@ -126,6 +126,23 @@ class TestFilterFor(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE, "web extras not installed")
+class TestExplain(unittest.TestCase):
+    def test_one_sentence_from_the_chat_model(self):
+        def handler(request):
+            self.request = json.loads(request.content)
+            return httpx.Response(200, json={"choices": [{"message": {
+                "content": "<think>x</think>  The passage describes  how sizes are checked.\n"}}]})
+        p = fake_platform(handler)
+        self.assertEqual(p.explain("how are uploads verified", "Sizes are compared."),
+                         "The passage describes how sizes are checked.")
+        self.assertEqual(self.request["model"], "arc:lite")
+        self.assertIn("Asked: how are uploads verified", self.request["messages"][1]["content"])
+        self.assertIn("Sizes are compared.", self.request["messages"][1]["content"])
+        with self.assertRaises(llm.PlatformError):
+            fake_platform(lambda r: httpx.Response(500)).explain("q", "p")
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
 class TestRerank(unittest.TestCase):
     def test_orders_by_score_and_fills_in_the_rest(self):
         def handler(request):

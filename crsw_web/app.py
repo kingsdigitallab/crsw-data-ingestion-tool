@@ -254,14 +254,18 @@ def create_app(settings: Optional[Settings] = None,
             raise HTTPException(status_code=404, detail="Not Found")
         return passage_index
 
-    def search_passages(user: User, q: str, limit: int) -> Dict:
+    SORTS = ("words", "meaning")   # words first (the default), or by meaning alone
+
+    def search_passages(user: User, q: str, limit: int, sort: str = "words") -> Dict:
         """Closest passages of files this user may download, best first.
         The question is embedded, the copy searched, the download rule
         applied to each hit, then the reranker reads the top few."""
         index = need_passages()
         cat = need_read()
         q = " ".join((q or "").split())[:500]
-        out = {"q": q, "results": [], "notice": None, "steps": [], "stats": index.stats()}
+        sort = sort if sort in SORTS else "words"
+        out = {"q": q, "results": [], "notice": None, "steps": [], "stats": index.stats(),
+               "sort": sort, "can_explain": bool(platform.chat_model)}
         if not q:
             return out
         try:
@@ -280,9 +284,13 @@ def create_app(settings: Optional[Settings] = None,
             if may_download(user, h["sensitivity"], strand, settings) is None:
                 allowed.append(h)
         # Passages that contain the words asked stay in front; the reranker
-        # orders only those found by meaning.
-        pinned = [h for h in allowed if h["why"] != "meaning"]
-        rest = [h for h in allowed if h["why"] == "meaning"]
+        # orders only those found by meaning. Sorting by meaning alone puts
+        # everything in one list by similarity (each still says why).
+        if sort == "meaning":
+            pinned, rest = [], sorted(allowed, key=lambda h: -float(h["score"]))
+        else:
+            pinned = [h for h in allowed if h["why"] != "meaning"]
+            rest = [h for h in allowed if h["why"] == "meaning"]
         room = max(0, SEARCH_TOP - len(pinned))
         top, tail = rest[:room], rest[room:]
         if platform.rerank_model and len(top) > 1:
@@ -320,7 +328,8 @@ def create_app(settings: Optional[Settings] = None,
                         s["marked"], s["how"] = True, "words"
         # Which sentence of each passage found by meaning is closest: one
         # call for them all. A one-sentence passage has nothing to choose.
-        todo = [h for h in results if h["why"] == "meaning" and len(h["sentences"]) > 1]
+        todo = [h for h in results if h["why"] == "meaning" and len(h["sentences"]) > 1
+                and not any(s["marked"] for s in h["sentences"])]
         if todo:
             texts = [s["text"] for h in todo for s in h["sentences"]]
             try:
@@ -342,17 +351,48 @@ def create_app(settings: Optional[Settings] = None,
         return out
 
     @app.get("/search", response_class=HTMLResponse)
-    def search_page(request: Request, q: str = "", user: User = Depends(current_user)):
-        found = search_passages(user, q, limit=20)
+    def search_page(request: Request, q: str = "", sort: str = "words",
+                    user: User = Depends(current_user)):
+        found = search_passages(user, q, limit=20, sort=sort)
         return templates.TemplateResponse(request, "search.html", {
             "user": user, **found, "error": passage_index.error,
+            "sensitivities": settings.llm_sensitivities,
         })
 
+    @app.get("/search/why")
+    def search_why(q: str = "", identifier: str = "", member: str = "", position: int = 0,
+                   user: User = Depends(current_user)):
+        """The chat model's one sentence on what connects a passage to the
+        question, fetched when a reader asks. The passage text goes to
+        the platform, so only for the sensitivities that may be sent, and
+        only for a passage this reader could download."""
+        index = need_passages()
+        q = " ".join((q or "").split())[:500]
+        if not q or not platform.chat_model:
+            raise HTTPException(status_code=404, detail="Not Found")
+        h = index.get(identifier, member, position)
+        if h is None:
+            raise HTTPException(status_code=404, detail="no such passage")
+        strand = (h["identifier"] or "").split("/", 1)[0]
+        if may_download(user, h["sensitivity"], strand, settings) is not None:
+            raise HTTPException(status_code=403, detail="not yours to read")
+        if h["sensitivity"] not in settings.llm_sensitivities:
+            raise HTTPException(status_code=403,
+                                detail="this passage's sensitivity may not be sent to the platform")
+        try:
+            why = platform.explain(q, h["text"])
+        except PlatformError as e:
+            return JSONResponse({"why": None, "notice": "No explanation just now (%s)." % e},
+                                status_code=503)
+        log.info("search-why user=%s dataset=%s member=%s", user.username, identifier, member)
+        return {"why": why, "notice": None}
+
     @app.get("/search.json")
-    def search_json(q: str = "", limit: int = 20, user: User = Depends(current_user)):
-        found = search_passages(user, q, limit=max(1, min(limit, 100)))
+    def search_json(q: str = "", limit: int = 20, sort: str = "words",
+                    user: User = Depends(current_user)):
+        found = search_passages(user, q, limit=max(1, min(limit, 100)), sort=sort)
         return {"q": found["q"], "notice": found["notice"], "steps": found["steps"],
-                "stats": found["stats"],
+                "stats": found["stats"], "sort": found["sort"],
                 "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
                                                      "position", "text", "score", "sensitivity",
                                                      "why", "sentences")}

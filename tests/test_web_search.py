@@ -345,6 +345,83 @@ class TestSearchPage(SearchBase):
                      if h["why"] == "meaning"]
         self.assertGreater(len(straight), 1)
         self.assertEqual(reversed_, straight[::-1])
+
+    def test_sort_by_meaning_alone(self):
+        self.write_passages((CLEAN, GREEN))
+        q = "populate automatically where possible"
+        c = self.app(platform=FakePlatform())
+        words_first = self.hits(c, q)
+        self.assertEqual(words_first["sort"], "words")
+        self.assertEqual(words_first["passages"][0]["why"], "phrase")
+        by_meaning = self.hits(c, q, sort="meaning")
+        self.assertEqual(by_meaning["sort"], "meaning")
+        scores = [h["score"] for h in by_meaning["passages"]]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        # Every result still says why, and the phrase hit is still marked green.
+        phrase = next(h for h in by_meaning["passages"] if h["why"] == "phrase")
+        self.assertTrue(any(s["how"] == "phrase" for s in phrase["sentences"]))
+        self.assertEqual(self.hits(c, q, sort="nonsense")["sort"], "words")
+        html = c.get("/search", params={"q": q, "sort": "meaning"}).text
+        self.assertIn('value="meaning" checked', html)
+        self.assertNotIn('value="words" checked', html)
+
+    def test_why_this_on_demand(self):
+        self.write_passages((CLEAN, GREEN, AMBER), ("green", "amber"))
+        p = FakePlatform()
+        c = self.app(platform=p, amber_access="all")
+        html = c.get("/search", params={"q": "archive"}).text
+        self.assertIn('class="link why-ask" data-identifier="%s" data-member="notes/method.md" data-position="0"' % GREEN, html)
+        self.assertIn('<script src="/static/search.js" defer></script>', html)
+        # No button for the amber passage: its text may not be sent.
+        self.assertNotIn('data-identifier="%s"' % AMBER, html)
+        self.assertEqual(getattr(p, "explain_calls", []), [])      # nothing asked yet
+        r = c.get("/search/why", params={"q": "archive", "identifier": GREEN,
+                                         "member": "notes/method.md", "position": 0})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json(), {"why": "It mentions #.", "notice": None})
+        self.assertEqual(p.explain_calls[0][0], "archive")
+        self.assertIn("Dates were checked", p.explain_calls[0][1])
+        # Amber: refused even when downloadable, until amber may be sent.
+        r = c.get("/search/why", params={"q": "archive", "identifier": AMBER, "member": "t1.txt", "position": 0})
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("sensitivity", r.json()["detail"])
+        c2 = self.app(platform=FakePlatform(), amber_access="all", llm_sensitivities=("green", "amber"))
+        self.assertEqual(c2.get("/search/why", params={"q": "archive", "identifier": AMBER,
+                                                        "member": "t1.txt", "position": 0}).status_code, 200)
+        self.assertIn('data-identifier="%s"' % AMBER, c2.get("/search", params={"q": "archive"}).text)
+        # Not downloadable: refused; unknown passage: 404; blank question: 404.
+        c3 = self.app(platform=FakePlatform())                      # amber off
+        self.assertEqual(c3.get("/search/why", params={"q": "archive", "identifier": AMBER,
+                                                        "member": "t1.txt", "position": 0}).status_code, 403)
+        self.assertEqual(c.get("/search/why", params={"q": "archive", "identifier": GREEN,
+                                                       "member": "nope.txt", "position": 0}).status_code, 404)
+        self.assertEqual(c.get("/search/why", params={"q": " ", "identifier": GREEN,
+                                                       "member": "notes/method.md", "position": 0}).status_code, 404)
+        # Platform down: 503 with a notice, no crash.
+        r = self.app(platform=FakePlatform(fail=("explain",))).get(
+            "/search/why", params={"q": "archive", "identifier": GREEN, "member": "notes/method.md", "position": 0})
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("No explanation", r.json()["notice"])
+        # Chat model off: no button, route absent.
+        c4 = self.app(platform=FakePlatform(off=("chat",)))
+        self.assertNotIn("why-ask", c4.get("/search", params={"q": "archive"}).text)
+        self.assertEqual(c4.get("/search/why", params={"q": "archive", "identifier": GREEN,
+                                                        "member": "notes/method.md", "position": 0}).status_code, 404)
+
+    def test_search_script_parses(self):
+        import shutil, subprocess, tempfile, os as _os
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        js = self.app(platform=FakePlatform()).get("/static/search.js").text
+        fd, path = tempfile.mkstemp(suffix=".js")
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(js)
+            run = subprocess.run([node, "--check", path], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        finally:
+            _os.unlink(path)
         # Nothing in the copy yet: an empty page, no error.
         self.s3.delete_object(Bucket="crsw", Key=pmod.passages_key(PREFIX, CLEAN))
         self.s3.delete_object(Bucket="crsw", Key=pmod.passages_key(PREFIX, GREEN))

@@ -57,6 +57,13 @@ class FakePlatform:
             raise PlatformError("platform unreachable: ConnectError")
         return [bag(t) for t in texts]
 
+    def explain(self, question, passage):
+        self.explain_calls = getattr(self, "explain_calls", [])
+        self.explain_calls.append((question, passage))
+        if "explain" in self.fail:
+            raise PlatformError("platform returned HTTP 503 for /chat/completions")
+        return "It mentions %s." % passage.split()[0]
+
     def rerank(self, question, documents):
         self.rerank_calls.append((question, list(documents)))
         if "rerank" in self.fail:

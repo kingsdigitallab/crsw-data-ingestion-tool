@@ -198,6 +198,32 @@ class Platform:
                     out[k] = words
         return out
 
+    # --- one sentence on why a passage matched ------------------------------
+
+    EXPLAIN_PROMPT = ("A researcher searched a document store. Say in one plain sentence "
+                      "what in the passage relates to what they asked, or say plainly that "
+                      "nothing in it does. Quote nothing longer than a few words. No preamble.")
+
+    def explain(self, question: str, passage: str) -> str:
+        """The chat model's one-sentence reading of what connects a
+        passage to a question. A reading after the fact, not the reason
+        the passage was found; callers say so."""
+        # No thinking pass: it is a one-sentence reading, and with thinking
+        # on the budget went on the thinking and the answer came back empty.
+        body = self._post("/chat/completions", {
+            "model": self.chat_model, "temperature": 0, "max_tokens": 200,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "system", "content": self.EXPLAIN_PROMPT},
+                         {"role": "user", "content": "Asked: %s\n\nPassage:\n%s"
+                                                     % (question.strip()[:500], passage.strip()[:4000])}],
+        })
+        try:
+            text = body["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            raise PlatformError("chat reply had no message")
+        text = _THINK.sub("", text).strip()
+        return " ".join(text.split())[:400]
+
     # --- rerank -------------------------------------------------------------
 
     def rerank(self, question: str, documents: Sequence[str]) -> List[int]:

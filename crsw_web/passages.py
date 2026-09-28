@@ -290,6 +290,19 @@ class PassageIndex:
             out.append(d)
         return out
 
+    def get(self, identifier: str, member: str, position: int) -> Optional[Dict]:
+        """One passage as stored, or None."""
+        self._maybe_sync()
+        if not self._has_table():
+            return None
+        row = self._con.execute(
+            "SELECT identifier, sensitivity, member, page, position, text FROM passages "
+            "WHERE identifier = ? AND member = ? AND position = ?",
+            [identifier, member, int(position)]).fetchone()
+        if not row:
+            return None
+        return dict(zip(("identifier", "sensitivity", "member", "page", "position", "text"), row))
+
     def stats(self) -> Dict:
         self._maybe_sync()
         if not self._has_table():
