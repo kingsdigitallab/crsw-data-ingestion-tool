@@ -132,12 +132,14 @@ class Platform:
                 raise PlatformError("embeddings reply had %s vectors for %d texts"
                                     % (len(data) if isinstance(data, list) else "no",
                                        len(chunk)))
-            data = sorted(data, key=lambda d: d.get("index", 0))
+            if not all(isinstance(d, dict) for d in data):
+                raise PlatformError("embeddings reply was not a list of objects")
+            data = sorted(data, key=lambda d: _number(d.get("index", 0), "embedding index"))
             for d in data:
                 vec = d.get("embedding")
                 if not isinstance(vec, list) or not vec:
                     raise PlatformError("embeddings reply had an empty vector")
-                out.append(self._cut([float(x) for x in vec]))
+                out.append(self._cut([_number(x, "embedding") for x in vec]))
         return out
 
     def _cut(self, vec: List[float]) -> List[float]:
@@ -165,11 +167,7 @@ class Platform:
             "messages": [{"role": "system", "content": prompt},
                          {"role": "user", "content": question.strip()[:1000]}],
         })
-        try:
-            text = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            raise PlatformError("chat reply had no message")
-        raw = parse_json_object(text or "")
+        raw = parse_json_object(_chat_text(body))
         if raw is None:
             log.info("question-to-filter reply was not JSON; searching on words only")
             return {}
@@ -217,11 +215,7 @@ class Platform:
                          {"role": "user", "content": "Asked: %s\n\nPassage:\n%s"
                                                      % (question.strip()[:500], passage.strip()[:4000])}],
         })
-        try:
-            text = body["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            raise PlatformError("chat reply had no message")
-        text = _THINK.sub("", text).strip()
+        text = _THINK.sub("", _chat_text(body)).strip()
         return " ".join(text.split())[:400]
 
     # --- rerank -------------------------------------------------------------
@@ -236,15 +230,34 @@ class Platform:
         body = self._post("/rerank", {"model": self.rerank_model, "query": question,
                                       "documents": docs, "top_n": len(docs)})
         results = body.get("results")
-        if not isinstance(results, list):
+        if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
             raise PlatformError("rerank reply had no results")
         order = []
-        for r in sorted(results, key=lambda r: -float(r.get("relevance_score", 0))):
+        for r in sorted(results, key=lambda r: -_number(r.get("relevance_score", 0), "relevance score")):
             i = r.get("index")
             if isinstance(i, int) and 0 <= i < len(docs) and i not in order:
                 order.append(i)
         order.extend(i for i in range(len(docs)) if i not in order)
         return order
+
+
+def _number(x, what: str) -> float:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        raise PlatformError("platform reply had a %s that is not a number" % what)
+
+
+def _chat_text(body: Dict) -> str:
+    """The first choice's message text; a missing or non-text message is
+    a PlatformError."""
+    try:
+        text = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise PlatformError("chat reply had no message")
+    if text is not None and not isinstance(text, str):
+        raise PlatformError("chat reply's message was not text")
+    return text or ""
 
 
 def parse_json_object(text: str) -> Optional[Dict]:

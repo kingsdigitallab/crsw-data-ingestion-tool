@@ -163,6 +163,49 @@ class TestRerank(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE, "web extras not installed")
+class TestMalformedReplies(unittest.TestCase):
+    """A reply of the wrong shape is a PlatformError like any other
+    failure, never a TypeError that escapes the callers' fallbacks."""
+
+    def check(self, call, body):
+        p = fake_platform(lambda r: httpx.Response(200, json=body))
+        try:
+            call(p)
+        except llm.PlatformError:
+            return
+        except Exception as e:
+            self.fail("%r for reply %r" % (e, body))
+
+    def test_embed(self):
+        for data in ([None], [3.0], [{"index": None, "embedding": [1.0]}],
+                     [{"index": 0, "embedding": [None]}], [{"index": 0, "embedding": ["x"]}],
+                     [{"index": "0", "embedding": [1.0]}]):
+            with self.subTest(data=data):
+                self.check(lambda p: p.embed(["x"]), {"data": data})
+
+    def test_rerank(self):
+        for results in ([None], [0.5], [{"index": 0, "relevance_score": None}],
+                        [{"index": 0, "relevance_score": "high"}],
+                        [{"index": 0, "relevance_score": [1]}]):
+            with self.subTest(results=results):
+                self.check(lambda p: p.rerank("q", ["a", "b"]), {"results": results})
+
+    def test_chat(self):
+        for content in (123, ["a"], {"a": 1}):
+            body = {"choices": [{"message": {"content": content}}]}
+            with self.subTest(content=content):
+                self.check(lambda p: p.explain("q", "passage"), body)
+                self.check(lambda p: p.filter_for("q", ["rs1"], ["2_final"], ["green"], [], []),
+                           body)
+
+    def test_the_filter_shape_is_still_tolerant(self):
+        body = {"choices": [{"message": {"content": '{"strand": ["rs1"], "words": 5}'}}]}
+        p = fake_platform(lambda r: httpx.Response(200, json=body))
+        self.assertEqual(p.filter_for("q", ["rs1"], ["2_final"], ["green"], [], []),
+                         {"strand": "rs1", "words": "5"})
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
 class TestParseJsonObject(unittest.TestCase):
     def test_shapes(self):
         self.assertEqual(llm.parse_json_object('{"a": 1}'), {"a": 1})
