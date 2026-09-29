@@ -95,6 +95,68 @@ class TestExtractAndChunk(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestCap(unittest.TestCase):
+    """The per-dataset cap, walked by `build` directly."""
+
+    class Platform:
+        def __init__(self):
+            self.sent = []
+
+        def embed(self, texts, batch=32):
+            self.sent.extend(texts)
+            return [[float(len(t)), 0.5] for t in texts]
+
+    def words(self, n, tag):
+        return " ".join("%s%d" % (tag, i) for i in range(n)).encode()
+
+    def build(self, files, existing, cap):
+        import hashlib
+        rec = {"dataset_uuid": "u", "sensitivity": "green",
+               "files": [{"path": m, "checksum_sha256": hashlib.sha256(d).hexdigest(),
+                          "bytes": len(d)} for m, d in files]}
+        data = dict(files)
+        self.fetched, self.platform = [], self.Platform()
+
+        def fetch(member):
+            self.fetched.append(member)
+            return data[member]
+        return pmod.build("rs1/p/green/0_raw/d", rec, fetch, existing, self.platform,
+                          "toy", None, 10 ** 9, cap)
+
+    def members(self, rows):
+        return [r["member"] for r in rows if r["position"] != pmod.NO_TEXT]
+
+    def test_the_cap_holds_and_the_walk_stops_there(self):
+        a, b, c = self.words(1000, "a"), self.words(1000, "b"), self.words(10, "c")
+        rows, s = self.build([("a.txt", a), ("b.txt", b), ("c.txt", c)], [], 6)
+        self.assertEqual(self.members(rows), ["a.txt"] * 4 + ["b.txt"] * 2)
+        self.assertEqual(self.fetched, ["a.txt", "b.txt"])          # c never fetched
+        self.assertTrue(s.capped)
+        # a grows to five passages: b, cut short before, is kept but only
+        # as far as the room left, and c is still not fetched.
+        grown = self.words(1300, "a")
+        rows, s = self.build([("a.txt", grown), ("b.txt", b), ("c.txt", c)], rows, 6)
+        self.assertEqual(self.members(rows), ["a.txt"] * 5 + ["b.txt"])
+        self.assertTrue(all(r["partial"] for r in rows if r["member"] == "b.txt"))
+        self.assertEqual(self.fetched, ["a.txt"])
+        self.assertEqual(s.passages, 6)
+        # A whole file kept is trimmed the same way when the cap is lowered.
+        rows, s = self.build([("a.txt", grown), ("b.txt", b), ("c.txt", c)], rows, 3)
+        self.assertEqual(self.members(rows), ["a.txt"] * 3)
+        self.assertEqual(self.fetched, [])
+        self.assertTrue(s.capped)
+
+    def test_finishing_a_cut_file_embeds_only_what_is_new(self):
+        a, b = self.words(1000, "a"), self.words(1000, "b")
+        rows, _ = self.build([("a.txt", a), ("b.txt", b)], [], 6)
+        rows, s = self.build([("a.txt", a), ("b.txt", b)], rows, 100)
+        self.assertEqual(self.members(rows), ["a.txt"] * 4 + ["b.txt"] * 4)
+        self.assertEqual((s.embedded, s.kept, s.capped), (2, 6, False))
+        self.assertEqual(len(self.platform.sent), 2)
+        self.assertFalse(any(r["partial"] for r in rows))
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class PassagesBase(PromoterBase):
     ENV = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
            "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",

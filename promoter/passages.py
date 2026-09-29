@@ -173,6 +173,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
     rows: List[Dict] = []
     todo: List[Dict] = []
     present: Set[str] = set()
+    n = 0                     # passages so far, against the cap
     base = {"identifier": identifier, "dataset_uuid": rec.get("dataset_uuid"),
             "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0}
     for entry in rec.get("files") or []:
@@ -186,22 +187,37 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         if int(entry.get("bytes") or 0) > max_file_bytes:
             s.files_too_big += 1
             continue
+        room = max_passages - n
+        if room <= 0:
+            s.capped = True   # the walk stops here: nothing further is fetched
+            break
         present.add(member)
         old = by_member.get(member) or []
-        keep = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
-                                 and (o.get("cut") or 0) == (dims or 0)
-                                 and (o.get("embedding") or o.get("position") == NO_TEXT)
-                                 for o in old)
-        if keep and any(o.get("partial") for o in old):
-            # Cut short by the cap last time: kept only while the cap
-            # would still cut it; with room for more it is read again.
-            keep = len(rows) + len(todo) + len(old) >= max_passages
-            s.capped = s.capped or keep
-        if keep:
+        same = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
+                                 and (o.get("cut") or 0) == (dims or 0) for o in old)
+        old_text = sorted((o for o in old if o.get("position") != NO_TEXT),
+                          key=lambda o: o.get("position") or 0)
+        complete = same and all(o.get("embedding") for o in old_text)
+        was_partial = any(o.get("partial") for o in old)
+        # A file cut short by the cap before is read again only when there
+        # is now room for more of it than it holds.
+        if complete and (not was_partial or len(old_text) >= room):
+            kept = [dict(o) for o in old_text[:room]]
+            if was_partial or len(kept) < len(old_text):
+                for o in kept:
+                    o["partial"] = True
+                s.capped = True
+            rows.extend(dict(o) for o in old if o.get("position") == NO_TEXT)
+            rows.extend(kept)
+            n += len(kept)
             s.files_kept += 1
-            s.kept += sum(1 for o in old if o.get("position") != NO_TEXT)
-            rows.extend(dict(o) for o in old)
+            s.kept += len(kept)
+            if s.capped:
+                break
             continue
+        # Passages already embedded for this very file are reused.
+        reuse = {(o.get("position"), o.get("text")): o
+                 for o in old_text if same and o.get("embedding")}
         pages = extract(member, fetch(member))
         if pages is None:
             s.files_other += 1
@@ -215,14 +231,21 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             continue
         mine: List[Dict] = []
         for page, position, text in pieces:
-            if len(rows) + len(todo) >= max_passages:
+            if n >= max_passages:
                 s.capped = True
                 break
-            row = dict(base, member=member, checksum=checksum, page=page,
-                       position=position, words=len(text.split()), text=text,
-                       dimension=None, embedding=None, partial=False)
-            todo.append(row)
+            prev = reuse.get((position, text))
+            if prev is not None:
+                row = dict(prev, page=page, partial=False)
+                rows.append(row)
+                s.kept += 1
+            else:
+                row = dict(base, member=member, checksum=checksum, page=page,
+                           position=position, words=len(text.split()), text=text,
+                           dimension=None, embedding=None, partial=False)
+                todo.append(row)
             mine.append(row)
+            n += 1
         if s.capped:
             for row in mine:
                 row["partial"] = True     # read again once the cap leaves room
