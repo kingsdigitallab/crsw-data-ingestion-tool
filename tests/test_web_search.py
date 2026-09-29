@@ -163,6 +163,22 @@ class TestCopy(SearchBase):
         self.assertEqual(ix.search(bag("battles"), phrase="100% _sure_", stems=["100%"]),
                          ix.search(bag("battles")))       # odd characters do not break it
 
+    def test_by_meaning_orders_the_whole_copy_by_similarity(self):
+        """With a small limit, word matches must not crowd out a closer
+        passage by meaning when the order asked for is meaning alone."""
+        self.write_passages()
+        ix = self.index()
+        vec = bag("conflict deaths counted per year")
+        every = sorted(ix.search(vec, limit=50), key=lambda h: -h["score"])
+        best = every[0]
+        # A word found in another passage but not in the closest one.
+        word = next(w for h in every[1:] for w in h["text"].split()
+                    if w.isalpha() and len(w) > 3 and w.lower() not in best["text"].lower())
+        self.assertNotEqual(ix.search(vec, limit=1, phrase=word)[0]["text"], best["text"])
+        top = ix.search(vec, limit=1, phrase=word, by_meaning=True)
+        self.assertEqual(top[0]["text"], best["text"])
+        self.assertEqual(top[0]["why"], "meaning")
+
     def test_a_phrase_is_matched_literally(self):
         self.put_member(GREEN, "codes.txt",
                         b"The file case_ref_12 holds the codes for each interview, 50% coded.\n")

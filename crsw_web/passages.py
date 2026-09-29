@@ -273,22 +273,25 @@ class PassageIndex:
 
     def search(self, vector: Sequence[float], limit: int = 20,
                sensitivities: Optional[Sequence[str]] = None,
-               phrase: str = "", stems: Sequence[str] = ()) -> List[Dict]:
+               phrase: str = "", stems: Sequence[str] = (),
+               by_meaning: bool = False) -> List[Dict]:
         """Passages, best first, each a dict with a `score` (cosine) and a
         `why`: "phrase" when the passage contains the words as typed,
         "words" when it contains every telling word of the question, else
         "meaning". Phrase hits come first, then words, then the rest by
         meaning, so a passage someone has seen and types back is found.
         A passage under MIN_WORDS is noise to a vector and is shown only
-        on a phrase or words match."""
+        on a phrase or words match. With `by_meaning` the order is by
+        similarity alone (each still says why)."""
         self._maybe_sync()
         con = self._cursor()
         try:
-            return self._search(con, vector, limit, sensitivities, phrase, stems)
+            return self._search(con, vector, limit, sensitivities, phrase, stems, by_meaning)
         finally:
             con.close()
 
-    def _search(self, con, vector, limit, sensitivities, phrase, stems) -> List[Dict]:
+    def _search(self, con, vector, limit, sensitivities, phrase, stems,
+                by_meaning) -> List[Dict]:
         if not self.dims or not self._has_table(con):
             return []
         vec = [float(x) for x in vector]
@@ -319,8 +322,10 @@ class PassageIndex:
             "SELECT * FROM (SELECT identifier, dataset_uuid, sensitivity, member, page, position, "
             "words, text, array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score, "
             "(%s) AS phrase, (%s) AS allwords FROM passages)%s "
-            "ORDER BY phrase DESC, allwords DESC, score DESC LIMIT ?"
-            % (self.dims, phrase_sql, words_sql, where), params).fetchall()
+            "ORDER BY %s LIMIT ?"
+            % (self.dims, phrase_sql, words_sql, where,
+               "score DESC" if by_meaning else "phrase DESC, allwords DESC, score DESC"),
+            params).fetchall()
         names = ("identifier", "dataset_uuid", "sensitivity", "member", "page", "position",
                  "words", "text", "score", "phrase", "allwords")
         out = []

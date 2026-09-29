@@ -278,7 +278,8 @@ def create_app(settings: Optional[Settings] = None,
         # With amber served to nobody, do not even pull amber rows.
         sens = ("green",) if settings.amber_access == "off" else None
         stems = question_stems(q)
-        hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems)
+        hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems,
+                            by_meaning=(sort == "meaning"))
         allowed = []
         for h in hits:
             strand = (h["identifier"] or "").split("/", 1)[0]
