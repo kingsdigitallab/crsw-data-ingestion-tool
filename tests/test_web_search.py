@@ -249,6 +249,30 @@ class TestCopy(SearchBase):
         # Reopened with the same size: nothing rebuilt.
         self.assertEqual(self.index(dims=small).sync()["unchanged"], 2)
 
+    def test_a_file_that_will_not_load_is_not_fetched_again_until_it_changes(self):
+        self.write_passages()
+        fetched = []
+        client = s3mod.ReadOnly(self.s3)
+
+        class Counting:
+            def get_paginator(self, name):
+                return client.get_paginator(name)
+
+            def get_object(self, **kw):
+                fetched.append(kw["Key"])
+                return client.get_object(**kw)
+        ix = PassageIndex(Counting(), "crsw", PREFIX, self.path, dims=DIM // 2)
+        self.assertEqual(ix.sync()["skipped"], 2)
+        self.assertEqual(len(fetched), 2)
+        s = ix.sync()
+        self.assertEqual((s["skipped"], len(fetched)), (2, 2))    # remembered, not fetched
+        self.assertIn("2 passages files not loaded", ix.error)
+        # The file changes in the bucket: fetched again.
+        self.put_member(CLEAN, "method.txt", b"New words for the method file.\n")
+        self.write_passages((CLEAN,))
+        ix.sync()
+        self.assertEqual(len(fetched), 3)
+
     def test_search_during_a_sync_sees_whole_files(self):
         """Readers in other threads never see a file half replaced, and
         never share the syncing thread's connection."""

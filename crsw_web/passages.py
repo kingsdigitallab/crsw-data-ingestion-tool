@@ -22,7 +22,7 @@ import os
 import re
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from botocore.exceptions import ClientError
 
@@ -121,6 +121,9 @@ class PassageIndex:
         self._lock = threading.Lock()
         self._synced_at: Optional[float] = None
         self.error: Optional[str] = None
+        # Files that would not load, by key: (etag, why). Not fetched
+        # again until the bucket holds a different version.
+        self._failed: Dict[str, Tuple[str, str]] = {}
         self.dims = dims or None
         if path and path != ":memory:":
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -201,9 +204,15 @@ class PassageIndex:
         for key in set(known) - set(wanted):
             self._drop(key)
             summary["dropped"] += 1
+        for key in set(self._failed) - set(wanted):
+            del self._failed[key]
         for key, etag in wanted.items():
             if known.get(key) == etag:
                 summary["unchanged"] += 1
+                continue
+            if key in self._failed and self._failed[key][0] == etag:
+                summary["skipped"] += 1
+                last_problem = self._failed[key][1]
                 continue
             try:
                 body = self._client.get_object(Bucket=self._bucket, Key=key)["Body"].read()
@@ -212,7 +221,9 @@ class PassageIndex:
                 log.warning("passages file %s not loaded: %s", key, e)
                 summary["skipped"] += 1
                 last_problem = str(e)
+                self._failed[key] = (etag, last_problem)
                 continue
+            self._failed.pop(key, None)
             self._w.execute("INSERT OR REPLACE INTO files VALUES (?, ?)", [key, etag])
             summary["loaded"] += 1 if n else 0
         self.error = ("%d passages files not loaded (%s)" % (summary["skipped"], last_problem)
