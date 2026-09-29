@@ -239,6 +239,31 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["passages", "--strand", "rs1"], env=LLM_ENV)
         self.assertEqual(self.written(out, "passages_finished")[0]["datasets"], 0)
 
+    def test_passages_no_longer_permitted_are_removed(self):
+        self.stage(files=self.files)
+        self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(self.keys_under("index/passages/"), [KEY])
+        # Excluded after the passages were built: the old file goes.
+        code, out = self.cli(["passages"], env=dict(LLM_ENV, PROMOTER_PASSAGES_EXCLUDE="rs2/csac"))
+        self.assertEqual(code, 0, out)
+        removed = self.written(out, "passages_removed")
+        self.assertEqual([(r["prefix"], r["key"]) for r in removed], [(DEST, KEY)])
+        self.assertIn("PROMOTER_PASSAGES_EXCLUDE", removed[0]["reason"])
+        self.assertEqual(self.keys_under("index/passages/"), [])
+        # Built again, then its sensitivity taken off the list, on a promotion.
+        self.cli(["passages"], env=LLM_ENV)
+        self.assertEqual(self.keys_under("index/passages/"), [KEY])
+        self.stage(files=[("extra.md", b"# More\ntext\n")])
+        code, out = self.cli(["run"], env=dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="amber"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("PROMOTER_LLM_SENSITIVITIES",
+                      self.written(out, "passages_removed")[0]["reason"])
+        self.assertEqual(self.keys_under("index/passages/"), [])
+        # Nothing there to remove: skipped, no removal line.
+        code, out = self.cli(["passages"], env=dict(LLM_ENV, PROMOTER_PASSAGES_EXCLUDE="rs2/csac"))
+        self.assertEqual(self.written(out, "passages_removed"), [])
+        self.assertEqual(len(self.written(out, "passages_skipped")), 1)
+
     def test_failure_is_logged_and_the_run_still_succeeds(self):
         self.stage(files=self.files)
         with mock.patch.object(llm.Platform, "embed",

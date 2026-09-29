@@ -264,8 +264,11 @@ never one under `PROMOTER_PASSAGES_EXCLUDE`, a file over
 number of PDFs with no text layer, which is the size of any future OCR
 job. Incremental by each file's checksum, so a re-deposit re-reads only
 what changed. `passages_failed` is logged without changing the exit
-code. `$P passages` rebuilds for every record in place, or one dataset
-or strand; the first run over a backlog of long documents is the one
+code. A dataset that is excluded, or whose sensitivity is taken off the
+list, after its passages were built has its passages file deleted the
+next time it is promoted or `$P passages` runs (`passages_removed`), so
+the VM's copy drops it on its next sync. `$P passages` rebuilds for every
+record in place, or one dataset or strand; the first run over a backlog of long documents is the one
 slow job, and it resumes where it stopped because each dataset's file is
 written as it finishes.
 

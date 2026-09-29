@@ -185,7 +185,15 @@ def _write_passages(cfg, client, log, prefixes) -> None:
                 continue
             reason = _passages_skip_reason(cfg, prefix, rec)
             if reason:
-                log.write("passages_skipped", prefix=prefix, reason=reason)
+                try:
+                    key = passages_mod.remove(client, cfg.s3_bucket, cfg.index_prefix, prefix)
+                except Exception as e:
+                    log.write("passages_failed", prefix=prefix, error=str(e))
+                    continue
+                if key:
+                    log.write("passages_removed", prefix=prefix, key=key, reason=reason)
+                else:
+                    log.write("passages_skipped", prefix=prefix, reason=reason)
                 continue
             try:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, prefix, rec,
@@ -407,17 +415,35 @@ def cmd_passages(args) -> int:
         return 2
     platform = Platform.from_settings(cfg)
     failed = 0
-    totals = {"datasets": 0, "skipped": 0, "passages": 0, "embedded": 0, "kept": 0,
+    totals = {"datasets": 0, "skipped": 0, "removed": 0, "passages": 0, "embedded": 0, "kept": 0,
               "files_no_text": 0, "files_other": 0, "files_too_big": 0}
     try:
         for ref, rec, _labels in index_mod.read_records(client, cfg.s3_bucket, args.strand):
             if args.dataset and ref.prefix != args.dataset:
                 continue
-            reason = _passages_skip_reason(cfg, ref.prefix, rec) if rec else "record unreadable"
-            if reason:
+            if not rec:
                 totals["skipped"] += 1
                 print(json.dumps({"action": "passages_skipped", "prefix": ref.prefix,
-                                  "reason": reason}, ensure_ascii=False))
+                                  "reason": "record unreadable"}, ensure_ascii=False))
+                continue
+            reason = _passages_skip_reason(cfg, ref.prefix, rec)
+            if reason:
+                # No longer permitted: passages built before must not linger.
+                totals["skipped"] += 1
+                try:
+                    key = passages_mod.remove(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix)
+                except Exception as e:
+                    failed += 1
+                    print(json.dumps({"action": "passages_failed", "prefix": ref.prefix,
+                                      "error": str(e)}, ensure_ascii=False))
+                    continue
+                if key:
+                    totals["removed"] += 1
+                    print(json.dumps({"action": "passages_removed", "prefix": ref.prefix,
+                                      "key": key, "reason": reason}, ensure_ascii=False))
+                else:
+                    print(json.dumps({"action": "passages_skipped", "prefix": ref.prefix,
+                                      "reason": reason}, ensure_ascii=False))
                 continue
             try:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix,

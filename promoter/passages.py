@@ -296,6 +296,21 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
     return s
 
 
+def remove(client, bucket: str, prefix: str, identifier: str) -> Optional[str]:
+    """Delete a dataset's passages file, for when its passages are no
+    longer permitted (excluded, or its sensitivity taken off the list).
+    The key when there was one to delete, else None."""
+    key = passages_key(prefix, identifier)
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code", "") in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    client.delete_object(Bucket=bucket, Key=key)
+    return key
+
+
 def excluded(identifier: str, patterns: Sequence[str]) -> bool:
     """An identifier, or any prefix of one ending at a path element,
     named in PROMOTER_PASSAGES_EXCLUDE."""
