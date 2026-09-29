@@ -153,6 +153,17 @@ class TestPassages(PassagesBase):
         self.assertEqual((cfg.passages_max_file_bytes, cfg.passages_max_per_dataset),
                          (50 * 1024 * 1024, 20000))
 
+    def test_a_blank_index_prefix_turns_passages_off(self):
+        env = dict(LLM_ENV, PROMOTER_INDEX_PREFIX="")
+        self.assertFalse(PromoterConfig.from_env(dict(self.ENV, **env)).passages_enabled)
+        self.stage(files=self.files)
+        code, out = self.cli(["run"], env=env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.written(out), [])
+        self.assertEqual([k for k in self.keys_under("") if "passages" in k], [])
+        code, out = self.cli(["passages"], env=env)
+        self.assertEqual(code, 2)
+
     def test_run_writes_passages_from_text_files_only(self):
         self.stage(files=self.files)
         code, out = self.cli(["run"], env=LLM_ENV)

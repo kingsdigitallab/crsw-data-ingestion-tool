@@ -410,8 +410,9 @@ def cmd_datasets(args) -> int:
 def cmd_passages(args) -> int:
     cfg, client = _connect(args)
     if not cfg.passages_enabled:
-        print("PROMOTER_PASSAGES=1 plus PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY and "
-              "PROMOTER_LLM_EMBED_MODEL are needed for passages", file=sys.stderr)
+        print("PROMOTER_PASSAGES=1 plus PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY, "
+              "PROMOTER_LLM_EMBED_MODEL and a PROMOTER_INDEX_PREFIX are needed for passages",
+              file=sys.stderr)
         return 2
     platform = Platform.from_settings(cfg)
     failed = 0

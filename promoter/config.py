@@ -65,7 +65,8 @@ class PromoterConfig:
 
     @property
     def passages_enabled(self) -> bool:
-        return self.passages and self.embed_enabled
+        # Passages live under the index prefix; blank means no index at all.
+        return self.passages and self.embed_enabled and bool(self.index_prefix)
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "PromoterConfig":
