@@ -306,6 +306,35 @@ class TestAsk(AskBase):
         self.assertEqual([i for i, _ in cat.rank(bag("x"), within={GREEN})], [GREEN])
         self.assertEqual(cat.rank(bag("x"), within=set()), [])
 
+    def test_ranking_during_a_refresh_uses_the_vectors_already_loaded(self):
+        import threading
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        self.assertTrue(cat.has_vectors())
+        stop, problems = threading.Event(), []
+
+        def refresh():
+            try:
+                for _ in range(30):
+                    cat._load()
+            except Exception as e:
+                problems.append("refresh: %r" % e)
+            finally:
+                stop.set()
+
+        t = threading.Thread(target=refresh, daemon=True)
+        t.start()
+        while not stop.is_set():
+            try:
+                if [i for i, _ in cat.rank(bag("conflict deaths per year"))] != [CLEAN, GREEN]:
+                    problems.append("ranked without the loaded vectors")
+                if not cat.has_vectors():
+                    problems.append("vectors gone mid-refresh")
+            except Exception as e:
+                problems.append("rank: %r" % e)
+        t.join(30)
+        self.assertEqual(problems[:3], [])
+
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestHelpers(unittest.TestCase):

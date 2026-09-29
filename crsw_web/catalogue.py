@@ -128,8 +128,9 @@ class Catalogue:
         self._rows: Optional[List[Dict]] = None
         self._loaded_at: Optional[float] = None
         self.error: Optional[str] = None
-        self._vec_ids: List[str] = []
-        self._matrix = None                 # unit rows, one per _vec_ids entry
+        # (identifiers, unit rows one per identifier), replaced whole so a
+        # ranking in another thread never sees one without the other.
+        self._vectors: Tuple[List[str], object] = ([], None)
 
     # --- the index ------------------------------------------------------
 
@@ -158,9 +159,11 @@ class Catalogue:
     def _load_vectors(self) -> None:
         """The embeddings file, into one unit-normalised matrix. Missing
         or unreadable means no ranking by meaning, nothing worse."""
-        self._vec_ids, self._matrix = [], None
+        self._vectors = self._read_vectors()
+
+    def _read_vectors(self) -> Tuple[List[str], object]:
         if np is None or pq is None:
-            return
+            return [], None
         try:
             body = self._client.get_object(Bucket=self._bucket, Key=self._embed_key)["Body"].read()
             ids, vecs = [], []
@@ -169,17 +172,18 @@ class Catalogue:
                     ids.append(r["identifier"])
                     vecs.append(r["embedding"])
             if not ids:
-                return
+                return [], None
             m = np.asarray(vecs, dtype=np.float32)
             norms = np.linalg.norm(m, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
-            self._matrix, self._vec_ids = m / norms, ids
+            return ids, m / norms
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
             if code not in ("NoSuchKey", "404", "NotFound"):
                 log.warning("embeddings unreadable at %s: %s", self._embed_key, e)
         except Exception as e:                   # ragged rows, bad parquet
             log.warning("embeddings unusable at %s: %s", self._embed_key, e)
+        return [], None
 
     def stale(self) -> bool:
         return (self._loaded_at is None or
@@ -248,7 +252,7 @@ class Catalogue:
 
     def has_vectors(self) -> bool:
         self._maybe_load()
-        return self._matrix is not None
+        return self._vectors[1] is not None
 
     def rank(self, vector: Sequence[float],
              within: Optional[Set[str]] = None) -> List[Tuple[str, float]]:
@@ -256,16 +260,17 @@ class Catalogue:
         cosine). Empty when there are no vectors or the question's vector
         is from a different model (a different length)."""
         self._maybe_load()
-        if self._matrix is None:
+        vec_ids, matrix = self._vectors
+        if matrix is None:
             return []
         q = np.asarray(list(vector), dtype=np.float32)
-        if q.ndim != 1 or q.shape[0] != self._matrix.shape[1]:
+        if q.ndim != 1 or q.shape[0] != matrix.shape[1]:
             return []
         n = float(np.linalg.norm(q)) or 1.0
-        scores = self._matrix @ (q / n)
+        scores = matrix @ (q / n)
         out = []
         for i in np.argsort(-scores):
-            ident = self._vec_ids[int(i)]
+            ident = vec_ids[int(i)]
             if within is None or ident in within:
                 out.append((ident, float(scores[int(i)])))
         return out
