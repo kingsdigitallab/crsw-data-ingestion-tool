@@ -163,6 +163,22 @@ class TestCopy(SearchBase):
         self.assertEqual(ix.search(bag("battles"), phrase="100% _sure_", stems=["100%"]),
                          ix.search(bag("battles")))       # odd characters do not break it
 
+    def test_a_phrase_is_matched_literally(self):
+        self.put_member(GREEN, "codes.txt",
+                        b"The file case_ref_12 holds the codes for each interview, 50% coded.\n")
+        self.write_passages((GREEN,))
+        ix = self.index()
+        found = ix.search(bag("x"), phrase="case_ref_12")
+        self.assertEqual([(h["member"], h["why"]) for h in found][:1], [("codes.txt", "phrase")])
+        found = ix.search(bag("x"), phrase="50% coded")
+        self.assertEqual([(h["member"], h["why"]) for h in found][:1], [("codes.txt", "phrase")])
+        # _ and % are characters, not wildcards.
+        found = ix.search(bag("x"), phrase="case ref 12")
+        self.assertNotIn("phrase", [h["why"] for h in found])
+        found = ix.search(bag("x"), phrase="case%12")
+        self.assertNotIn("phrase", [h["why"] for h in found])
+        self.assertEqual(ix.search(bag("x"), phrase="C:\\data\\"), ix.search(bag("x")))
+
     def test_listing_failure_keeps_the_copy(self):
         self.write_passages()
         ix = self.index(refresh_seconds=0)

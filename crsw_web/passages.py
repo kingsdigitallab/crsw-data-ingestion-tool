@@ -297,8 +297,11 @@ class PassageIndex:
         params: List = [vec]
         phrase = " ".join((phrase or "").split())
         if phrase:
-            phrase_sql = "text ILIKE ?"
-            params.append("%" + phrase.replace("%", "").replace("_", " ") + "%")
+            # Literal: \ % and _ escaped, so an identifier such as
+            # case_ref_12 matches itself and nothing else.
+            phrase_sql = "text ILIKE ? ESCAPE '\\'"
+            literal = phrase.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params.append("%" + literal + "%")
         else:
             phrase_sql = "FALSE"
         if stems:
