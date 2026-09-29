@@ -133,7 +133,14 @@ class PassageIndex:
         self._w.execute("CREATE TABLE IF NOT EXISTS files (key VARCHAR PRIMARY KEY, etag VARCHAR)")
         self._w.execute("CREATE TABLE IF NOT EXISTS meta (name VARCHAR PRIMARY KEY, value VARCHAR)")
         stored = self._w.execute("SELECT value FROM meta WHERE name = 'dims'").fetchone()
-        if stored:
+        if stored and self.dims and int(stored[0]) != self.dims:
+            # The configured size wins: the copy is a cache of the bucket,
+            # so it is emptied and refilled at the new size.
+            log.info("passages copy holds vectors of %s numbers, configured %d: rebuilding",
+                     stored[0], self.dims)
+            self._w.execute("DROP TABLE IF EXISTS passages")
+            self._w.execute("DELETE FROM files")
+        elif stored:
             self.dims = int(stored[0])
         if self.dims:
             self._ensure_table()
@@ -190,6 +197,7 @@ class PassageIndex:
             self._synced_at = self._clock()
             return summary
         known = dict(self._w.execute("SELECT key, etag FROM files").fetchall())
+        last_problem = ""
         for key in set(known) - set(wanted):
             self._drop(key)
             summary["dropped"] += 1
@@ -203,10 +211,12 @@ class PassageIndex:
             except Exception as e:
                 log.warning("passages file %s not loaded: %s", key, e)
                 summary["skipped"] += 1
+                last_problem = str(e)
                 continue
             self._w.execute("INSERT OR REPLACE INTO files VALUES (?, ?)", [key, etag])
             summary["loaded"] += 1 if n else 0
-        self.error = None
+        self.error = ("%d passages files not loaded (%s)" % (summary["skipped"], last_problem)
+                      if summary["skipped"] else None)
         self._synced_at = self._clock()
         if summary["loaded"] or summary["dropped"]:
             log.info("passages synced: %s", summary)
@@ -243,8 +253,8 @@ class PassageIndex:
             self.dims = dims
             self._ensure_table()
         if dims != self.dims:
-            raise ValueError("vectors of %d numbers; this copy holds %d (rebuild by deleting %s)"
-                             % (dims, self.dims, self.path))
+            raise ValueError("vectors of %d numbers, configured %d: rewrite them with "
+                             "the promoter at the configured size" % (dims, self.dims))
         i = table.schema.get_field_index("embedding")
         table = table.set_column(i, "embedding",
                                  table.column("embedding").cast(pa.list_(pa.float32())))

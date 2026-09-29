@@ -362,7 +362,10 @@ off on its own without breaking the page:
 
 Only abstracts of the sensitivities in `CRSW_LLM_SENSITIVITIES` (green by
 default) are sent to the reranker; `CRSW_LLM_EMBED_DIMS` must match the
-promoter's. The page shows "Understood as: strand rs2, subject
+promoter's. To change it, set both, restart the web service (its passages
+copy empties itself and refills at the new size) and run `$P passages` and
+`$P index --embed`; until the promoter has rewritten them, the search page
+reports the files still at the old size. The page shows "Understood as: strand rs2, subject
 armed-conflict, from 1990" and fills the search form with those values so
 the researcher can adjust and press Search; a dataset named in the question
 always comes first, and a filter that matches nothing relaxes to the closest

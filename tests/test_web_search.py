@@ -185,6 +185,38 @@ class TestCopy(SearchBase):
         ix = open_index(s3mod.ReadOnly(self.s3), "crsw", PREFIX, self.path, 60, DIM)
         self.assertEqual((ix.path, ix.dims), (self.path, DIM))
 
+    def test_a_new_vector_size_rebuilds_the_copy(self):
+        """The configured size wins over the one the copy was built with:
+        the copy is emptied and refilled from the bucket, and files still
+        at the old size are reported, not silently dropped."""
+        self.write_passages()
+        ix = self.index(dims=DIM)
+        ix.sync()
+        self.assertEqual(ix.stats()["passages"], 4)
+        small = DIM // 2
+        # The web is moved to the new size before the promoter rewrites.
+        ix = self.index(dims=small)
+        self.assertEqual(ix.dims, small)
+        self.assertEqual(ix.stats()["passages"], 0)
+        self.assertIn("2 passages files", ix.error)
+        self.assertEqual(ix.search([1.0] * DIM), [])
+
+        class Cut(FakePlatform):
+            def embed(self, texts, batch=32):
+                return [v[:small] for v in super().embed(texts, batch)]
+        for ident in (CLEAN, GREEN):
+            import json
+            key = ident + "/dataset.%s.json" % ident.rsplit("/", 1)[-1]
+            rec = json.loads(self.s3.get_object(Bucket="crsw", Key=key)["Body"].read())
+            pmod.refresh(self.s3, "crsw", PREFIX, ident, rec, Cut(), "toy", small,
+                         50 * 1024 * 1024, 1000)
+        self.assertEqual(ix.sync()["loaded"], 2)
+        self.assertIsNone(ix.error)
+        self.assertEqual(ix.stats()["passages"], 4)
+        self.assertTrue(ix.search(bag("battles")[:small]))
+        # Reopened with the same size: nothing rebuilt.
+        self.assertEqual(self.index(dims=small).sync()["unchanged"], 2)
+
     def test_search_during_a_sync_sees_whole_files(self):
         """Readers in other threads never see a file half replaced, and
         never share the syncing thread's connection."""
