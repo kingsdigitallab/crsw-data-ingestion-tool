@@ -259,8 +259,11 @@ PDFs, Word; never tables or images), splits them into passages of about
 datasets of the sensitivities in `PROMOTER_LLM_SENSITIVITIES` are read,
 never one under `PROMOTER_PASSAGES_EXCLUDE`, a file over
 `PROMOTER_PASSAGES_MAX_FILE_BYTES` is skipped and the walk stops at
-`PROMOTER_PASSAGES_MAX_PER_DATASET` (a file the cap cut short is marked
-and read to the end once the cap is raised); the log line per dataset
+`PROMOTER_PASSAGES_MAX_PER_DATASET` (from v0.9.2 a file the cap cut
+short is marked and read to the end once the cap is raised, reusing the
+vectors it already had; a file cut short by an earlier version is not
+marked, so delete its dataset's passages file and run `$P passages
+--dataset` to finish it); the log line per dataset
 (`passages_written`) counts each of those, and `files_no_text` is the
 number of PDFs with no text layer, which is the size of any future OCR
 job. Incremental by each file's checksum, so a re-deposit re-reads only
@@ -268,7 +271,9 @@ what changed. `passages_failed` is logged without changing the exit
 code. A dataset that is excluded, or whose sensitivity is taken off the
 list, after its passages were built has its passages file deleted the
 next time it is promoted or `$P passages` runs (`passages_removed`), so
-the VM's copy drops it on its next sync. `$P passages` rebuilds for every
+the VM's copy drops it on its next sync. `$P passages` also removes any
+passages file whose dataset record is no longer in place. Narrowing
+`PROMOTER_LLM_SENSITIVITIES` takes effect on the next `$P passages` run. `$P passages` rebuilds for every
 record in place, or one dataset or strand; the first run over a backlog of long documents is the one
 slow job, and it resumes where it stopped because each dataset's file is
 written as it finishes.

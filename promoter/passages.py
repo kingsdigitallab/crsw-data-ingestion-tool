@@ -330,6 +330,18 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
     return s
 
 
+def listing(client, bucket: str, prefix: str) -> Dict[str, str]:
+    """identifier -> key of every passages file in the bucket."""
+    base = prefix.strip("/") + "/passages/"
+    out: Dict[str, str] = {}
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=base):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith(".parquet"):
+                out[key[len(base):-len(".parquet")]] = key
+    return out
+
+
 def remove(client, bucket: str, prefix: str, identifier: str) -> Optional[str]:
     """Delete a dataset's passages file, for when its passages are no
     longer permitted (excluded, or its sensitivity taken off the list).

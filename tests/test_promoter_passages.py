@@ -360,6 +360,30 @@ class TestPassages(PassagesBase):
         self.assertEqual(self.written(out, "passages_removed"), [])
         self.assertEqual(len(self.written(out, "passages_skipped")), 1)
 
+    def test_passages_command_sweeps_with_one_listing(self):
+        self.stage(files=self.files)
+        self.cli(["run"], env=LLM_ENV)
+        body = self.s3.get_object(Bucket="crsw", Key=KEY)["Body"].read()
+        # A passages file whose dataset has no record in place any more.
+        orphan = "index/passages/rs2/gone/green/0_raw/old.parquet"
+        self.s3.put_object(Bucket="crsw", Key=orphan, Body=body)
+        # Not permitted datasets are checked against the listing, not one by one.
+        with mock.patch.object(self.s3, "head_object",
+                               side_effect=AssertionError("one request per dataset")):
+            code, out = self.cli(["passages"], env=dict(LLM_ENV, PROMOTER_PASSAGES_EXCLUDE="rs2"))
+        self.assertEqual(code, 0, out)
+        removed = {r["key"]: r["reason"] for r in self.written(out, "passages_removed")}
+        self.assertEqual(set(removed), {KEY, orphan})
+        self.assertIn("no record in place", removed[orphan])
+        self.assertEqual(self.keys_under("index/passages/"), [])
+        self.assertEqual(self.written(out, "passages_finished")[0]["removed"], 2)
+        # Scoped runs leave files outside their scope alone.
+        self.s3.put_object(Bucket="crsw", Key=orphan, Body=body)
+        code, out = self.cli(["passages", "--strand", "rs1"], env=LLM_ENV)
+        self.assertEqual(self.keys_under("index/passages/"), [orphan])
+        code, out = self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
+        self.assertIn(orphan, self.keys_under("index/passages/"))
+
     def test_failure_is_logged_and_the_run_still_succeeds(self):
         self.stage(files=self.files)
         with mock.patch.object(llm.Platform, "embed",

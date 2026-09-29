@@ -418,10 +418,34 @@ def cmd_passages(args) -> int:
     failed = 0
     totals = {"datasets": 0, "skipped": 0, "removed": 0, "passages": 0, "embedded": 0, "kept": 0,
               "files_no_text": 0, "files_other": 0, "files_too_big": 0}
+
+    def in_scope(identifier):
+        return ((not args.dataset or identifier == args.dataset) and
+                (not args.strand or identifier.startswith(args.strand + "/")))
+
+    def remove(identifier, key, reason):
+        """Delete a passages file that is no longer permitted; True if done."""
+        try:
+            client.delete_object(Bucket=cfg.s3_bucket, Key=key)
+        except Exception as e:
+            print(json.dumps({"action": "passages_failed", "prefix": identifier,
+                              "error": str(e)}, ensure_ascii=False))
+            return False
+        totals["removed"] += 1
+        print(json.dumps({"action": "passages_removed", "prefix": identifier, "key": key,
+                          "reason": reason}, ensure_ascii=False))
+        return True
+
+    # One listing of the passages files up front: a dataset no longer
+    # permitted is checked against it, and a file whose dataset is gone
+    # is removed after the walk.
+    existing = passages_mod.listing(client, cfg.s3_bucket, cfg.index_prefix)
+    walked = set()
     try:
         for ref, rec, _labels in index_mod.read_records(client, cfg.s3_bucket, args.strand):
             if args.dataset and ref.prefix != args.dataset:
                 continue
+            walked.add(ref.prefix)
             if not rec:
                 totals["skipped"] += 1
                 print(json.dumps({"action": "passages_skipped", "prefix": ref.prefix,
@@ -431,17 +455,9 @@ def cmd_passages(args) -> int:
             if reason:
                 # No longer permitted: passages built before must not linger.
                 totals["skipped"] += 1
-                try:
-                    key = passages_mod.remove(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix)
-                except Exception as e:
-                    failed += 1
-                    print(json.dumps({"action": "passages_failed", "prefix": ref.prefix,
-                                      "error": str(e)}, ensure_ascii=False))
-                    continue
-                if key:
-                    totals["removed"] += 1
-                    print(json.dumps({"action": "passages_removed", "prefix": ref.prefix,
-                                      "key": key, "reason": reason}, ensure_ascii=False))
+                if ref.prefix in existing:
+                    if not remove(ref.prefix, existing[ref.prefix], reason):
+                        failed += 1
                 else:
                     print(json.dumps({"action": "passages_skipped", "prefix": ref.prefix,
                                       "reason": reason}, ensure_ascii=False))
@@ -462,6 +478,10 @@ def cmd_passages(args) -> int:
                       "files_too_big"):
                 totals[k] += getattr(s, k)
             print(json.dumps({"action": "passages_written", **s.as_dict()}, ensure_ascii=False))
+        for identifier, key in sorted(existing.items()):
+            if identifier not in walked and in_scope(identifier):
+                if not remove(identifier, key, "no record in place"):
+                    failed += 1
     finally:
         platform.close()
     print(json.dumps({"action": "passages_finished", "failed": failed, **totals},
