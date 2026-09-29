@@ -158,12 +158,12 @@ class TestAsk(AskBase):
         self.assertIn('id="ask" name="ask" type="search" value="anything on conflict deaths since 1990"', html)
         self.assertEqual(html.count("<tr>"), 2)          # header + the one match
         self.assertIn(CLEAN, html)
-        # What the platform saw: the question, the vocabulary in use, the
-        # question again for the vector; the reranker got fewer than two
-        # documents so was not called.
+        # What the platform saw: the question, the vocabulary in use on
+        # green rows, the question again for the vector; the reranker got
+        # fewer than two documents so was not called.
         self.assertEqual(p.filter_calls[0][0], "anything on conflict deaths since 1990")
-        self.assertEqual(p.filter_calls[0][1], ("armed-conflict", "forced-labour", "forced-marriage"))
-        self.assertEqual(p.filter_calls[0][2], ("csac", "oral"))
+        self.assertEqual(p.filter_calls[0][1], ("armed-conflict", "forced-labour"))
+        self.assertEqual(p.filter_calls[0][2], ("csac",))
         self.assertEqual(p.embed_calls, [["anything on conflict deaths since 1990"]])
         self.assertEqual(p.rerank_calls, [])
         body = c.get("/datasets.json", params={"ask": "conflict deaths since 1990"}).json()
@@ -207,6 +207,21 @@ class TestAsk(AskBase):
         ids = self.ids(c, ask="transcripts of interviews with survivors")
         self.assertIn(AMBER, ids)
         self.assertTrue(any("Interview" in d for _, docs in p.rerank_calls for d in docs))
+
+    def test_amber_only_names_sent_only_when_allowed(self):
+        """The filter prompt lists projects and subject terms; those found
+        only on amber datasets stay out of it unless amber is allowed."""
+        p = FakePlatform()
+        self.ids(self.app(platform=p), ask="interviews")
+        _, subjects, projects = p.filter_calls[0]
+        self.assertNotIn("oral", projects)
+        self.assertNotIn("forced-marriage", subjects)
+        self.assertIn("csac", projects)
+        p = FakePlatform()
+        self.ids(self.app(platform=p, llm_sensitivities=("green", "amber")), ask="interviews")
+        _, subjects, projects = p.filter_calls[0]
+        self.assertIn("oral", projects)
+        self.assertIn("forced-marriage", subjects)
 
     def test_each_step_degrades_on_its_own(self):
         self.embed_store()

@@ -239,14 +239,22 @@ class Catalogue:
         out.sort(key=lambda r: r.get("modified") or "", reverse=True)
         return out[:limit] if limit else out
 
-    def subjects(self) -> List[str]:
+    def _rows_of(self, sensitivities: Optional[Sequence[str]]) -> List[Dict]:
+        rows = self.rows()
+        if sensitivities is None:
+            return rows
+        return [r for r in rows if r.get("sensitivity") in sensitivities]
+
+    def subjects(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:
+        """Subject terms in use; with `sensitivities`, only on those rows."""
         seen = set()
-        for r in self.rows():
+        for r in self._rows_of(sensitivities):
             seen.update(r.get("subject") or [])
         return sorted(seen)
 
-    def projects(self) -> List[str]:
-        return sorted({r.get("project") for r in self.rows() if r.get("project")})
+    def projects(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:
+        return sorted({r.get("project") for r in self._rows_of(sensitivities)
+                       if r.get("project")})
 
     # --- asking in plain words (finding-and-reuse.md §5) -------------------
 
@@ -291,9 +299,12 @@ class Catalogue:
         notices = []
         if getattr(platform, "chat_model", True):
             try:
+                # Names found only on rows of other sensitivities stay out
+                # of the prompt, like their abstracts.
                 ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
-                                                 keys.SENSITIVITIES, self.subjects(),
-                                                 self.projects())
+                                                 keys.SENSITIVITIES,
+                                                 self.subjects(sensitivities),
+                                                 self.projects(sensitivities))
                 ans.steps.append("filter")
             except PlatformError as e:
                 notices.append("The question could not be interpreted (%s); "
