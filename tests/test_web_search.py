@@ -483,6 +483,20 @@ class TestSearchPage(SearchBase):
         self.assertIn('value="meaning" checked', html)
         self.assertNotIn('value="words" checked', html)
 
+    def test_by_meaning_alone_is_not_reranked(self):
+        """The reranker would reorder (and push amber back); by meaning
+        alone the list stays in order of similarity."""
+        self.write_passages((CLEAN, GREEN, AMBER), ("green", "amber"))
+        p = FakePlatform(reverse=True)
+        c = self.app(platform=p, amber_access="all")
+        body = self.hits(c, "conflict deaths events battles", sort="meaning")
+        scores = [h["score"] for h in body["passages"]]
+        self.assertGreater(len(scores), 2)
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertNotIn("rerank", body["steps"])
+        self.assertEqual(p.rerank_calls, [])
+        self.assertIn("rerank", self.hits(c, "conflict deaths events battles")["steps"])
+
     def test_why_this_on_demand(self):
         self.write_passages((CLEAN, GREEN, AMBER), ("green", "amber"))
         p = FakePlatform()

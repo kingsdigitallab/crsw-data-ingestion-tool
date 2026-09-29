@@ -390,7 +390,8 @@ one more call and each passage's closest sentence is marked (yellow).
 Each result says which of the three it is. A passage under six words is
 shown only on a words match, since a vector cannot tell "test data"
 from anything. The question's own words are bold wherever they appear.
-An "Order" switch puts everything by meaning alone instead. A "Why this?"
+An "Order" switch puts everything by meaning alone instead, in order of
+similarity with no reranker. A "Why this?"
 link on each result asks the chat model, on the click and not before,
 for one sentence on what connects the passage to the question; the page
 calls it "the model's reading", since a vector match has no reasoning

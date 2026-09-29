@@ -286,7 +286,8 @@ def create_app(settings: Optional[Settings] = None,
                 allowed.append(h)
         # Passages that contain the words asked stay in front; the reranker
         # orders only those found by meaning. Sorting by meaning alone puts
-        # everything in one list by similarity (each still says why).
+        # everything in one list by similarity (each still says why), and
+        # the reranker, which would reorder it, is not asked.
         if sort == "meaning":
             pinned, rest = [], sorted(allowed, key=lambda h: -float(h["score"]))
         else:
@@ -294,7 +295,7 @@ def create_app(settings: Optional[Settings] = None,
             rest = [h for h in allowed if h["why"] == "meaning"]
         room = max(0, SEARCH_TOP - len(pinned))
         top, tail = rest[:room], rest[room:]
-        if platform.rerank_model and len(top) > 1:
+        if sort != "meaning" and platform.rerank_model and len(top) > 1:
             sendable = [i for i, h in enumerate(top)
                         if h["sensitivity"] in settings.llm_sensitivities]
             if len(sendable) > 1:
