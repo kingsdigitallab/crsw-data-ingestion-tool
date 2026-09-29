@@ -14,6 +14,7 @@ callers can fall back to the ordinary search; nothing here retries.
 is the off setting: the service and the promoter run without it."""
 import json
 import logging
+import math
 import re
 from typing import Dict, List, Optional, Sequence
 
@@ -242,8 +243,14 @@ class Platform:
 
 
 def _number(x, what: str) -> float:
+    """A finite number; true/false, NaN and infinities are refused."""
     try:
-        return float(x)
+        if isinstance(x, bool):
+            raise ValueError(x)
+        n = float(x)
+        if not math.isfinite(n):
+            raise ValueError(x)
+        return n
     except (TypeError, ValueError):
         raise PlatformError("platform reply had a %s that is not a number" % what)
 

@@ -190,6 +190,22 @@ class TestMalformedReplies(unittest.TestCase):
             with self.subTest(results=results):
                 self.check(lambda p: p.rerank("q", ["a", "b"]), {"results": results})
 
+    def test_numbers_that_are_not_finite_or_are_booleans(self):
+        def raw(text):
+            return lambda r: httpx.Response(200, content=text.encode(),
+                                            headers={"content-type": "application/json"})
+        for text in ('{"data": [{"index": 0, "embedding": [NaN, 1.0]}]}',
+                     '{"data": [{"index": 0, "embedding": [Infinity, 1.0]}]}',
+                     '{"data": [{"index": 0, "embedding": [true, 1.0]}]}'):
+            with self.subTest(text=text):
+                with self.assertRaises(llm.PlatformError):
+                    fake_platform(raw(text)).embed(["x"])
+        for text in ('{"results": [{"index": 0, "relevance_score": NaN}]}',
+                     '{"results": [{"index": 0, "relevance_score": false}]}'):
+            with self.subTest(text=text):
+                with self.assertRaises(llm.PlatformError):
+                    fake_platform(raw(text)).rerank("q", ["a", "b"])
+
     def test_chat(self):
         for content in (123, ["a"], {"a": 1}):
             body = {"choices": [{"message": {"content": content}}]}
