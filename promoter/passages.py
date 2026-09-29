@@ -38,7 +38,7 @@ TEXT_TYPES = (".txt", ".md", ".markdown", ".text", ".rst")
 PDF_TYPE = ".pdf"
 WORD_TYPE = ".docx"
 COLUMNS = ("identifier", "dataset_uuid", "sensitivity", "member", "checksum", "page",
-           "position", "words", "text", "model", "cut", "dimension", "embedding")
+           "position", "words", "text", "model", "cut", "dimension", "partial", "embedding")
 
 Page = Tuple[Optional[int], str]      # (page number from 1, or None; its text)
 # A file that was read and had no text (an image-only PDF) leaves one row
@@ -188,10 +188,16 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             continue
         present.add(member)
         old = by_member.get(member) or []
-        if old and all(o.get("checksum") == checksum and o.get("model") == model
-                       and (o.get("cut") or 0) == (dims or 0)
-                       and (o.get("embedding") or o.get("position") == NO_TEXT)
-                       for o in old):
+        keep = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
+                                 and (o.get("cut") or 0) == (dims or 0)
+                                 and (o.get("embedding") or o.get("position") == NO_TEXT)
+                                 for o in old)
+        if keep and any(o.get("partial") for o in old):
+            # Cut short by the cap last time: kept only while the cap
+            # would still cut it; with room for more it is read again.
+            keep = len(rows) + len(todo) + len(old) >= max_passages
+            s.capped = s.capped or keep
+        if keep:
             s.files_kept += 1
             s.kept += sum(1 for o in old if o.get("position") != NO_TEXT)
             rows.extend(dict(o) for o in old)
@@ -207,15 +213,19 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
                              position=NO_TEXT, words=0, text=None, dimension=None,
                              embedding=None))
             continue
+        mine: List[Dict] = []
         for page, position, text in pieces:
             if len(rows) + len(todo) >= max_passages:
                 s.capped = True
                 break
             row = dict(base, member=member, checksum=checksum, page=page,
                        position=position, words=len(text.split()), text=text,
-                       dimension=None, embedding=None)
+                       dimension=None, embedding=None, partial=False)
             todo.append(row)
+            mine.append(row)
         if s.capped:
+            for row in mine:
+                row["partial"] = True     # read again once the cap leaves room
             break
     if todo:
         vectors = platform.embed([t["text"] for t in todo])
@@ -258,6 +268,7 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
         pa.field("position", pa.int64()), pa.field("words", pa.int64()),
         pa.field("text", pa.string()), pa.field("model", pa.string()),
         pa.field("cut", pa.int64()), pa.field("dimension", pa.int64()),
+        pa.field("partial", pa.bool_()),
     ])
     table = pa.Table.from_pylist([{c: r.get(c) for c in COLUMNS if c != "embedding"}
                                   for r in rows], schema=schema)

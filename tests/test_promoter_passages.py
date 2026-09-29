@@ -239,6 +239,29 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["passages", "--strand", "rs1"], env=LLM_ENV)
         self.assertEqual(self.written(out, "passages_finished")[0]["datasets"], 0)
 
+    def test_a_file_cut_by_the_cap_is_finished_when_the_cap_is_raised(self):
+        long_text = " ".join("word%d" % i for i in range(1000)).encode()   # four passages
+        self.stage(files=[("long.txt", long_text), ("notes.txt", b"plain words here\n")])
+        capped = dict(LLM_ENV, PROMOTER_PASSAGES_MAX_PER_DATASET="2")
+        self.cli(["run"], env=capped)
+        self.assertEqual([r["member"] for r in self.rows()], ["long.txt", "long.txt"])
+        # The same cap again: the cut file is kept as it is, not re-embedded.
+        self.sent.clear()
+        code, out = self.cli(["passages"], env=capped)
+        s = self.written(out)[0]
+        self.assertEqual((s["embedded"], s["kept"], s["capped"]), (0, 2, True))
+        self.assertEqual(self.sent, [])
+        # The cap raised: the rest of the cut file is read, and the next file.
+        code, out = self.cli(["passages"], env=LLM_ENV)
+        s = self.written(out)[0]
+        self.assertEqual((s["passages"], s["capped"]), (5, False))
+        self.assertEqual([r["member"] for r in self.rows()], ["long.txt"] * 4 + ["notes.txt"])
+        # And once whole, it is kept like any other file.
+        self.sent.clear()
+        code, out = self.cli(["passages"], env=LLM_ENV)
+        self.assertEqual(self.written(out)[0]["files_kept"], 2)
+        self.assertEqual(self.sent, [])
+
     def test_passages_no_longer_permitted_are_removed(self):
         self.stage(files=self.files)
         self.cli(["run"], env=LLM_ENV)

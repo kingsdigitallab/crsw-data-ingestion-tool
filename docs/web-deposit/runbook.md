@@ -259,7 +259,8 @@ PDFs, Word; never tables or images), splits them into passages of about
 datasets of the sensitivities in `PROMOTER_LLM_SENSITIVITIES` are read,
 never one under `PROMOTER_PASSAGES_EXCLUDE`, a file over
 `PROMOTER_PASSAGES_MAX_FILE_BYTES` is skipped and the walk stops at
-`PROMOTER_PASSAGES_MAX_PER_DATASET`; the log line per dataset
+`PROMOTER_PASSAGES_MAX_PER_DATASET` (a file the cap cut short is marked
+and read to the end once the cap is raised); the log line per dataset
 (`passages_written`) counts each of those, and `files_no_text` is the
 number of PDFs with no text layer, which is the size of any future OCR
 job. Incremental by each file's checksum, so a re-deposit re-reads only
