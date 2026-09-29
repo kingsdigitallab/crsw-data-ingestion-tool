@@ -124,10 +124,15 @@ class PassageIndex:
         self.dims = dims or None
         if path and path != ":memory:":
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        # DuckDB connections are not thread-safe: the parent only hands out
+        # cursors (under _cursors), sync writes through its own, and each
+        # read takes a fresh one, so a reader sees a file whole or not yet.
         self._con = duckdb.connect(path)
-        self._con.execute("CREATE TABLE IF NOT EXISTS files (key VARCHAR PRIMARY KEY, etag VARCHAR)")
-        self._con.execute("CREATE TABLE IF NOT EXISTS meta (name VARCHAR PRIMARY KEY, value VARCHAR)")
-        stored = self._con.execute("SELECT value FROM meta WHERE name = 'dims'").fetchone()
+        self._cursors = threading.Lock()
+        self._w = self._cursor()
+        self._w.execute("CREATE TABLE IF NOT EXISTS files (key VARCHAR PRIMARY KEY, etag VARCHAR)")
+        self._w.execute("CREATE TABLE IF NOT EXISTS meta (name VARCHAR PRIMARY KEY, value VARCHAR)")
+        stored = self._w.execute("SELECT value FROM meta WHERE name = 'dims'").fetchone()
         if stored:
             self.dims = int(stored[0])
         if self.dims:
@@ -135,16 +140,20 @@ class PassageIndex:
 
     # --- the table -----------------------------------------------------------------
 
+    def _cursor(self):
+        with self._cursors:
+            return self._con.cursor()
+
     def _ensure_table(self) -> None:
-        self._con.execute(
+        self._w.execute(
             "CREATE TABLE IF NOT EXISTS passages ("
             "identifier VARCHAR, dataset_uuid VARCHAR, sensitivity VARCHAR, member VARCHAR, "
             "checksum VARCHAR, page INTEGER, position INTEGER, words INTEGER, text VARCHAR, "
             "dimension INTEGER, embedding FLOAT[%d], key VARCHAR)" % self.dims)
-        self._con.execute("INSERT OR REPLACE INTO meta VALUES ('dims', ?)", [str(self.dims)])
+        self._w.execute("INSERT OR REPLACE INTO meta VALUES ('dims', ?)", [str(self.dims)])
 
-    def _has_table(self) -> bool:
-        return bool(self._con.execute(
+    def _has_table(self, con=None) -> bool:
+        return bool((con or self._w).execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name = 'passages'").fetchone())
 
     # --- keeping in step with the bucket -----------------------------------------------
@@ -180,7 +189,7 @@ class PassageIndex:
             self.error = "passages listing failed: %s" % e
             self._synced_at = self._clock()
             return summary
-        known = dict(self._con.execute("SELECT key, etag FROM files").fetchall())
+        known = dict(self._w.execute("SELECT key, etag FROM files").fetchall())
         for key in set(known) - set(wanted):
             self._drop(key)
             summary["dropped"] += 1
@@ -195,7 +204,7 @@ class PassageIndex:
                 log.warning("passages file %s not loaded: %s", key, e)
                 summary["skipped"] += 1
                 continue
-            self._con.execute("INSERT OR REPLACE INTO files VALUES (?, ?)", [key, etag])
+            self._w.execute("INSERT OR REPLACE INTO files VALUES (?, ?)", [key, etag])
             summary["loaded"] += 1 if n else 0
         self.error = None
         self._synced_at = self._clock()
@@ -205,8 +214,8 @@ class PassageIndex:
 
     def _drop(self, key: str) -> None:
         if self._has_table():
-            self._con.execute("DELETE FROM passages WHERE key = ?", [key])
-        self._con.execute("DELETE FROM files WHERE key = ?", [key])
+            self._w.execute("DELETE FROM passages WHERE key = ?", [key])
+        self._w.execute("DELETE FROM files WHERE key = ?", [key])
 
     def _load(self, key: str, body: bytes) -> int:
         table = pq.read_table(io.BytesIO(body))
@@ -214,6 +223,18 @@ class PassageIndex:
         mask = pa.compute.and_(pa.compute.is_valid(table.column("embedding")),
                                pa.compute.greater_equal(table.column("position"), 0))
         table = table.filter(mask)
+        self._w.execute("BEGIN TRANSACTION")
+        try:
+            n = self._replace(key, table)
+        except BaseException:
+            self._w.execute("ROLLBACK")
+            if not self._has_table():
+                self.dims = None      # the table this load created went with it
+            raise
+        self._w.execute("COMMIT")
+        return n
+
+    def _replace(self, key: str, table) -> int:
         self._drop(key)
         if table.num_rows == 0:
             return 0
@@ -227,13 +248,13 @@ class PassageIndex:
         i = table.schema.get_field_index("embedding")
         table = table.set_column(i, "embedding",
                                  table.column("embedding").cast(pa.list_(pa.float32())))
-        self._con.register("incoming", table)
+        self._w.register("incoming", table)
         try:
-            self._con.execute(
+            self._w.execute(
                 "INSERT INTO passages SELECT %s, embedding::FLOAT[%d], ? FROM incoming"
                 % (", ".join(COLUMNS), self.dims), [key])
         finally:
-            self._con.unregister("incoming")
+            self._w.unregister("incoming")
         return table.num_rows
 
     # --- search ----------------------------------------------------------------------
@@ -251,7 +272,14 @@ class PassageIndex:
         A passage under MIN_WORDS is noise to a vector and is shown only
         on a phrase or words match."""
         self._maybe_sync()
-        if not self.dims or not self._has_table():
+        con = self._cursor()
+        try:
+            return self._search(con, vector, limit, sensitivities, phrase, stems)
+        finally:
+            con.close()
+
+    def _search(self, con, vector, limit, sensitivities, phrase, stems) -> List[Dict]:
+        if not self.dims or not self._has_table(con):
             return []
         vec = [float(x) for x in vector]
         if len(vec) != self.dims:
@@ -274,7 +302,7 @@ class PassageIndex:
             where += " AND sensitivity IN (%s)" % ", ".join("?" for _ in sens)
             params += sens
         params.append(int(limit))
-        rows = self._con.execute(
+        rows = con.execute(
             "SELECT * FROM (SELECT identifier, dataset_uuid, sensitivity, member, page, position, "
             "words, text, array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score, "
             "(%s) AS phrase, (%s) AS allwords FROM passages)%s "
@@ -293,23 +321,31 @@ class PassageIndex:
     def get(self, identifier: str, member: str, position: int) -> Optional[Dict]:
         """One passage as stored, or None."""
         self._maybe_sync()
-        if not self._has_table():
-            return None
-        row = self._con.execute(
-            "SELECT identifier, sensitivity, member, page, position, text FROM passages "
-            "WHERE identifier = ? AND member = ? AND position = ?",
-            [identifier, member, int(position)]).fetchone()
+        con = self._cursor()
+        try:
+            if not self._has_table(con):
+                return None
+            row = con.execute(
+                "SELECT identifier, sensitivity, member, page, position, text FROM passages "
+                "WHERE identifier = ? AND member = ? AND position = ?",
+                [identifier, member, int(position)]).fetchone()
+        finally:
+            con.close()
         if not row:
             return None
         return dict(zip(("identifier", "sensitivity", "member", "page", "position", "text"), row))
 
     def stats(self) -> Dict:
         self._maybe_sync()
-        if not self._has_table():
-            return {"passages": 0, "datasets": 0, "files": 0}
-        passages, datasets, files = self._con.execute(
-            "SELECT count(*), count(DISTINCT identifier), count(DISTINCT member || identifier) "
-            "FROM passages").fetchone()
+        con = self._cursor()
+        try:
+            if not self._has_table(con):
+                return {"passages": 0, "datasets": 0, "files": 0}
+            passages, datasets, files = con.execute(
+                "SELECT count(*), count(DISTINCT identifier), count(DISTINCT member || identifier) "
+                "FROM passages").fetchone()
+        finally:
+            con.close()
         return {"passages": passages, "datasets": datasets, "files": files}
 
 

@@ -185,6 +185,49 @@ class TestCopy(SearchBase):
         ix = open_index(s3mod.ReadOnly(self.s3), "crsw", PREFIX, self.path, 60, DIM)
         self.assertEqual((ix.path, ix.dims), (self.path, DIM))
 
+    def test_search_during_a_sync_sees_whole_files(self):
+        """Readers in other threads never see a file half replaced, and
+        never share the syncing thread's connection."""
+        import threading
+        key = pmod.passages_key(PREFIX, CLEAN)
+        self.write_passages((CLEAN,))
+        first = self.s3.get_object(Bucket="crsw", Key=key)["Body"].read()
+        self.put_member(CLEAN, "method.txt", b"Conflict deaths are counted per year, again.\n")
+        self.write_passages((CLEAN,))
+        second = self.s3.get_object(Bucket="crsw", Key=key)["Body"].read()
+        ix = self.index(refresh_seconds=3600)
+        ix.sync()
+        stop, problems = threading.Event(), []
+
+        def churn():
+            try:
+                for i in range(40):
+                    self.s3.put_object(Bucket="crsw", Key=key, Body=(first, second)[i % 2])
+                    ix.sync()
+            except Exception as e:
+                problems.append("sync: %r" % e)
+            finally:
+                stop.set()
+
+        def read():
+            while not stop.is_set():
+                try:
+                    found = ix.search(bag("conflict deaths counted"), limit=50)
+                    if not any(h["identifier"] == CLEAN for h in found):
+                        problems.append("search saw no passages of %s" % CLEAN)
+                    ix.stats()
+                except Exception as e:
+                    problems.append("search: %r" % e)
+
+        threads = ([threading.Thread(target=churn, daemon=True)] +
+                   [threading.Thread(target=read, daemon=True) for _ in range(3)])
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        self.assertEqual([t for t in threads if t.is_alive()], [], "threads stuck")
+        self.assertEqual(problems[:3], [])
+
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestWhy(unittest.TestCase):
