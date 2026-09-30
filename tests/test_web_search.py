@@ -273,6 +273,31 @@ class TestCopy(SearchBase):
         ix.sync()
         self.assertEqual(len(fetched), 3)
 
+    def test_a_fetch_that_fails_once_is_tried_again(self):
+        """A network or storage error is not the file's fault: the next
+        sync fetches it again (unlike a file that will not parse)."""
+        self.write_passages()
+        client = s3mod.ReadOnly(self.s3)
+        failures = {pmod.passages_key(PREFIX, CLEAN): 1}
+
+        class Flaky:
+            def get_paginator(self, name):
+                return client.get_paginator(name)
+
+            def get_object(self, **kw):
+                if failures.get(kw["Key"]):
+                    failures[kw["Key"]] -= 1
+                    raise RuntimeError("connection reset")
+                return client.get_object(**kw)
+        ix = PassageIndex(Flaky(), "crsw", PREFIX, self.path, dims=DIM)
+        s = ix.sync()
+        self.assertEqual((s["loaded"], s["skipped"]), (1, 1))
+        self.assertIn("connection reset", ix.error)
+        s = ix.sync()
+        self.assertEqual((s["loaded"], s["skipped"]), (1, 0))
+        self.assertIsNone(ix.error)
+        self.assertEqual(ix.stats()["passages"], 4)
+
     def test_search_during_a_sync_sees_whole_files(self):
         """Readers in other threads never see a file half replaced, and
         never share the syncing thread's connection."""

@@ -121,8 +121,9 @@ class PassageIndex:
         self._lock = threading.Lock()
         self._synced_at: Optional[float] = None
         self.error: Optional[str] = None
-        # Files that would not load, by key: (etag, why). Not fetched
-        # again until the bucket holds a different version.
+        # Files that would not load (bad parquet, wrong vector size), by
+        # key: (etag, why). Not fetched again until the bucket holds a
+        # different version. A fetch that failed is simply tried again.
         self._failed: Dict[str, Tuple[str, str]] = {}
         self.dims = dims or None
         if path and path != ":memory:":
@@ -216,6 +217,12 @@ class PassageIndex:
                 continue
             try:
                 body = self._client.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+            except Exception as e:
+                log.warning("passages file %s not fetched: %s", key, e)
+                summary["skipped"] += 1
+                last_problem = str(e)
+                continue
+            try:
                 n = self._load(key, body)
             except Exception as e:
                 log.warning("passages file %s not loaded: %s", key, e)
