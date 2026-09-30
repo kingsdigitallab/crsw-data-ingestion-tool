@@ -287,10 +287,11 @@ def create_app(settings: Optional[Settings] = None,
                 allowed.append(h)
         # Passages that contain the words asked stay in front; the reranker
         # orders only those found by meaning. Sorting by meaning alone puts
-        # everything in one list by similarity (each still says why), and
-        # the reranker, which would reorder it, is not asked.
+        # everything in one list by similarity, the order the copy already
+        # returned (each still says why), and the reranker, which would
+        # reorder it, is not asked.
         if sort == "meaning":
-            pinned, rest = [], sorted(allowed, key=lambda h: -float(h["score"]))
+            pinned, rest = [], allowed
         else:
             pinned = [h for h in allowed if h["why"] != "meaning"]
             rest = [h for h in allowed if h["why"] == "meaning"]
