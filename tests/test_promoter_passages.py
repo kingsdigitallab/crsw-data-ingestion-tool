@@ -146,6 +146,28 @@ class TestCap(unittest.TestCase):
         self.assertEqual(self.fetched, [])
         self.assertTrue(s.capped)
 
+    def test_passages_cut_by_the_cap_are_not_counted_as_dropped(self):
+        a, b = self.words(1000, "a"), self.words(1000, "b")
+        rows, _ = self.build([("a.txt", a), ("b.txt", b)], [], 100)
+        rows, s = self.build([("a.txt", a), ("b.txt", b)], rows, 4)
+        self.assertEqual((s.passages, s.capped, s.dropped), (4, True, 0))
+        rows, s = self.build([("a.txt", a)], rows, 100)        # b leaves the record
+        self.assertEqual((s.passages, s.capped, s.dropped), (4, False, 0))
+        rows, _ = self.build([("a.txt", a), ("b.txt", b)], [], 100)
+        rows, s = self.build([("a.txt", a)], rows, 100)
+        self.assertEqual(s.dropped, 4)
+
+    def test_a_changed_file_reuses_the_vectors_of_unchanged_passages(self):
+        a = self.words(1000, "a")
+        rows, _ = self.build([("a.txt", a)], [], 100)
+        longer = a + b" " + self.words(10, "z")                # the last passage changes
+        rows, s = self.build([("a.txt", longer)], rows, 100)
+        self.assertEqual((s.files_read, s.embedded, s.kept, s.passages), (1, 1, 3, 4))
+        self.assertEqual(self.platform.sent[0][:3], "a90")
+        import hashlib
+        self.assertEqual({r["checksum"] for r in rows}, {hashlib.sha256(longer).hexdigest()})
+        self.assertTrue(all(r["embedding"] for r in rows))
+
     def test_finishing_a_cut_file_embeds_only_what_is_new(self):
         a, b = self.words(1000, "a"), self.words(1000, "b")
         rows, _ = self.build([("a.txt", a), ("b.txt", b)], [], 6)

@@ -172,7 +172,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         by_member.setdefault(r.get("member") or "", []).append(r)
     rows: List[Dict] = []
     todo: List[Dict] = []
-    present: Set[str] = set()
+    in_record: Set[str] = set()
     n = 0                     # passages so far, against the cap
     base = {"identifier": identifier, "dataset_uuid": rec.get("dataset_uuid"),
             "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0}
@@ -180,6 +180,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         if not isinstance(entry, dict) or not entry.get("path"):
             continue
         member, checksum = entry["path"], entry.get("checksum_sha256")
+        in_record.add(member)
         s.files += 1
         if not supported(member):
             s.files_other += 1
@@ -191,7 +192,6 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         if room <= 0:
             s.capped = True   # the walk stops here: nothing further is fetched
             break
-        present.add(member)
         old = by_member.get(member) or []
         same = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
                                  and (o.get("cut") or 0) == (dims or 0) for o in old)
@@ -215,9 +215,11 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             if s.capped:
                 break
             continue
-        # Passages already embedded for this very file are reused.
-        reuse = {(o.get("position"), o.get("text")): o
-                 for o in old_text if same and o.get("embedding")}
+        # A passage whose text was embedded before, with this model and
+        # cut, keeps its vector: a file that grew re-embeds only what is new.
+        reuse = {o["text"]: o for o in old_text
+                 if o.get("embedding") and o.get("text") and o.get("model") == model
+                 and (o.get("cut") or 0) == (dims or 0)}
         pages = extract(member, fetch(member))
         if pages is None:
             s.files_other += 1
@@ -234,9 +236,10 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             if n >= max_passages:
                 s.capped = True
                 break
-            prev = reuse.get((position, text))
+            prev = reuse.get(text)
             if prev is not None:
-                row = dict(prev, page=page, partial=False)
+                row = dict(prev, checksum=checksum, page=page, position=position,
+                           partial=False)
                 rows.append(row)
                 s.kept += 1
             else:
@@ -256,7 +259,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             row["embedding"], row["dimension"] = vec, len(vec)
         rows.extend(todo)
     s.embedded = len(todo)
-    s.dropped = sum(1 for m, v in by_member.items() if m not in present
+    s.dropped = sum(1 for m, v in by_member.items() if m not in in_record
                     for o in v if o.get("position") != NO_TEXT)
     s.files_no_text = sum(1 for r in rows if r["position"] == NO_TEXT)
     s.passages = len(rows) - s.files_no_text
