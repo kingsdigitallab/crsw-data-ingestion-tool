@@ -384,6 +384,37 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
         self.assertIn(orphan, self.keys_under("index/passages/"))
 
+    def test_the_listing_is_scoped_and_its_failure_is_a_log_line(self):
+        self.stage(files=self.files)
+        self.cli(["run"], env=LLM_ENV)
+        prefixes = []
+        real = self.s3.get_paginator
+
+        def paginator(name):
+            pag = real(name)
+
+            class Wrapped:
+                def paginate(self, **kw):
+                    if kw.get("Prefix", "").startswith("index/passages/"):
+                        prefixes.append(kw["Prefix"])
+                        if "boom" in prefixes[0]:
+                            raise RuntimeError("listing refused")
+                    return pag.paginate(**kw)
+            return Wrapped()
+        with mock.patch.object(self.s3, "get_paginator", paginator):
+            self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
+            self.cli(["passages", "--strand", "rs2"], env=LLM_ENV)
+            self.cli(["passages"], env=LLM_ENV)
+        self.assertEqual(prefixes, ["index/passages/" + DEST, "index/passages/rs2/",
+                                    "index/passages/"])
+        prefixes[:] = ["boom"]
+        with mock.patch.object(self.s3, "get_paginator", paginator):
+            code, out = self.cli(["passages"], env=LLM_ENV)
+        self.assertEqual(code, 1)
+        self.assertIn("listing refused", self.written(out, "passages_failed")[0]["error"])
+        self.assertEqual(self.written(out, "passages_finished")[0]["failed"], 1)
+        self.assertEqual(self.written(out), [])           # nothing walked
+
     def test_failure_is_logged_and_the_run_still_succeeds(self):
         self.stage(files=self.files)
         with mock.patch.object(llm.Platform, "embed",

@@ -330,11 +330,13 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
     return s
 
 
-def listing(client, bucket: str, prefix: str) -> Dict[str, str]:
-    """identifier -> key of every passages file in the bucket."""
+def listing(client, bucket: str, prefix: str, under: str = "") -> Dict[str, str]:
+    """identifier -> key of every passages file in the bucket, or of
+    those whose identifier starts with `under` (a strand or a dataset)."""
     base = prefix.strip("/") + "/passages/"
     out: Dict[str, str] = {}
-    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=base):
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket,
+                                                                 Prefix=base + under):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith(".parquet"):

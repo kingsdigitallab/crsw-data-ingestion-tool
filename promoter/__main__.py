@@ -414,10 +414,23 @@ def cmd_passages(args) -> int:
               "PROMOTER_LLM_EMBED_MODEL and a PROMOTER_INDEX_PREFIX are needed for passages",
               file=sys.stderr)
         return 2
-    platform = Platform.from_settings(cfg)
     failed = 0
     totals = {"datasets": 0, "skipped": 0, "removed": 0, "passages": 0, "embedded": 0, "kept": 0,
               "files_no_text": 0, "files_other": 0, "files_too_big": 0}
+    # One listing of the passages files in scope up front: a dataset no
+    # longer permitted is checked against it, and a file whose dataset is
+    # gone is removed after the walk.
+    try:
+        existing = passages_mod.listing(
+            client, cfg.s3_bucket, cfg.index_prefix,
+            under=args.dataset or (args.strand + "/" if args.strand else ""))
+    except Exception as e:
+        print(json.dumps({"action": "passages_failed", "prefix": None,
+                          "error": "passages listing failed: %s" % e}, ensure_ascii=False))
+        print(json.dumps({"action": "passages_finished", "failed": 1, **totals},
+                         ensure_ascii=False))
+        return 1
+    platform = Platform.from_settings(cfg)
 
     def in_scope(identifier):
         return ((not args.dataset or identifier == args.dataset) and
@@ -436,10 +449,6 @@ def cmd_passages(args) -> int:
                           "reason": reason}, ensure_ascii=False))
         return True
 
-    # One listing of the passages files up front: a dataset no longer
-    # permitted is checked against it, and a file whose dataset is gone
-    # is removed after the walk.
-    existing = passages_mod.listing(client, cfg.s3_bucket, cfg.index_prefix)
     walked = set()
     try:
         for ref, rec, _labels in index_mod.read_records(client, cfg.s3_bucket, args.strand):
