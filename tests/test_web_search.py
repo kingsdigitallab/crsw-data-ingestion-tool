@@ -5,6 +5,7 @@ thing off unless switched on."""
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.test_web_ask import (AskBase, FakePlatform, bag, ASK, CLEAN, GREEN, AMBER, DIM)
 from tests.test_web_catalogue import HAVE_WEB, VOCAB, READ
@@ -272,6 +273,24 @@ class TestCopy(SearchBase):
         self.write_passages((CLEAN,))
         ix.sync()
         self.assertEqual(len(fetched), 3)
+
+    def test_a_load_that_fails_for_a_reason_other_than_the_file_is_tried_again(self):
+        self.write_passages()
+        ix = self.index(dims=DIM)
+        calls = []
+        real = ix._replace
+
+        def flaky(key, table):
+            calls.append(key)
+            if len(calls) == 1:
+                raise RuntimeError("disk full")          # not the file's fault
+            return real(key, table)
+        with mock.patch.object(ix, "_replace", flaky):
+            s = ix.sync()
+            self.assertEqual((s["loaded"], s["skipped"]), (1, 1))
+            s = ix.sync()
+        self.assertEqual((s["loaded"], s["skipped"], len(calls)), (1, 0, 3))
+        self.assertEqual(ix.stats()["passages"], 4)
 
     def test_a_fetch_that_fails_once_is_tried_again(self):
         """A network or storage error is not the file's fault: the next

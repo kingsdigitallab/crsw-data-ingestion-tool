@@ -157,6 +157,44 @@ class TestCap(unittest.TestCase):
         rows, s = self.build([("a.txt", a)], rows, 100)
         self.assertEqual(s.dropped, 4)
 
+    def test_dropped_counts_rows_left_out_but_not_files_beyond_the_cap(self):
+        a, b, c = self.words(1000, "a"), self.words(1000, "b"), self.words(1000, "c")
+        rows, _ = self.build([("a.txt", a), ("b.txt", b), ("c.txt", c)], [], 100)
+        # b is cut mid-file and c is never reached: neither is "dropped".
+        rows, s = self.build([("a.txt", a), ("b.txt", b), ("c.txt", c)], rows, 6)
+        self.assertEqual((s.passages, s.capped, s.dropped), (6, True, 0))
+        # A file still in the record but now over the size cap loses its
+        # rows, and the summary says so.
+        short = self.words(500, "b")                             # two passages
+        rows, _ = self.build([("a.txt", a), ("b.txt", short)], [], 100)
+        big = self.build_with_limit([("a.txt", a), ("b.txt", short)], rows, 100,
+                                    max_file_bytes=len(a) - 1)
+        self.assertEqual((big.passages, big.files_too_big, big.dropped), (2, 1, 4))
+
+    def build_with_limit(self, files, existing, cap, max_file_bytes):
+        import hashlib
+        rec = {"dataset_uuid": "u", "sensitivity": "green",
+               "files": [{"path": m, "checksum_sha256": hashlib.sha256(d).hexdigest(),
+                          "bytes": len(d)} for m, d in files]}
+        data = dict(files)
+        _, s = pmod.build("rs1/p/green/0_raw/d", rec, lambda m: data[m], existing,
+                          self.Platform(), "toy", None, max_file_bytes, cap)
+        return s
+
+    def test_a_reused_passage_takes_the_record_as_it_is_now(self):
+        import hashlib
+        a = self.words(1000, "a")
+        rows, _ = self.build([("a.txt", a)], [], 100)
+        longer = a + b" " + self.words(10, "z")
+        rec = {"dataset_uuid": "new-uuid", "sensitivity": "amber",
+               "files": [{"path": "a.txt", "checksum_sha256": hashlib.sha256(longer).hexdigest(),
+                          "bytes": len(longer)}]}
+        rows, s = pmod.build("rs1/p/amber/0_raw/d", rec, lambda m: longer, rows,
+                             self.Platform(), "toy", None, 10 ** 9, 100)
+        self.assertEqual(s.kept, 3)
+        self.assertEqual({(r["identifier"], r["dataset_uuid"], r["sensitivity"]) for r in rows},
+                         {("rs1/p/amber/0_raw/d", "new-uuid", "amber")})
+
     def test_a_changed_file_reuses_the_vectors_of_unchanged_passages(self):
         a = self.words(1000, "a")
         rows, _ = self.build([("a.txt", a)], [], 100)
@@ -406,6 +444,11 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
         self.assertIn(orphan, self.keys_under("index/passages/"))
 
+    def test_a_bad_strand_is_refused(self):
+        code, out = self.cli(["passages", "--strand", "rs2/"], env=LLM_ENV)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.written(out, "passages_finished"), [])
+
     def test_the_listing_is_scoped_and_its_failure_is_a_log_line(self):
         self.stage(files=self.files)
         self.cli(["run"], env=LLM_ENV)
@@ -427,7 +470,7 @@ class TestPassages(PassagesBase):
             self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
             self.cli(["passages", "--strand", "rs2"], env=LLM_ENV)
             self.cli(["passages"], env=LLM_ENV)
-        self.assertEqual(prefixes, ["index/passages/" + DEST, "index/passages/rs2/",
+        self.assertEqual(prefixes, ["index/passages/" + DEST + ".parquet", "index/passages/rs2/",
                                     "index/passages/"])
         prefixes[:] = ["boom"]
         with mock.patch.object(self.s3, "get_paginator", paginator):

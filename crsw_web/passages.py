@@ -228,7 +228,8 @@ class PassageIndex:
                 log.warning("passages file %s not loaded: %s", key, e)
                 summary["skipped"] += 1
                 last_problem = str(e)
-                self._failed[key] = (etag, last_problem)
+                if isinstance(e, (ValueError, pa.ArrowException)):
+                    self._failed[key] = (etag, last_problem)   # the file's own fault
                 continue
             self._failed.pop(key, None)
             self._w.execute("INSERT OR REPLACE INTO files VALUES (?, ?)", [key, etag])

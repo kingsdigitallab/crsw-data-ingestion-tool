@@ -414,6 +414,11 @@ def cmd_passages(args) -> int:
               "PROMOTER_LLM_EMBED_MODEL and a PROMOTER_INDEX_PREFIX are needed for passages",
               file=sys.stderr)
         return 2
+    try:
+        audit.valid_strand(args.strand)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
     failed = 0
     totals = {"datasets": 0, "skipped": 0, "removed": 0, "passages": 0, "embedded": 0, "kept": 0,
               "files_no_text": 0, "files_other": 0, "files_too_big": 0}
@@ -421,9 +426,8 @@ def cmd_passages(args) -> int:
     # longer permitted is checked against it, and a file whose dataset is
     # gone is removed after the walk.
     try:
-        existing = passages_mod.listing(
-            client, cfg.s3_bucket, cfg.index_prefix,
-            under=args.dataset or (args.strand + "/" if args.strand else ""))
+        existing = passages_mod.listing(client, cfg.s3_bucket, cfg.index_prefix,
+                                        strand=args.strand or "", dataset=args.dataset or "")
     except Exception as e:
         print(json.dumps({"action": "passages_failed", "prefix": None,
                           "error": "passages listing failed: %s" % e}, ensure_ascii=False))

@@ -172,15 +172,16 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         by_member.setdefault(r.get("member") or "", []).append(r)
     rows: List[Dict] = []
     todo: List[Dict] = []
-    in_record: Set[str] = set()
+    entries = [e for e in rec.get("files") or [] if isinstance(e, dict) and e.get("path")]
+    in_record = {e["path"] for e in entries}
+    reached: Set[str] = set()   # members the walk got to before the cap stopped it
+    carried: Set[str] = set()   # members whose rows are in the new file
     n = 0                     # passages so far, against the cap
     base = {"identifier": identifier, "dataset_uuid": rec.get("dataset_uuid"),
             "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0}
-    for entry in rec.get("files") or []:
-        if not isinstance(entry, dict) or not entry.get("path"):
-            continue
+    for entry in entries:
         member, checksum = entry["path"], entry.get("checksum_sha256")
-        in_record.add(member)
+        reached.add(member)
         s.files += 1
         if not supported(member):
             s.files_other += 1
@@ -191,6 +192,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         room = max_passages - n
         if room <= 0:
             s.capped = True   # the walk stops here: nothing further is fetched
+            reached.discard(member)
             break
         old = by_member.get(member) or []
         same = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
@@ -209,6 +211,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
                 s.capped = True
             rows.extend(dict(o) for o in old if o.get("position") == NO_TEXT)
             rows.extend(kept)
+            carried.add(member)
             n += len(kept)
             s.files_kept += 1
             s.kept += len(kept)
@@ -225,6 +228,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             s.files_other += 1
             continue
         s.files_read += 1
+        carried.add(member)
         pieces = chunk(pages)
         if not pieces:
             rows.append(dict(base, member=member, checksum=checksum, page=None,
@@ -238,8 +242,11 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
                 break
             prev = reuse.get(text)
             if prev is not None:
-                row = dict(prev, checksum=checksum, page=page, position=position,
-                           partial=False)
+                # The vector is the old row's; everything else is the record's now.
+                row = dict(base, member=member, checksum=checksum, page=page,
+                           position=position, words=prev.get("words") or len(text.split()),
+                           text=text, dimension=prev.get("dimension"),
+                           embedding=prev["embedding"], partial=False)
                 rows.append(row)
                 s.kept += 1
             else:
@@ -259,7 +266,10 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             row["embedding"], row["dimension"] = vec, len(vec)
         rows.extend(todo)
     s.embedded = len(todo)
-    s.dropped = sum(1 for m, v in by_member.items() if m not in in_record
+    # Old passages not carried into the new file, except those of members
+    # the cap stopped the walk before ("capped" says so).
+    s.dropped = sum(1 for m, v in by_member.items()
+                    if m not in carried and (m not in in_record or m in reached)
                     for o in v if o.get("position") != NO_TEXT)
     s.files_no_text = sum(1 for r in rows if r["position"] == NO_TEXT)
     s.passages = len(rows) - s.files_no_text
@@ -333,13 +343,17 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
     return s
 
 
-def listing(client, bucket: str, prefix: str, under: str = "") -> Dict[str, str]:
-    """identifier -> key of every passages file in the bucket, or of
-    those whose identifier starts with `under` (a strand or a dataset)."""
+def listing(client, bucket: str, prefix: str, strand: str = "",
+            dataset: str = "") -> Dict[str, str]:
+    """identifier -> key of every passages file in the bucket, of one
+    strand's, or of one dataset's (at most one entry)."""
     base = prefix.strip("/") + "/passages/"
+    if dataset:
+        under = base + dataset.strip("/") + ".parquet"
+    else:
+        under = base + (strand.strip("/") + "/" if strand else "")
     out: Dict[str, str] = {}
-    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket,
-                                                                 Prefix=base + under):
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith(".parquet"):
