@@ -201,10 +201,22 @@ class TestMalformedReplies(unittest.TestCase):
                 with self.assertRaises(llm.PlatformError):
                     fake_platform(raw(text)).embed(["x"])
         for text in ('{"results": [{"index": 0, "relevance_score": NaN}]}',
-                     '{"results": [{"index": 0, "relevance_score": false}]}'):
+                     '{"results": [{"index": 0, "relevance_score": false}]}',
+                     '{"results": [{"index": 0, "relevance_score": 1%s}]}' % ("0" * 400),
+                     '{"data": [{"index": 0, "embedding": [1%s]}]}' % ("0" * 400)):
             with self.subTest(text=text):
                 with self.assertRaises(llm.PlatformError):
-                    fake_platform(raw(text)).rerank("q", ["a", "b"])
+                    if '"data"' in text:
+                        fake_platform(raw(text)).embed(["x"])
+                    else:
+                        fake_platform(raw(text)).rerank("q", ["a", "b"])
+        # A boolean index is not an index either: the reply is used as far
+        # as it is sound and the rest filled in, as with an index out of range.
+        body = {"results": [{"index": True, "relevance_score": 0.9},
+                            {"index": 1, "relevance_score": 0.5}]}
+        p = fake_platform(lambda r: httpx.Response(200, json=body))
+        order = p.rerank("q", ["a", "b"])
+        self.assertEqual((order, [type(i) for i in order]), ([1, 0], [int, int]))
 
     def test_chat(self):
         for content in (123, ["a"], {"a": 1}):

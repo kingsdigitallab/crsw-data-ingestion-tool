@@ -236,7 +236,8 @@ class Platform:
         order = []
         for r in sorted(results, key=lambda r: -_number(r.get("relevance_score", 0), "relevance score")):
             i = r.get("index")
-            if isinstance(i, int) and 0 <= i < len(docs) and i not in order:
+            if (isinstance(i, int) and not isinstance(i, bool)
+                    and 0 <= i < len(docs) and i not in order):
                 order.append(i)
         order.extend(i for i in range(len(docs)) if i not in order)
         return order
@@ -251,7 +252,7 @@ def _number(x, what: str) -> float:
         if not math.isfinite(n):
             raise ValueError(x)
         return n
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise PlatformError("platform reply had a %s that is not a number" % what)
 
 
