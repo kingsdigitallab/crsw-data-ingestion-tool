@@ -33,6 +33,8 @@ class Deposit:
     entries: List[Dict] = field(default_factory=list)   # manifest entries, as stored
     record_key: Optional[str] = None                     # set at finalise (staged key)
     finalised: Optional[str] = None
+    merges_with: Optional[str] = None     # the destination record this adds to, if any
+    existing_uuid: Optional[str] = None   # its dataset_uuid, which the promoter keeps
 
     def entry_for(self, member: str) -> Optional[Dict]:
         return next((e for e in self.entries if e["path"] == member), None)
@@ -99,6 +101,38 @@ class DepositStore:
             raise
         data = json.loads(obj["Body"].read().decode("utf-8"))
         return Deposit(**data)
+
+    def deposits_for(self, prefix: str, limit: int = 200) -> List[Deposit]:
+        """Deposits in staging, of any user, whose final prefix is
+        `prefix`: what the index cannot show yet because the promoter has
+        not run. Walks staging by user and deposit with delimiter
+        listings and stops after `limit` control objects."""
+        out: List[Deposit] = []
+        seen = 0
+        paginator = self.client.get_paginator("list_objects_v2")
+        root = self.staging_prefix + "/"
+        users = [cp["Prefix"] for page in paginator.paginate(
+            Bucket=self.bucket, Prefix=root, Delimiter="/")
+            for cp in page.get("CommonPrefixes", [])]
+        for user_prefix in users:
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=user_prefix,
+                                           Delimiter="/"):
+                for cp in page.get("CommonPrefixes", []):
+                    if seen >= limit:
+                        return out
+                    seen += 1
+                    try:
+                        obj = self.client.get_object(Bucket=self.bucket,
+                                                     Key=cp["Prefix"] + CONTROL_NAME)
+                        data = json.loads(obj["Body"].read().decode("utf-8"))
+                    except (ClientError, ValueError):
+                        continue
+                    if data.get("prefix") == prefix:
+                        try:
+                            out.append(Deposit(**data))
+                        except TypeError:
+                            continue
+        return out
 
     # --- object helpers used by the routes --------------------------------
     def stored_size(self, key: str) -> Optional[int]:

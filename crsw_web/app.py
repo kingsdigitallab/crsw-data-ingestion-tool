@@ -579,6 +579,59 @@ def create_app(settings: Optional[Settings] = None,
                 "strands": list(keys.STRANDS), "states": list(keys.STATES),
                 "sensitivities": list(keys.SENSITIVITIES)}
 
+    # --- depositing to a dataset that exists (read role) ------------------
+    def pending_rows(prefix: str) -> list:
+        """Deposits to `prefix` still in staging: not in the index yet,
+        but a researcher should know they are adding to them."""
+        try:
+            deps = store.deposits_for(prefix)
+        except Exception as exc:
+            raise storage_error(exc)
+        return [{"id": d.id, "user": d.user, "created": d.created, "status": d.status,
+                 "files": len(d.entries)} for d in deps]
+
+    def destination(meta: Dict) -> Dict:
+        """What is already at, or on its way to, the dataset prefix a
+        deposit names. Empty when the read role is off."""
+        prefix = deposit_logic.dataset_prefix(meta)
+        out = {"identifier": prefix, "exists": False, "summary": None, "defaults": {},
+               "manifest": [], "elsewhere": [], "similar": {"project": [], "dataset": []},
+               "pending": []}
+        if catalogue is None:
+            return out
+        row = catalogue.get(prefix)
+        if row is not None:
+            out["exists"] = True
+            out["summary"] = public_row(row)
+            rec = catalogue.record(prefix)
+            if rec:
+                out["defaults"] = deposit_logic.defaults_from_record(rec)
+                out["manifest"] = [{"path": f["path"], "checksum_sha256": f.get("checksum_sha256"),
+                                    "bytes": f.get("bytes")} for f in rec.get("files") or []]
+        in_strand = catalogue.search(strand=meta["strand"])
+        in_project = [r for r in in_strand if r.get("project") == meta["project"]]
+        out["elsewhere"] = [public_row(r) for r in in_project
+                            if r.get("dataset") == meta["dataset"] and r.get("identifier") != prefix]
+        out["similar"]["project"] = keys.similar_projects(
+            meta["project"], sorted({r.get("project") for r in in_strand if r.get("project")}))
+        out["similar"]["dataset"] = keys.similar_projects(
+            meta["dataset"], sorted({r.get("dataset") for r in in_project if r.get("dataset")}))
+        out["pending"] = pending_rows(prefix)
+        return out
+
+    @app.get("/deposits/lookup")
+    def lookup(strand: str = "", project: str = "", sensitivity: str = "", state: str = "",
+               dataset: str = "", user: User = Depends(current_user)):
+        need_read()
+        meta = {"strand": strand, "project": keys.normalise_project(project),
+                "sensitivity": sensitivity, "state": state,
+                "dataset": keys.normalise_project(dataset)}
+        if (strand not in keys.STRANDS or sensitivity not in keys.SENSITIVITIES
+                or state not in keys.STATES or not meta["project"] or not meta["dataset"]):
+            raise HTTPException(status_code=422, detail="strand, project, sensitivity, state "
+                                                        "and dataset are all needed")
+        return destination(meta)
+
     # --- Phase 2: the deposit API -----------------------------------------
     @app.post("/deposits", status_code=201)
     def create_deposit(form: Dict, user: User = Depends(current_user)):
@@ -587,6 +640,27 @@ def create_app(settings: Optional[Settings] = None,
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})
         prefix = deposit_logic.dataset_prefix(meta)
+        dest = destination(meta) if catalogue is not None else None
+        merges_with = existing_uuid = None
+        if dest and (dest["exists"] or dest["pending"]):
+            if dest["exists"]:
+                merges_with = prefix
+                existing_uuid = (dest["summary"] or {}).get("dataset_uuid")
+                message = ("dataset %s already exists (%s files); your files will be "
+                           "added to it" % (prefix, dest["summary"]["files"]))
+                current = dest["defaults"].get("version")
+                if not deposit_logic.version_not_lower(meta.get("version"), current):
+                    raise HTTPException(status_code=422, detail={
+                        "errors": {"version": "%s is lower than the dataset's %s; keep it "
+                                              "or raise it" % (meta["version"], current)},
+                        "warnings": warnings})
+            else:
+                message = ("a deposit to %s is waiting for promotion; your files will be "
+                           "added to the same dataset" % prefix)
+            if not bool(form.get("confirm_existing")):
+                raise HTTPException(status_code=409, detail={
+                    "message": message, "identifier": prefix, "summary": dest["summary"],
+                    "pending": dest["pending"]})
         try:
             use = quota.usage(store, user.username)
             if use.open_deposits >= settings.user_max_open_deposits:
@@ -598,14 +672,21 @@ def create_app(settings: Optional[Settings] = None,
             dep = store.create(user.username, meta, prefix,
                                deposit_logic.dataset_uuid_for(None),
                                record.utc_now_iso())
+            if merges_with:
+                dep.merges_with, dep.existing_uuid = merges_with, existing_uuid
+                store.save(dep)
         except HTTPException:
             raise
         except Exception as exc:
             raise storage_error(exc)
-        log.info("deposit created user=%s deposit=%s prefix=%s", user.username, dep.id, prefix)
-        return {"id": dep.id, "prefix": prefix,
-                "staging_prefix": store.root(dep.user, dep.id) + "/" + prefix,
-                "dataset_uuid": dep.dataset_uuid, "warnings": warnings}
+        log.info("deposit created user=%s deposit=%s prefix=%s merges_with=%s",
+                 user.username, dep.id, prefix, merges_with)
+        out = {"id": dep.id, "prefix": prefix,
+               "staging_prefix": store.root(dep.user, dep.id) + "/" + prefix,
+               "dataset_uuid": dep.dataset_uuid, "warnings": warnings}
+        if catalogue is not None:
+            out["merges_with"] = merges_with
+        return out
 
     @app.get("/deposits/{deposit_id}")
     def get_deposit(deposit_id: str, user: User = Depends(current_user)):
@@ -763,9 +844,23 @@ def create_app(settings: Optional[Settings] = None,
             raise storage_error(exc)
         log.info("deposit finalised user=%s deposit=%s files=%d record=%s",
                  dep.user, dep.id, len(union), record_key)
-        return {"id": dep.id, "record_key": record_key,
-                "dataset_uuid": dep.dataset_uuid,
-                "files": len(union), "warnings": warnings,
-                "staging_prefix": staged_prefix}
+        out = {"id": dep.id, "record_key": record_key,
+               "dataset_uuid": dep.dataset_uuid,
+               "files": len(union), "warnings": warnings,
+               "staging_prefix": staged_prefix}
+        if catalogue is not None:
+            # What this deposit does to the dataset, by the CLI's own rule;
+            # the promoter does the merge itself.
+            existing = catalogue.record(dep.merges_with) if dep.merges_with else None
+            old = (existing or {}).get("files") or []
+            unchanged = record.unchanged_paths(old, dep.entries)
+            _merged, _added, changed = record.merge_manifest(old, dep.entries)
+            paths = {e["path"] for e in dep.entries}
+            before = {e["path"] for e in old}
+            out.update({"merges_with": dep.merges_with,
+                        "added": sorted(paths - before),
+                        "updated": sorted(set(changed) & paths),
+                        "unchanged": sorted(unchanged)})
+        return out
 
     return app
