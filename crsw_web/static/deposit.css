@@ -163,3 +163,22 @@ button.primary[disabled] { opacity: .55; cursor: default; }
 .summary dd { margin: .1rem 0 0; overflow-wrap: anywhere; }
 pre.record { background: var(--surface); border: 1px solid var(--rule); padding: 1rem; overflow: auto; font-family: var(--mono); font-size: .85rem; line-height: 1.45; }
 code.sha { color: var(--muted); }
+
+/* Depositing to a dataset that exists (read role): the panel under the
+   dataset field says what will happen before anything is uploaded. */
+.destination { margin: .25rem 0 1rem; padding: .7rem .9rem; border-left: 3px solid var(--rule); background: var(--surface); }
+.destination.exists, .destination.pending { border-left-color: var(--amber); }
+.destination.new { border-left-color: var(--green); }
+.destination-text { margin: 0; }
+.destination-text code { font-size: .9rem; }
+.destination-notes { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.destination-actions { display: flex; flex-wrap: wrap; gap: .6rem 1.5rem; align-items: center; margin-top: .5rem; }
+.destination-actions[hidden], .destination-notes[hidden], .restricted[hidden] { display: none; }
+.destination-actions .confirm { font-weight: 600; }
+.restricted { margin: .6rem 0 0; padding: 0; border: 0; }
+.restricted legend { font-weight: 600; padding: 0; margin-bottom: .25rem; }
+.restricted-note { color: var(--danger); }
+.files .state .mark { margin-left: .4rem; font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.files .state .mark.added { color: var(--green); }
+.files .state .mark.updated { color: var(--amber); }
+.files .state .mark.unchanged { color: var(--muted); }

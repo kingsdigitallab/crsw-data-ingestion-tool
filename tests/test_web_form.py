@@ -80,6 +80,24 @@ class TestForm(unittest.TestCase):
         js = client.get("/static/deposit.js").text
         self.assertIn("/datasets.json?limit=20&q=", js)
 
+    def test_existing_dataset_help_appears_with_the_read_role(self):
+        client = TestClient(create_app(
+            Settings(**dict(SETTINGS, read_s3_access_key="r", read_s3_secret_key="r")),
+            s3_client=self.s3, vocab_dict=VOCAB, read_client=object()))
+        html = client.get("/").text
+        for marker in ('id="destination"', 'id="confirm-existing"', 'id="use-details"',
+                       'list="project-options"', 'list="dataset-options"',
+                       'id="restricted"', "restricting beyond the strand"):
+            self.assertIn(marker, html, marker)
+        js = client.get("/static/deposit.js").text
+        for marker in ("/deposits/lookup?", "confirm_existing", "unchanged", "merges_with"):
+            self.assertIn(marker, js, marker)
+        # Without the read role the form is as it was.
+        html = self.client.get("/").text
+        for marker in ('id="destination"', 'id="confirm-existing"', 'list="project-options"',
+                       'id="restricted"'):
+            self.assertNotIn(marker, html, marker)
+
     def test_rules_embedded_from_crsw_deposit(self):
         html = self.client.get("/").text
         start = html.index('<script id="rules" type="application/json">') + len(

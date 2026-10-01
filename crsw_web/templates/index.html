@@ -45,17 +45,37 @@
     <div class="grid two">
       <div class="field" data-field="project">
         <label for="project">Project <i class="req"></i></label>
-        <input id="project" name="project" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. csac" required>
-        <p class="hint">Lowercase letters, digits and hyphens. A project can hold several datasets.</p>
+        <input id="project" name="project" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. csac" required{% if read_enabled %} list="project-options"{% endif %}>
+        {% if read_enabled %}<datalist id="project-options"></datalist>{% endif %}
+        <p class="hint">Lowercase letters, digits and hyphens. A project can hold several datasets.{% if read_enabled %} Existing projects in the strand are offered as you type.{% endif %}</p>
         <p class="error" hidden></p>
       </div>
       <div class="field" data-field="dataset">
         <label for="dataset">Dataset <i class="req"></i></label>
-        <input id="dataset" name="dataset" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. sentinel2-imagery" required>
-        <p class="hint">Names the collection these files belong to.</p>
+        <input id="dataset" name="dataset" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. sentinel2-imagery" required{% if read_enabled %} list="dataset-options"{% endif %}>
+        {% if read_enabled %}<datalist id="dataset-options"></datalist>{% endif %}
+        <p class="hint">Names the collection these files belong to.{% if read_enabled %} Choose an existing dataset to add files to it, or type a new name.{% endif %}</p>
         <p class="error" hidden></p>
       </div>
     </div>
+    {% if read_enabled %}
+    <div class="destination" id="destination" hidden aria-live="polite">
+      <p class="destination-text" id="destination-text"></p>
+      <ul class="destination-notes" id="destination-notes" hidden></ul>
+      <div class="destination-actions" id="destination-existing" hidden>
+        <button type="button" class="link" id="use-details">Use its details</button>
+        <label class="confirm"><input type="checkbox" id="confirm-existing"> Add my files to this dataset</label>
+      </div>
+      <fieldset class="restricted" id="restricted" hidden>
+        <legend>Will access to this new dataset need restricting beyond the strand?</legend>
+        <div class="choices">
+          <label><input type="radio" name="restricted" value="no" checked> No</label>
+          <label><input type="radio" name="restricted" value="yes"> Yes</label>
+        </div>
+        <p class="hint restricted-note" id="restricted-note" hidden>Then do not deposit yet. Access restrictions must be in place before the first deposit, not applied afterwards: depositing first and restricting later leaves a window where the data is readable by everyone with strand access. Contact eResearch or your data steward to set up the restriction, then come back.</p>
+      </fieldset>
+    </div>
+    {% endif %}
 
     <div class="grid two">
       <fieldset class="field" data-field="state">
