@@ -18,7 +18,7 @@ A web page where you put a dataset into the Centre's shared store and describe i
 
 ## Depositing, step by step
 
-1. Sign in and fill in section 1, **Describe the dataset**. Each box has a note under it saying what goes there. The slip on the right shows where the files will land as you type.
+1. Sign in and fill in section 1, **Describe the dataset**. Each box has a note under it saying what goes there. The slip on the right shows where the files will land as you type. As you name the project and dataset, the form offers the names already in use, and a note under the dataset name tells you what will happen: if the dataset already exists, how many files it has and that yours will be added to it (press **Use its details** to fill the form from its description, and tick **Add my files to this dataset** to go on); if the name is new, that it will be created, with a warning if it is close to an existing name.
 2. If the dataset was made from other data, open **Origin** and say so: use **Find a dataset in the store** to pick something already deposited, or type a web address. If a script or notebook produced it, name it there too. Otherwise skip this.
 3. In section 2, **Choose the files**, pick files or a whole folder. Hidden system files are set aside for you.
 4. In section 3, press **Deposit files**. Each file uploads in turn, then the description is saved. When the page says **Deposited**, you are done. Keep the deposit number shown there in case you need help.
@@ -27,7 +27,7 @@ A web page where you put a dataset into the Centre's shared store and describe i
 
 ## What happens next
 
-Your deposit lands in a holding area first. Within about five minutes an automatic check confirms every file arrived intact and moves the dataset into place, where it appears under **Find data**. To add or update files later, use the same form with the same strand, project and dataset name. Nothing already deposited is ever removed.
+Your deposit lands in a holding area first. Within about five minutes an automatic check confirms every file arrived intact and moves the dataset into place, where it appears under **Find data**. To add or update files later, use the same form and choose the same dataset: the form shows what is there and asks you to confirm. A file with the same name replaces the stored copy (the earlier copy is kept by the storage, so nothing is lost); every other file stays as it was. Nothing already deposited is ever removed. During the upload each file is marked **added**, **updated** or **unchanged**, and the Deposited message says how many of each there were.
 
 ## Finding and downloading
 

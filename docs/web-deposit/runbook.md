@@ -328,7 +328,8 @@ unchanged until the key exists.
 | Route | What |
 |---|---|
 | `/datasets` | search box and filters (strand, state, sensitivity, subject) over the index |
-| `/datasets.json?q=…` | the same rows as JSON; feeds the form's "Find a dataset in the store" picker under the derived-from box |
+| `/datasets.json?q=…` | the same rows as JSON; feeds the form's "Find a dataset in the store" picker under the derived-from box and the project and dataset name pickers |
+| `/deposits/lookup?strand&project&sensitivity&state&dataset` | what a deposit would land on: the existing dataset (summary, the record's values for prefill, its file list), a same-named dataset elsewhere in the project, near-matches, and deposits to it still waiting in staging. The form calls it as the name is typed; `POST /deposits` to an existing or waiting dataset then needs `confirm_existing`, and a version lower than the record's is refused |
 | `/datasets/<identifier>` | the record's description, derived-from links both ways, provenance, files |
 | `/datasets/<identifier>/record` | the record as stored |
 | `/datasets/<identifier>/files/<path>` | one file, streamed from the store through the service |

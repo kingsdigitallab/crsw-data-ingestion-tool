@@ -95,7 +95,7 @@ python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merg
 
 ### Out of scope for the PoC
 
-Presigned URLs, resumable uploads, catalogue integration, anything touching `interim/`, existing-record defaults in the form (the staging key cannot read destinations), and data egress.
+Presigned URLs, resumable uploads, catalogue integration, anything touching `interim/`, and data egress. (Existing-record defaults in the form were out of scope while the staging key was the only credential; since v0.10.0 the read role supplies them: `GET /deposits/lookup`, `deposit_logic.defaults_from_record`, and `confirm_existing` on create.)
 
 ### Deferred: data egress
 
