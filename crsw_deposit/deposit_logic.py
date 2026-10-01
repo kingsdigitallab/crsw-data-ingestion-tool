@@ -106,6 +106,51 @@ def dataset_uuid_for(existing: Optional[Dict], mint=record.mint_uuid) -> str:
     return existing["dataset_uuid"] if existing else mint()
 
 
+# Descriptive fields a deposit to an existing dataset starts from (r5 §4).
+# Not derived_from: assemble_record keeps the existing list unless this
+# deposit supplies one (r8 §3), so a form must not echo it back.
+INHERITED_FIELDS = ("domain", "steward", "version", "subject", "abstract", "license",
+                    "source_type", "source_detail", "creator")
+
+
+def defaults_from_record(existing: Optional[Dict]) -> Dict:
+    """The values a new deposit to an existing dataset begins with: the
+    record's descriptive fields, and its coverage as coverage_start and
+    coverage_end. Blank fields are left out. The CLI offers these as its
+    prompt defaults and the web form prefills from them, so the two
+    routes inherit the same things."""
+    if not existing:
+        return {}
+    out: Dict = {}
+    for field in INHERITED_FIELDS:
+        value = existing.get(field)
+        if value:
+            out[field] = list(value) if isinstance(value, list) else value
+    temporal = existing.get("temporal") or {}
+    for part, field in (("start", "coverage_start"), ("end", "coverage_end")):
+        if temporal.get(part):
+            out[field] = temporal[part]
+    return out
+
+
+def _version_tuple(value) -> Optional[Tuple[int, int]]:
+    normalised = record.normalise_version(value) if isinstance(value, str) else None
+    if normalised is None:
+        return None
+    major, minor = normalised.split("-")
+    return int(major), int(minor)
+
+
+def version_not_lower(new, existing) -> bool:
+    """False when `new` is a lower version than the record's (a re-deposit
+    with the form's default 1-0 over a dataset at 3-0). Anything that is
+    not a version compares as fine: the validators say what is wrong."""
+    a, b = _version_tuple(new), _version_tuple(existing)
+    if a is None or b is None:
+        return True
+    return a >= b
+
+
 def assemble_record(meta: Dict, existing: Optional[Dict],
                     entries: List[Dict], depositor: str, now: str,
                     dataset_uuid: str, created: Optional[str] = None

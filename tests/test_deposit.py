@@ -1069,6 +1069,25 @@ class TestExistingRecordFlow(unittest.TestCase):
             "Existing dataset found: sentinel2-imagery 3-0" in s
             for s in said))
 
+    def test_a_lower_version_is_warned_about_and_must_be_confirmed(self):
+        import json
+        fetch = self._fetcher((json.dumps(self._existing()), None))
+        warned = []
+        # Version 1-0 over 3-0: warned, declined; then 3-1: accepted.
+        # Then coverage x2 (Enter), update-abstract? (n).
+        with mock.patch("builtins.input",
+                        side_effect=["1-0", "n", "3-1", "", "", "n"]),              mock.patch("deposit.say"),              mock.patch("deposit.warn", side_effect=warned.append):
+            meta, _ = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        self.assertEqual(meta["version"], "3-1")
+        self.assertTrue(any("1-0 is lower than the dataset's 3-0" in w for w in warned), warned)
+        # Confirmed: a deliberate choice is allowed.
+        with mock.patch("builtins.input",
+                        side_effect=["1-0", "y", "", "", "n"]),              mock.patch("deposit.say"), mock.patch("deposit.warn"):
+            meta, _ = deposit.prompt_metadata(
+                _flagged_args(), self.VOCAB, None, None, fetch)
+        self.assertEqual(meta["version"], "1-0")
+
     def test_existing_derived_from_is_left_to_the_merge_rule(self):
         import json
         fetch = self._fetcher((json.dumps(self._existing(

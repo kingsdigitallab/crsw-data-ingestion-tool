@@ -1099,6 +1099,8 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
                (existing.get("modified") or "?")[:10]))
         say("Adding to it. Current values will be kept unless you "
             "change them.")
+    # What a re-deposit inherits: one rule, shared with the web form.
+    inherited = deposit_logic.defaults_from_record(existing)
 
     domain_entries = vocab.domains(vocab_dict)
     codes = [d["code"] for d in domain_entries]
@@ -1111,14 +1113,14 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             warn("--domain %s differs from the existing record's %s - "
                  "using %s." % (args.domain, existing["domain"], args.domain))
         meta["domain"] = args.domain
-    elif existing and existing.get("domain") in codes:
-        meta["domain"] = existing["domain"]
+    elif inherited.get("domain") in codes:
+        meta["domain"] = inherited["domain"]
     else:
         meta["domain"] = ask_select(
             "Domain", [(str(i), d["code"], d["label"])
                        for i, d in enumerate(domain_entries, 1)])
-    if existing and existing.get("steward"):
-        meta["steward"] = existing["steward"]
+    if inherited.get("steward"):
+        meta["steward"] = inherited["steward"]
     else:
         chosen = next(d for d in domain_entries if d["code"] == meta["domain"])
         if chosen["steward"] and chosen["steward"] != "TBC":
@@ -1126,21 +1128,26 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             say("Steward: %s (from domain %s)"
                 % (chosen["steward"], meta["domain"]))
 
-    default_version = (existing.get("version") if existing else None) or "1-0"
+    default_version = inherited.get("version") or "1-0"
     while True:
         version = record.normalise_version(ask("Version",
                                                default=default_version))
-        if version is not None:
-            meta["version"] = version
-            break
-        say("Version must be two integers like 3-0 (or 3.0 / v3-0, "
-            "which I will normalise).")
+        if version is None:
+            say("Version must be two integers like 3-0 (or 3.0 / v3-0, "
+                "which I will normalise).")
+            continue
+        if not deposit_logic.version_not_lower(version, inherited.get("version")):
+            warn("%s is lower than the dataset's %s - a re-deposit usually "
+                 "keeps or raises the version." % (version, inherited["version"]))
+            if not ask_yes_no("Use %s anyway?" % version, default_no=True):
+                continue
+        meta["version"] = version
+        break
 
-    existing_temporal = (existing.get("temporal") or {}) if existing else {}
-    for label, field, temporal_part in (
-            ("Coverage start (year or YYYY-MM-DD)", "coverage_start", "start"),
-            ("Coverage end (year or YYYY-MM-DD)", "coverage_end", "end")):
-        default = existing_temporal.get(temporal_part)
+    for label, field in (
+            ("Coverage start (year or YYYY-MM-DD)", "coverage_start"),
+            ("Coverage end (year or YYYY-MM-DD)", "coverage_end")):
+        default = inherited.get(field)
         while True:
             value = ask(label, default=default)
             err = record.coverage_error(value)
@@ -1150,7 +1157,7 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             meta[field] = value
             break
 
-    existing_subjects = list(existing.get("subject") or []) if existing else []
+    existing_subjects = inherited.get("subject") or []
     if existing_subjects and not record.unknown_subjects(
             existing_subjects, vocab.all_terms(vocab_dict)):
         meta["subject"] = existing_subjects
@@ -1202,9 +1209,9 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             meta["subject"] = subjects
             break
 
-    if existing and existing.get("abstract") and not ask_yes_no(
+    if inherited.get("abstract") and not ask_yes_no(
             "Update the abstract?", default_no=True):
-        meta["abstract"] = existing["abstract"]
+        meta["abstract"] = inherited["abstract"]
     else:
         while True:
             say("Abstract (at least 50 words; single line, or paste and "
@@ -1226,8 +1233,8 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
         # (derived_from is not copied: deposit_logic.assemble_record keeps
         # the existing list unless this deposit supplies one, r8 §3.)
         for field in ("license", "source_type", "source_detail", "creator"):
-            if existing.get(field):
-                meta[field] = existing[field]
+            if inherited.get(field):
+                meta[field] = inherited[field]
     else:
         default_license = ("internal-only" if meta["sensitivity"] == "amber"
                            else "CC-BY-4.0")

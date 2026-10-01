@@ -161,6 +161,51 @@ class TestAssembleRecord(unittest.TestCase):
                          ["new.csv", "old.csv"])
 
 
+class TestDefaultsFromRecord(unittest.TestCase):
+    """What a deposit to an existing dataset starts from (r5 §4), the
+    same for the CLI's prompts and the web form's prefill."""
+
+    def test_descriptive_fields_and_coverage_carry_over(self):
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, steward="Cy", creator="Cy", source_type="archive",
+                 source_detail="The CSAC database", version="3-0"),
+            None, [entry("a.csv")], "k1", NOW, UUID)
+        d = deposit_logic.defaults_from_record(rec)
+        self.assertEqual(d, {
+            "domain": "quant", "steward": "Cy", "version": "3-0",
+            "subject": ["forced-labour"], "abstract": META["abstract"],
+            "coverage_start": "2020", "coverage_end": "2021",
+            "license": "CC-BY-4.0", "source_type": "archive",
+            "source_detail": "The CSAC database", "creator": "Cy"})
+        # A copy, never the record's own list.
+        d["subject"].append("x")
+        self.assertEqual(rec["subject"], ["forced-labour"])
+
+    def test_blank_fields_are_left_out_and_derived_from_is_not_copied(self):
+        rec = {"version": "", "abstract": None, "temporal": {"start": "1990"},
+               "derived_from": [{"identifier": "rs1/x/green/0_raw/y"}], "license": "x"}
+        self.assertEqual(deposit_logic.defaults_from_record(rec),
+                         {"coverage_start": "1990", "license": "x"})
+        self.assertEqual(deposit_logic.defaults_from_record(None), {})
+
+
+class TestVersionNotLower(unittest.TestCase):
+    def test_compares_as_numbers(self):
+        f = deposit_logic.version_not_lower
+        self.assertTrue(f("3-0", "3-0"))
+        self.assertTrue(f("3-1", "3-0"))
+        self.assertTrue(f("10-0", "9-5"))
+        self.assertFalse(f("2-9", "3-0"))
+        self.assertFalse(f("3-0", "3-1"))
+        self.assertFalse(f("1-0", "3-0"))
+
+    def test_unreadable_values_do_not_block(self):
+        f = deposit_logic.version_not_lower
+        self.assertTrue(f("3-0", None))
+        self.assertTrue(f("3-0", "draft"))
+        self.assertTrue(f(None, "3-0"))
+
+
 class TestRecordBytes(unittest.TestCase):
     def test_lf_only_utf8_trailing_newline(self):
         rec, _, _, _ = deposit_logic.assemble_record(
