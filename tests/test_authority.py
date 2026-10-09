@@ -303,5 +303,60 @@ class TestHierarchyReads(unittest.TestCase):
                          [("forced-labour", 0), ("debt-bondage", 0)])
 
 
+class TestExpandSubject(unittest.TestCase):
+    """What a search for a slug should match: the term and everything
+    under it; a retired slug, its successors."""
+
+    def tree(self):
+        d = authority.apply_change(small(), change(
+            "add", to=["osint-social"], facet="methods", label="x", broader="osint"))
+        return authority.apply_change(d, change(
+            "add", to=["osint-social-video"], facet="methods", label="y",
+            broader="osint-social", date="2026-10-02"))
+
+    def test_flat_vocabulary_is_exact(self):
+        self.assertEqual(authority.expand_subject(small(), "osint"), (["osint"], "exact"))
+
+    def test_a_parent_gives_every_descendant_and_a_sibling_does_not(self):
+        d = self.tree()
+        self.assertEqual(authority.expand_subject(d, "osint"),
+                         (["osint", "osint-social", "osint-social-video"], "narrower"))
+        self.assertEqual(authority.expand_subject(d, "osint-social"),
+                         (["osint-social", "osint-social-video"], "narrower"))
+        self.assertEqual(authority.expand_subject(d, "survey"), (["survey"], "exact"))
+
+    def test_a_renamed_slug_resolves_to_its_successor_expanded(self):
+        d = authority.apply_change(self.tree(), change(
+            "rename", date="2026-10-03", **{"from": ["osint"], "to": ["open-source"]}))
+        self.assertEqual(authority.expand_subject(d, "osint"),
+                         (["open-source", "osint-social", "osint-social-video"], "replaced"))
+
+    def test_a_split_slug_gives_every_successor(self):
+        d = authority.apply_change(small(), change(
+            "add", to=["survey-online"], facet="methods", label="a"))
+        d = authority.apply_change(d, change(
+            "add", to=["survey-field"], facet="methods", label="b"))
+        d = authority.apply_change(d, change(
+            "split", **{"from": ["survey"], "to": ["survey-online", "survey-field"]}))
+        self.assertEqual(authority.expand_subject(d, "survey"),
+                         (["survey-online", "survey-field"], "replaced"))
+
+    def test_a_retired_slug_with_no_successor_matches_nothing(self):
+        d = authority.apply_change(small(), change("retire", **{"from": ["maritime"]}))
+        self.assertEqual(authority.expand_subject(d, "maritime"), ([], "removed"))
+
+    def test_ancestors_nearest_first(self):
+        d = self.tree()
+        self.assertEqual(authority.ancestors(d, "osint-social-video"), ["osint-social", "osint"])
+        self.assertEqual(authority.ancestors(d, "osint"), [])
+        self.assertEqual(authority.ancestors(d, "dragons"), [])
+
+    def test_unknown_slug_and_a_pre_r9_file_are_matched_as_typed(self):
+        self.assertEqual(authority.expand_subject(small(), "dragons"), (["dragons"], "exact"))
+        flat = {"vocabulary_version": "x", "facets": {"methods": ["survey"]}}
+        self.assertEqual(authority.expand_subject(flat, "survey"), (["survey"], "exact"))
+        self.assertEqual(authority.expand_subject(None, "survey"), (["survey"], "exact"))
+
+
 if __name__ == "__main__":
     unittest.main()

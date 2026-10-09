@@ -71,12 +71,26 @@ def create_app(settings: Optional[Settings] = None,
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
+    if vocab_dict is None:
+        # fetch -> cache -> bundled. The cache write is best-effort, so a
+        # read-only container root just means the bundled copy is used.
+        # While running, the cache re-fetches every
+        # CRSW_VOCAB_REFRESH_SECONDS so a merged vocabulary change reaches
+        # the form without a restart.
+        loaded, source = vocab.load_vocabulary()
+        vocab_cache = VocabularyCache(loaded, source,
+                                      refresh_seconds=settings.vocab_refresh_seconds)
+    else:
+        # Injected (tests): held as given, never refreshed.
+        vocab_cache = VocabularyCache(vocab_dict, "injected", refresh_seconds=0)
     # The read role: a second, read-only client over the read key and the
     # promoter's index. Off (every /datasets route 404) unless configured.
+    # The catalogue asks the vocabulary cache at query time, so a subject
+    # filter follows the hierarchy of the file in hand.
     if read_client is None and settings.read_enabled:
         read_client = s3.make_read_client(settings)
     catalogue = (Catalogue(read_client, settings.s3_bucket, settings.index_prefix,
-                           settings.index_refresh_seconds)
+                           settings.index_refresh_seconds, vocabulary=vocab_cache.current)
                  if read_client is not None else None)
     # Asking in plain words: the KCL LLM platform, only with the read role.
     if platform is None and catalogue is not None and settings.ask_enabled:
@@ -90,18 +104,6 @@ def create_app(settings: Optional[Settings] = None,
                                    settings.llm_embed_dims or None)
     if platform is None:
         passage_index = None
-    if vocab_dict is None:
-        # fetch -> cache -> bundled. The cache write is best-effort, so a
-        # read-only container root just means the bundled copy is used.
-        # While running, the cache re-fetches every
-        # CRSW_VOCAB_REFRESH_SECONDS so a merged vocabulary change reaches
-        # the form without a restart.
-        loaded, source = vocab.load_vocabulary()
-        vocab_cache = VocabularyCache(loaded, source,
-                                      refresh_seconds=settings.vocab_refresh_seconds)
-    else:
-        # Injected (tests): held as given, never refreshed.
-        vocab_cache = VocabularyCache(vocab_dict, "injected", refresh_seconds=0)
     store = DepositStore(client, settings.s3_bucket, settings.staging_prefix)
 
     app = FastAPI(title="CRSW web deposit", version=crsw_deposit.__version__,
@@ -185,6 +187,45 @@ def create_app(settings: Optional[Settings] = None,
                     sensitivity=sensitivity or None, subject=subject or None,
                     project=project or None)
 
+    def subject_view(cat: Catalogue, subject: str) -> Optional[Dict]:
+        """How a subject filter was read, for the page and the JSON feed:
+        the slugs it matched through the vocabulary and how (exact,
+        narrower, replaced, removed), a notice when the asked slug is
+        retired, and the option the form shows as chosen. None without
+        a subject filter."""
+        if not subject:
+            return None
+        matched, how = cat.expand(subject)
+        view = {"asked": subject, "matched": matched, "how": how,
+                "narrower": len(matched) - 1 if how == "narrower" else 0,
+                "notice": None, "selected": subject}
+        if how == "replaced":
+            successors = authority.map_subjects([subject], vocab_cache.current())[0]
+            view["notice"] = ("%s is no longer a current term; showing %s."
+                              % (subject, ", ".join(successors)))
+            view["selected"] = successors[0] if len(successors) == 1 else ""
+        elif how == "removed":
+            view["notice"] = ("%s was retired with no successor; nothing carries it now."
+                              % subject)
+            view["selected"] = ""
+        return view
+
+    def subject_public(view: Optional[Dict]) -> Optional[Dict]:
+        return {k: view[k] for k in ("asked", "matched", "how")} if view else None
+
+    def subject_groups(cat: Catalogue):
+        """[(facet, [term, ...])] for the subject select: the terms in use
+        and those above them, each with the figure spaces that indent it
+        under its parent."""
+        groups = []
+        for t in cat.subject_tree():
+            t = dict(t, pad="\u2007\u2007" * t["depth"])
+            facet = t["facet"] or "other"
+            if not groups or groups[-1][0] != facet:
+                groups.append((facet, []))
+            groups[-1][1].append(t)
+        return groups
+
     def asked(cat: Catalogue, user: User, ask: str, limit: Optional[int] = None):
         """Rows for a question in plain words, or None when asking is off
         or the question is blank (the ordinary search then applies)."""
@@ -217,11 +258,13 @@ def create_app(settings: Optional[Settings] = None,
         else:
             ask = ""
             results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
+        view = subject_view(cat, subject)
         return templates.TemplateResponse(request, "datasets.html", {
             "user": user, "q": q, "strand": strand, "state": state,
-            "sensitivity": sensitivity, "subject": subject,
+            "sensitivity": sensitivity, "subject": view["selected"] if view else subject,
             "strands": keys.STRANDS, "states": keys.STATES,
-            "sensitivities": keys.SENSITIVITIES, "subjects": cat.subjects(),
+            "sensitivities": keys.SENSITIVITIES, "subject_groups": subject_groups(cat),
+            "subject_filter": view, "subject_notice": view["notice"] if view else None,
             "results": results,
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
             "built_at": cat.built_at(), "error": cat.error,
@@ -238,12 +281,22 @@ def create_app(settings: Optional[Settings] = None,
         limit = max(1, min(limit, 500))
         ans = asked(cat, user, ask, limit=limit)
         if ans is not None:
-            return {"datasets": [public_row(r) for r in ans.rows], "built_at": cat.built_at(),
-                    "understood": ans.understood(), "filter": ans.filter,
-                    "steps": ans.steps, "notice": ans.notice}
+            out = {"datasets": [public_row(r) for r in ans.rows], "built_at": cat.built_at(),
+                   "understood": ans.understood(), "filter": ans.filter,
+                   "steps": ans.steps, "notice": ans.notice}
+            view = subject_view(cat, ans.filter.get("subject", ""))
+            if view:
+                out["subject_filter"] = subject_public(view)
+            return out
         rows = cat.search(limit=limit,
                           **search_args(q, strand, state, sensitivity, subject, project))
-        return {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
+        out = {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
+        view = subject_view(cat, subject)
+        if view:
+            out["subject_filter"] = subject_public(view)
+            if view["notice"]:
+                out["notice"] = view["notice"]
+        return out
 
     # --- search inside documents (finding-and-reuse.md §7) ------------------
 

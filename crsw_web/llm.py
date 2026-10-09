@@ -48,9 +48,28 @@ Reply with one JSON object and nothing else. Keys, all optional:
   "words": a short phrase (at most six words) to match in titles and abstracts
   "year_from", "year_to": four-digit years the data should cover
 Use a key only when the question clearly implies it. Do not invent values.
-Subject terms: {subjects}
+Subject terms by facet; a term listed under another is a narrower kind of it, so name the broadest that fits:
+{subjects}
 Project names: {projects}
 Strands: rs1 origins and legacies of slavery, rs2 contemporary slavery and armed conflict, rs3 law and policy, rs4 culture and representation."""
+
+def _subject_lines(subjects: Sequence[Dict]) -> str:
+    """The vocabulary as the chat model reads it: a facet per block, a
+    term under another indented two spaces more, the label in brackets
+    and the scope note after it where there is one."""
+    lines: List[str] = []
+    facet = None
+    for s in subjects:
+        if s.get("facet") != facet or not lines:
+            facet = s.get("facet")
+            lines.append(facet or "other")
+        line = "  " * (int(s.get("depth") or 0) + 1) + s["slug"]
+        line += " (%s)" % (s.get("label") or s["slug"])
+        if s.get("scope"):
+            line += ": " + " ".join(str(s["scope"]).split())
+        lines.append(line)
+    return "\n".join(lines)
+
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.S)
@@ -220,15 +239,18 @@ class Platform:
     # --- question to filter -------------------------------------------------
 
     def filter_for(self, question: str, strands: Sequence[str], states: Sequence[str],
-                   sensitivities: Sequence[str], subjects: Sequence[str],
+                   sensitivities: Sequence[str], subjects: Sequence[Dict],
                    projects: Sequence[str]) -> Dict[str, str]:
         """The filters a question implies, each value checked against the
-        allowed set. {} when the model answers with nothing usable: the
-        caller then searches on the question's words alone."""
+        allowed set. `subjects` is the vocabulary as a tree, each term
+        {facet, slug, depth, label, scope} in order (Catalogue.subject_tree);
+        the model sees it indented with the scope notes and may answer
+        with any slug in it. {} when the model answers with nothing
+        usable: the caller then searches on the question's words alone."""
         prompt = FILTER_PROMPT.format(
             strands=", ".join(strands), states=", ".join(states),
             sensitivities=", ".join(sensitivities),
-            subjects=", ".join(subjects) or "(none)",
+            subjects=_subject_lines(subjects) or "(none)",
             projects=", ".join(projects) or "(none)")
         body = self._post("/chat/completions", {
             "model": self.chat_model, "temperature": 0,
@@ -240,7 +262,8 @@ class Platform:
             log.info("question-to-filter reply was not JSON; searching on words only")
             return {}
         allowed = {"strand": set(strands), "state": set(states),
-                   "sensitivity": set(sensitivities), "subject": set(subjects),
+                   "sensitivity": set(sensitivities),
+                   "subject": {s["slug"] for s in subjects},
                    "project": set(projects)}
         out: Dict[str, str] = {}
         for k in FILTER_KEYS:

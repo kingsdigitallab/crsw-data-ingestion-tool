@@ -120,6 +120,38 @@ def tree(doc: dict, facet: str) -> List[Tuple[str, int]]:
     return out
 
 
+def expand_subject(doc, slug: str) -> Tuple[List[str], str]:
+    """The slugs a search for `slug` should match, and why. A current
+    term matches itself and every current term below it ("narrower"
+    when there are any, else "exact"). A retired term matches its
+    current successors, each expanded the same way ("replaced"), or
+    nothing when it has none ("removed"). An unknown slug, or a file
+    without the authority shape, is matched as typed. Never raises;
+    records never carry a retired term (the promoter rewrites them), so
+    without this a search for one would look like an empty store."""
+    if not is_authority(doc):
+        return [slug], "exact"
+    term = terms_by_slug(doc).get(slug)
+    if term is None:
+        return [slug], "exact"
+    if term.get("status") == "current":
+        below = narrower(doc, slug)
+        return [slug] + below, ("narrower" if below else "exact")
+    successors, _ = map_subjects([slug], doc)
+    out: List[str] = []
+    for s in successors:
+        for each in [s] + narrower(doc, s):
+            if each not in out:
+                out.append(each)
+    return out, ("replaced" if out else "removed")
+
+
+def ancestors(doc: dict, slug: str) -> List[str]:
+    """The terms above `slug`, nearest first; empty at the top level or
+    for an unknown slug."""
+    return _ancestors(terms_by_slug(doc), slug)
+
+
 def _ancestors(by_slug: Dict[str, dict], slug: str) -> List[str]:
     seen = []
     while slug in by_slug and by_slug[slug].get("broader"):

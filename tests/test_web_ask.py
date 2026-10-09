@@ -9,7 +9,7 @@ from tests.test_web_catalogue import (HAVE_WEB, CatalogueBase, META, GREEN, AMBE
 
 if HAVE_WEB:
     from fastapi.testclient import TestClient
-    from crsw_deposit import record
+    from crsw_deposit import authority, record
     from crsw_web import s3 as s3mod
     from crsw_web.app import create_app
     from crsw_web.catalogue import Catalogue, describe_filter, words_match, years_overlap
@@ -52,7 +52,8 @@ class FakePlatform:
         return self.fingerprint
 
     def filter_for(self, question, strands, states, sensitivities, subjects, projects):
-        self.filter_calls.append((question, tuple(subjects), tuple(projects)))
+        self.filter_calls.append((question, tuple(s["slug"] for s in subjects),
+                                  tuple(projects)))
         if "filter" in self.fail:
             raise PlatformError("platform returned HTTP 503 for /chat/completions")
         return dict(self.filter_reply)
@@ -102,9 +103,9 @@ class AskBase(CatalogueBase):
         rows[identifier]["model"] = model
         embed_mod.write(self.s3, "crsw", "index", list(rows.values()))
 
-    def app(self, platform=None, **overrides):
+    def app(self, platform=None, vocab=None, **overrides):
         settings = Settings(**dict(ASK, **overrides))
-        return TestClient(create_app(settings, s3_client=self.s3, vocab_dict=VOCAB,
+        return TestClient(create_app(settings, s3_client=self.s3, vocab_dict=vocab or VOCAB,
                                      read_client=s3mod.ReadOnly(self.s3), platform=platform))
 
     def ids(self, client, **params):
@@ -175,7 +176,7 @@ class TestAsk(AskBase):
         # green rows, the question again for the vector; the reranker got
         # fewer than two documents so was not called.
         self.assertEqual(p.filter_calls[0][0], "anything on conflict deaths since 1990")
-        self.assertEqual(p.filter_calls[0][1], ("armed-conflict", "forced-labour"))
+        self.assertEqual(p.filter_calls[0][1], ("forced-labour", "armed-conflict"))
         self.assertEqual(p.filter_calls[0][2], ("csac",))
         self.assertEqual(p.embed_calls, [["anything on conflict deaths since 1990"]])
         self.assertEqual(p.rerank_calls, [])
@@ -184,6 +185,27 @@ class TestAsk(AskBase):
         self.assertEqual(body["steps"], ["filter", "meaning"])
         self.assertEqual(body["filter"]["strand"], "rs2")
         self.assertIsNone(body["notice"])
+
+    def test_a_parent_the_model_picks_expands_to_its_narrower_terms(self):
+        vocab = authority.apply_change(VOCAB, {
+            "kind": "add", "to": ["interstate-war"], "facet": "contexts",
+            "label": "Interstate war", "broader": "armed-conflict",
+            "date": "2026-10-01", "by": "k1"})
+        wars = "rs2/csac/green/2_final/wars"
+        self.put_record(wars, dict(META, state="2_final", dataset="wars",
+                                   subject=["interstate-war"]),
+                        [record.manifest_entry("w.csv", "e" * 64, 10)],
+                        "k1078591", "44444444-4444-4444-8444-444444444444")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        p = FakePlatform(filter_reply={"subject": "armed-conflict"})
+        c = self.app(platform=p, vocab=vocab)
+        # A question whose words match nothing: the filter alone is the
+        # answer, and the parent the model chose covers the child.
+        self.assertEqual(sorted(self.ids(c, ask="anything in that context")), sorted([CLEAN, wars]))
+        # The model saw the parent above its child, in the vocabulary's order.
+        self.assertEqual(p.filter_calls[0][1], ("forced-labour", "armed-conflict", "interstate-war"))
+        body = c.get("/datasets.json", params={"ask": "anything in that context"}).json()
+        self.assertEqual(body["subject_filter"]["how"], "narrower")
 
     def test_meaning_orders_green_rows_and_amber_falls_through_to_words(self):
         self.embed_store()

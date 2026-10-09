@@ -19,7 +19,7 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from crsw_deposit import deposit_logic, record
+from crsw_deposit import authority, deposit_logic, record
 
 VOCAB = json.loads((Path(__file__).resolve().parent.parent
                     / "crsw_deposit" / "vocab.json").read_text(encoding="utf-8"))
@@ -77,9 +77,9 @@ class CatalogueBase(unittest.TestCase):
         # The promoter's own index builder is the producer.
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
 
-    def app(self, **overrides):
+    def app(self, vocab=None, **overrides):
         settings = Settings(**dict(READ, **overrides))
-        return TestClient(create_app(settings, s3_client=self.s3, vocab_dict=VOCAB,
+        return TestClient(create_app(settings, s3_client=self.s3, vocab_dict=vocab or VOCAB,
                                      read_client=s3mod.ReadOnly(self.s3)))
 
 
@@ -177,6 +177,91 @@ class TestFind(CatalogueBase):
         self.assertIn("no index at index/datasets.jsonl yet", page.text)
         # A record is still readable by identifier: the index only finds.
         self.assertEqual(c.get("/datasets/" + GREEN).status_code, 200)
+
+
+class TestHierarchy(CatalogueBase):
+    """Vocabulary handoff, part 1: a subject filter follows the hierarchy,
+    a retired slug finds its successors, and the select shows the tree."""
+    WARS = "rs2/csac/green/2_final/wars"
+    DISP = "rs2/csac/green/2_final/displaced"
+
+    def seed(self):
+        super().seed()
+        v = authority.apply_change(VOCAB, {
+            "kind": "add", "to": ["interstate-war"], "facet": "contexts",
+            "label": "Interstate war", "broader": "armed-conflict",
+            "date": "2026-10-01", "by": "k1"})
+        self.vocab = authority.apply_change(v, {
+            "kind": "rename", "from": ["forced-displacement"], "to": ["displacement"],
+            "date": "2026-10-02", "by": "k1"})
+        self.put_record(self.WARS, dict(META, state="2_final", dataset="wars",
+                                        subject=["interstate-war"]),
+                        [record.manifest_entry("wars.csv", "e" * 64, 10)],
+                        "k1078591", "44444444-4444-4444-8444-444444444444")
+        self.put_record(self.DISP, dict(META, state="2_final", dataset="displaced",
+                                        subject=["displacement"]),
+                        [record.manifest_entry("d.csv", "f" * 64, 10)],
+                        "k1078591", "55555555-5555-4555-8555-555555555555")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+
+    def ids(self, client, **params):
+        return [d["identifier"]
+                for d in client.get("/datasets.json", params=params).json()["datasets"]]
+
+    def test_a_parent_finds_a_dataset_tagged_only_with_its_child(self):
+        c = self.app(vocab=self.vocab)
+        page = c.get("/datasets", params={"subject": "armed-conflict"})
+        self.assertIn('href="/datasets/%s"' % self.WARS, page.text)
+        self.assertNotIn(GREEN, page.text)
+        self.assertIn("1 dataset with subject armed-conflict (and 1 narrower term)", page.text)
+        self.assertNotIn(self.WARS, c.get("/datasets", params={"subject": "occupation"}).text)
+        self.assertEqual(self.ids(c, subject="interstate-war"), [self.WARS])
+
+    def test_the_json_feed_agrees_and_says_what_it_matched(self):
+        c = self.app(vocab=self.vocab)
+        body = c.get("/datasets.json", params={"subject": "armed-conflict"}).json()
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [self.WARS])
+        self.assertEqual(body["subject_filter"],
+                         {"asked": "armed-conflict",
+                          "matched": ["armed-conflict", "interstate-war"], "how": "narrower"})
+        self.assertNotIn("subject_filter", c.get("/datasets.json").json())
+
+    def test_a_retired_slug_finds_its_successor_with_a_notice(self):
+        c = self.app(vocab=self.vocab)
+        page = c.get("/datasets", params={"subject": "forced-displacement"})
+        self.assertIn('href="/datasets/%s"' % self.DISP, page.text)
+        self.assertIn("forced-displacement is no longer a current term; showing displacement.",
+                      page.text)
+        self.assertIn('<option value="displacement" selected>', page.text)
+        body = c.get("/datasets.json", params={"subject": "forced-displacement"}).json()
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [self.DISP])
+        self.assertEqual(body["subject_filter"]["how"], "replaced")
+        self.assertIn("showing displacement", body["notice"])
+
+    def test_a_retired_slug_with_no_successor_matches_nothing_and_says_so(self):
+        v = authority.apply_change(self.vocab, {"kind": "retire", "from": ["maritime"],
+                                                "date": "2026-10-03", "by": "k1"})
+        page = self.app(vocab=v).get("/datasets", params={"subject": "maritime"})
+        self.assertIn("maritime was retired with no successor; nothing carries it now.",
+                      page.text)
+        self.assertIn("0 datasets", page.text)
+
+    def test_the_select_is_grouped_by_facet_and_shows_the_tree(self):
+        html = self.app(vocab=self.vocab).get("/datasets").text
+        self.assertIn('<optgroup label="contexts">', html)
+        # The parent is offered although no dataset carries it directly.
+        self.assertIn('<option value="armed-conflict">Armed conflict (armed-conflict)</option>',
+                      html)
+        self.assertIn('<option value="interstate-war">\u2007\u2007Interstate war '
+                      '(interstate-war)</option>', html)
+        self.assertNotIn('value="occupation"', html)            # not in use, not above one
+        self.assertNotIn('value="forced-displacement"', html)   # retired
+
+    def test_a_flat_vocabulary_is_a_plain_list(self):
+        html = self.app().get("/datasets").text
+        self.assertIn('<option value="forced-labour">Forced labour (forced-labour)</option>',
+                      html)
+        self.assertNotIn("\u2007", html)
 
 
 class TestDownload(CatalogueBase):

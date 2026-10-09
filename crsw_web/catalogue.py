@@ -23,7 +23,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from botocore.exceptions import ClientError
 
-from crsw_deposit import keys, record
+from crsw_deposit import authority, keys, record
 
 from .llm import PlatformError
 
@@ -114,16 +114,25 @@ def words_match(row: Dict, words: str, all_of: bool) -> bool:
     return all(t in hay for t in tokens) if all_of else any(t in hay for t in tokens)
 
 
+def _plain_term(slug: str) -> Dict:
+    return {"facet": "", "slug": slug, "depth": 0, "label": slug, "scope": ""}
+
+
 class Catalogue:
     def __init__(self, client, bucket: str, index_prefix: str = "index",
                  refresh_seconds: int = 60,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 vocabulary: Optional[Callable[[], Dict]] = None):
         self._client = client
         self._bucket = bucket
         self._index_key = index_prefix.strip("/") + "/" + INDEX_NAME
         self._embed_key = index_prefix.strip("/") + "/" + EMBEDDINGS_NAME
         self.refresh_seconds = refresh_seconds
         self._clock = clock
+        # The vocabulary of the moment (the app's cache), asked for at
+        # query time so a merged change reaches the subject filter without
+        # a restart. None: subjects match as typed.
+        self._vocabulary = vocabulary
         self._lock = threading.Lock()
         self._rows: Optional[List[Dict]] = None
         self._loaded_at: Optional[float] = None
@@ -218,8 +227,11 @@ class Catalogue:
                subject: Optional[str] = None, project: Optional[str] = None,
                limit: Optional[int] = None) -> List[Dict]:
         """Case-insensitive substring match over the descriptive fields;
-        the other arguments are exact filters. Newest modified first."""
+        `subject` follows the vocabulary (`expand`: the term and every
+        term under it, or a retired term's successors); the other
+        arguments are exact filters. Newest modified first."""
         needle = (q or "").strip().lower()
+        wanted = set(self.expand(subject)[0]) if subject else None
         out = []
         for r in self.rows():
             if strand and r.get("strand") != strand:
@@ -230,7 +242,7 @@ class Catalogue:
                 continue
             if project and r.get("project") != project:
                 continue
-            if subject and subject not in (r.get("subject") or []):
+            if wanted is not None and not wanted.intersection(r.get("subject") or []):
                 continue
             if needle:
                 hay = " ".join(str(r.get(f) or "") for f in SEARCH_FIELDS)
@@ -257,6 +269,44 @@ class Catalogue:
     def projects(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:
         return sorted({r.get("project") for r in self._rows_of(sensitivities)
                        if r.get("project")})
+
+    # --- the vocabulary's view of the subjects ------------------------------
+
+    def expand(self, subject: str) -> Tuple[List[str], str]:
+        """What a subject filter matches, from the vocabulary of the
+        moment (authority.expand_subject): the term and every term under
+        it, or a retired term's successors. Without a vocabulary, the
+        term as typed."""
+        if self._vocabulary is None:
+            return [subject], "exact"
+        return authority.expand_subject(self._vocabulary(), subject)
+
+    def subject_tree(self, sensitivities: Optional[Sequence[str]] = None) -> List[Dict]:
+        """The subject terms a filter may name, in the vocabulary's order:
+        every term in use on the rows (of the given sensitivities) and
+        every term above one, so a broad question can name a parent;
+        each as {facet, slug, depth, label, scope}. Without a vocabulary,
+        or with a flat pre-r9 file, the terms in use at depth 0."""
+        used = self.subjects(sensitivities)
+        doc = self._vocabulary() if self._vocabulary is not None else None
+        if not authority.is_authority(doc):
+            return [_plain_term(s) for s in used]
+        by_slug = authority.terms_by_slug(doc)
+        keep = set(used)
+        for slug in used:
+            keep.update(authority.ancestors(doc, slug))
+        out = []
+        for facet in authority.facet_order(doc):
+            for slug, depth in authority.tree(doc, facet):
+                if slug in keep:
+                    t = by_slug[slug]
+                    out.append({"facet": facet, "slug": slug, "depth": depth,
+                                "label": t.get("label") or slug,
+                                "scope": t.get("scope") or ""})
+        known = {o["slug"] for o in out}
+        # A term the vocabulary no longer knows (a record not yet rewritten).
+        out.extend(_plain_term(s) for s in used if s not in known)
+        return out
 
     # --- asking in plain words (finding-and-reuse.md §5) -------------------
 
@@ -317,7 +367,7 @@ class Catalogue:
                 # of the prompt, like their abstracts.
                 ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
                                                  keys.SENSITIVITIES,
-                                                 self.subjects(sensitivities),
+                                                 self.subject_tree(sensitivities),
                                                  self.projects(sensitivities))
                 ans.steps.append("filter")
             except PlatformError as e:

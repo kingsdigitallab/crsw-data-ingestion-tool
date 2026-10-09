@@ -88,7 +88,14 @@ class TestEmbed(unittest.TestCase):
 class TestFilterFor(unittest.TestCase):
     ARGS = dict(strands=("rs1", "rs2"), states=("0_raw", "2_final"),
                 sensitivities=("green", "amber"),
-                subjects=("armed-conflict", "forced-labour"), projects=("csac",))
+                subjects=({"facet": "practices", "slug": "forced-labour", "depth": 0,
+                           "label": "Forced labour",
+                           "scope": "Work exacted under menace of penalty."},
+                          {"facet": "contexts", "slug": "armed-conflict", "depth": 0,
+                           "label": "Armed conflict", "scope": ""},
+                          {"facet": "contexts", "slug": "interstate-war", "depth": 1,
+                           "label": "Interstate war", "scope": "War between states."}),
+                projects=("csac",))
 
     def reply(self, content):
         def handler(request):
@@ -107,7 +114,11 @@ class TestFilterFor(unittest.TestCase):
         self.assertEqual(self.request["model"], "arc:lite")
         self.assertEqual(self.request["temperature"], 0)
         system = self.request["messages"][0]["content"]
-        self.assertIn("armed-conflict, forced-labour", system)
+        # The tree, a facet per block, a term under another indented, the
+        # scope note after the label where there is one.
+        self.assertIn("practices\n  forced-labour (Forced labour): Work exacted under menace "
+                      "of penalty.\ncontexts\n  armed-conflict (Armed conflict)\n"
+                      "    interstate-war (Interstate war): War between states.\n", system)
         self.assertIn("csac", system)
         self.assertEqual(self.request["messages"][1]["content"], "deaths in conflicts since 1990")
 

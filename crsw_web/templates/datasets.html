@@ -56,13 +56,14 @@
         </div>
         <div class="field">
           <label for="subject">Subject</label>
-          <select id="subject" name="subject"><option value="">any</option>{% for s in subjects %}<option value="{{ s }}"{% if s == subject %} selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+          <select id="subject" name="subject"><option value="">any</option>{% for facet, terms in subject_groups %}<optgroup label="{{ facet }}">{% for t in terms %}<option value="{{ t.slug }}"{% if t.slug == subject %} selected{% endif %}>{{ t.pad }}{{ t.label }} ({{ t.slug }})</option>{% endfor %}</optgroup>{% endfor %}</select>
         </div>
       </div>
       <div class="actions"><button class="primary" type="submit">Search</button> <a href="/datasets">Clear</a></div>
     </form>
 
-    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}</p>
+    {% if subject_notice %}<p class="notice">{{ subject_notice }}</p>{% endif %}
+    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}</p>
     {% if results %}
     <table class="files results">
       <thead><tr><th>Dataset</th><th>Where</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>
