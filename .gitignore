@@ -15,3 +15,7 @@ scratch/
 .env.promoter
 promoter.log
 *.egg-info/
+
+# local data: the passages DuckDB copy and anything else under .local/
+.local/
+*.duckdb
