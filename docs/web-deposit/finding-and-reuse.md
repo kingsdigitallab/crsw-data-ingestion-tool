@@ -242,6 +242,20 @@ and a filter that matches nothing relaxes to the closest datasets with a
 notice. Ranking is in memory (NumPy), which is right for one vector per
 dataset; section 7 says what changes for passages.
 
+*9 October, the vocabulary's hierarchy:* a subject filter, typed or chosen by
+the model, matches the term and every term under it in the vocabulary of the
+moment (`authority.expand_subject`, asked of the app's vocabulary cache at
+query time, so a merged change counts without a restart), and the count line
+says so. A retired slug finds its successors with a notice, since records
+never carry one. The chat model is given the subject terms as a tree,
+indented, with scope notes where the vocabulary has them, and may name a
+parent for a broad question. `/datasets.json` carries `subject_filter`
+(asked, matched, how) so the form's picker and any other reader see the
+same expansion. One known divergence: cdisaw-parquet's datasets tab reads
+`index/datasets.parquet` and filters by exact slug, so it does not follow
+the hierarchy until it reads `/datasets.json` instead. The handoff note
+`vocabulary-hierarchy-and-scope-notes-handoff.md` has the reasoning.
+
 **Switches, so any part can be turned off without touching code.** Each
 function is off when its model name is blank (`CRSW_LLM_CHAT_MODEL`,
 `CRSW_LLM_EMBED_MODEL`, `CRSW_LLM_RERANK_MODEL`; `PROMOTER_LLM_EMBED_MODEL`),

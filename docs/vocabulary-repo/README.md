@@ -40,6 +40,10 @@ The next deposit anywhere uses the new file.
 What each change does to datasets already in the store:
 
 - **Add** and **move**: nothing. Existing datasets keep their terms.
+  A term may be placed under a broader one; the deposit service treats
+  a search for the broader term as including everything under it, so
+  a narrower term is safe to approve: datasets tagged with it are still
+  found by the broader one.
 - **Rename** and **merge**: every dataset carrying the old term gets the
   new one, with a history entry by "vocabulary".
 - **Split**: every dataset carrying the old term gets **all** the
