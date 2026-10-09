@@ -5,7 +5,20 @@
 > ancestors (not the whole vocabulary); a retired term with no successor is
 > a fourth outcome, `removed`, with its own notice; the live vocabulary
 > was already hierarchical (five contexts under `armed-conflict` since
-> 24 September), so the checkpoints ran against live data. Part 2 follows.
+> 24 September), so the checkpoints ran against live data.
+>
+> Part 2 built and committed the same day. Departures: an alias must be
+> unique across current terms and is never a current term's slug; the
+> `add` change entry does not carry `scope` or `aliases` (the term does);
+> `describe` leaves `vocabulary_version` alone; the form keeps the slug as
+> the checkbox text and puts the note in a `<details>` after it, no new
+> script; vectors are keyed to their text (`text_sha`) rather than
+> rebuilt by hand, so a note edited later re-embeds only its carriers, and
+> the quiet run checks the text too, reading the index in place. The kit
+> changes under `docs/vocabulary-repo/` still need a human pull request to
+> the live repository, and its apply-issue workflow installs the tool from
+> `main`, so `describe` must be pushed before the "Describe a term" form
+> works there. The "First content" below remains a proposal.
 
 Written 9 October 2026 from a design conversation with Neil. Repos: `crsw-data-ingestion-tool` and the public `kingsdigitallab/crsw-vocabulary`. Two related proposals for the Claude Code session, in the order they should land. Stop at the checkpoints and wait for review, as `docs/web-deposit/plan.md` requires. Nothing here touches `crsw_deposit/`'s stdlib-only rule or writes to the vocabulary repo from the tool.
 

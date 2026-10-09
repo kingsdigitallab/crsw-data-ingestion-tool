@@ -33,7 +33,7 @@ python -m promoter datasets [--strand rsN] [--json]                          # e
 pandoc docs/how-to-deposit.md -o docs/how-to-deposit.docx --reference-doc docs/style/kdl-reference.docx   # rebuild the researcher guide's Word copy after editing the Markdown
 python -m promoter index [--embed]                                           # rebuild index/datasets.{jsonl,parquet} (+ embeddings.parquet via the LLM platform); run/recategorise do it after a change
 python -m promoter passages [--dataset ID | --strand rsN]                    # passages of text-bearing files under index/passages/ (PROMOTER_PASSAGES=1); run does it for what it promoted
-python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merge|split|retire|move   # crsw-vocab
+python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merge|split|retire|move|describe   # crsw-vocab; describe = scope note or other spellings, no change entry
 ```
 
 `--dry-run` with full flags is the support reproduction path and the CLI parity check; keep it working and keep its output stable.

@@ -173,9 +173,12 @@ fetched live so newly approved terms are available immediately. If the fetch
 fails (offline, VPN restrictions) the tool falls back to a cached copy, then
 to the bundled `vocab.json`, and says which one it used. The subject listing
 is shown, numbered, before you're asked — answer with numbers, terms, or a
-mix. Unknown terms are refused — propose additions via the vocabulary
-repository or your domain steward. Choosing a domain fills in its steward
-automatically.
+mix. Type `?` and a number or term (`?3`, `?forced-marriage`) to read what
+a term covers before choosing it. Another spelling the vocabulary knows
+(`child-soldiers` for `child-soldiering`) is accepted and the term put in
+its place, with a line saying so. Unknown terms are refused — propose
+additions via the vocabulary repository or your domain steward. Choosing a
+domain fills in its steward automatically.
 
 The vocabulary file is a **term authority file** (r9): it lists every term
 ever approved, current or retired, with the date each came in, what
@@ -231,13 +234,18 @@ The vocabulary lives at
 [kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),
 which is public, so every tool fetches the current file at run time. To
 propose a change, open an issue there and pick the form for it (add,
-rename, merge, split, retire, move); the form becomes a pull request for
-a steward to approve. The same edits can be made from a laptop with
-`crsw-vocab` (installed with `pip install -e .` from this repository):
+rename, merge, split, retire, move, describe); the form becomes a pull
+request for a steward to approve. A term may carry a scope note (what it
+covers and excludes, with the source of the definition) and other
+spellings; both are description, not identity, so `describe` changes
+them in place with no entry in the change list and no new version. The
+same edits can be made from a laptop with `crsw-vocab` (installed with
+`pip install -e .` from this repository):
 
 ```
 crsw-vocab --file vocab.json validate
 crsw-vocab --file vocab.json merge debt-bondage --into forced-labour --note "issue #12"
+crsw-vocab --file vocab.json describe child-soldiering --scope "Recruitment or use of a person under 18 by an armed force or group." --alias child-soldiers
 ```
 
 ## Output

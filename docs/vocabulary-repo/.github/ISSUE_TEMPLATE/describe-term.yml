@@ -1,0 +1,37 @@
+name: Describe a term
+description: Set or change a term's scope note or other spellings. The term itself is unchanged and no dataset changes.
+title: "Describe term: "
+labels: ["change:describe"]
+body:
+  - type: input
+    id: term
+    attributes:
+      label: Term
+      description: The slug, e.g. forced-marriage. Current or retired.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope note (optional)
+      description: One sentence saying what the term covers, what it excludes, and the source of the definition where there is one. Replaces the note it has.
+  - type: input
+    id: aliases
+    attributes:
+      label: Other spellings (optional)
+      description: Other slugs people type for it, comma-separated, e.g. child-soldiers. Never shown as terms; the deposit tool resolves them.
+  - type: dropdown
+    id: mode
+    attributes:
+      label: The other spellings above are
+      options:
+        - added to those it has
+        - all of them (replace those it has)
+      default: 0
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+      description: Where the definition comes from, or what prompted the change.
+    validations:
+      required: true

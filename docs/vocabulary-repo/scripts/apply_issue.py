@@ -44,6 +44,11 @@ def slug_lines(text: str):
     return [l.strip() for l in text.splitlines() if l.strip()]
 
 
+def spellings(text: str):
+    """Other spellings as typed: comma- or line-separated slugs."""
+    return [s.strip() for s in text.replace("\n", ",").split(",") if s.strip()]
+
+
 def main() -> int:
     form = fields(os.environ.get("ISSUE_BODY", ""))
     labels = [l.strip() for l in os.environ.get("ISSUE_LABELS", "").split(",")]
@@ -59,12 +64,29 @@ def main() -> int:
     if date:
         common += ["--date", date]
 
-    if kind == "add":
+    if kind == "describe":
+        # Description, not a change: no --by, --date or --note, no change
+        # entry; the pull request itself is the record.
+        term = value(form, "Term")
+        argv = ["describe", term]
+        scope = value(form, "Scope note (optional)", required=False)
+        if scope:
+            argv += ["--scope", " ".join(scope.split())]
+        for alias in spellings(value(form, "Other spellings (optional)", required=False)):
+            argv += ["--alias", alias]
+        if value(form, "The other spellings above are", required=False).startswith("all"):
+            argv.append("--clear-aliases")
+        common = []
+        title = "describe %s" % term
+    elif kind == "add":
         argv = ["add", value(form, "Slug"), "--facet", value(form, "Facet"),
-                "--label", value(form, "Label")]
+                "--label", value(form, "Label"),
+                "--scope", " ".join(value(form, "Scope note").split())]
         broader = value(form, "Broader term (optional)", required=False)
         if broader:
             argv += ["--broader", broader]
+        for alias in spellings(value(form, "Other spellings (optional)", required=False)):
+            argv += ["--alias", alias]
         title = "add %s" % value(form, "Slug")
     elif kind == "rename":
         argv = ["rename", value(form, "Old term"), value(form, "New term")]

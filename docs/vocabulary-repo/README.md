@@ -31,6 +31,7 @@ Open an issue and pick the form for what you want:
 | Split a term | one term that has come to mean several things; it is retired and points to all its successors |
 | Retire a term | a term nobody should use any more, with no successor |
 | Move a term | a term goes under a different broader term, or to the top level |
+| Describe a term | a scope note (what the term covers and excludes) or other spellings; the term itself is unchanged |
 
 Submitting the form opens a pull request with the change applied. Read
 the pull request's diff: it should touch only the term(s) named, the
@@ -53,6 +54,27 @@ What each change does to datasets already in the store:
 - **Retire**: the term is removed from every dataset carrying it. A
   dataset always keeps at least one term; if retirement would leave
   none, the promoter refuses that dataset and says so.
+- **Describe**: nothing. A scope note or another spelling is
+  description, not identity, so it goes on the term's line without an
+  entry in the change list; the pull request is the record.
+
+## Scope notes
+
+Every term should carry a scope note, and the "Add a term" form asks
+for one: a steward should not approve a term nobody has defined. The
+deposit form shows it to depositors choosing terms, the find page shows
+it on a term, and the search service reads it when matching a question
+to terms. A good scope note is one sentence of definition, then what the
+term does not cover, then the source of the definition where there is
+one, for example: "Marriage or marriage-like union entered without free
+and full consent, including servile marriage under the 1956
+Supplementary Convention art. 1(c). Use for conflict and non-conflict
+settings alike; the context facet says which."
+
+Other spellings (`aliases`) are slugs people type for a term, such as
+`child-soldiers` for `child-soldiering`. The deposit tool substitutes
+the term and says so; they are never stored in a record or shown as
+terms, and one may not be a current term's slug.
 
 ## The file, briefly
 
@@ -63,7 +85,9 @@ What each change does to datasets already in the store:
   "activities": [...],
   "terms": [
     {"slug": "forced-labour", "facet": "practices", "label": "Forced labour",
-     "status": "current", "since": "2026-07-23"},
+     "status": "current", "since": "2026-07-23",
+     "scope": "Work or service exacted under the menace of a penalty and not offered voluntarily (ILO Convention 29, art. 2).",
+     "aliases": ["forced-work"]},
     {"slug": "debt-bondage", "facet": "practices", "label": "Debt bondage",
      "status": "retired", "since": "2026-07-23", "until": "2026-10-01",
      "replaced_by": ["forced-labour"]}
@@ -79,7 +103,9 @@ What each change does to datasets already in the store:
 `terms` is every term ever approved. `changes` is append-only: an entry
 is never edited or removed. `facets` is derived from the current terms
 and kept for older readers. A term may name a `broader` term in the same
-facet; if none does, the vocabulary is flat, which is fine.
+facet; if none does, the vocabulary is flat, which is fine. `scope` and
+`aliases` are the term's description (see "Scope notes") and may be
+edited in place.
 
 The rules are enforced by the deposit tool's validator, which runs on
 every pull request here (`.github/workflows/validate.yml`) and inside
@@ -93,6 +119,7 @@ every tool before it trusts a fetched file. The full specification is
 pip install "git+https://github.com/kingsdigitallab/crsw-data-ingestion-tool@main"
 crsw-vocab --file vocab.json validate
 crsw-vocab --file vocab.json merge debt-bondage --into forced-labour --by k1078591 --note "issue #12"
+crsw-vocab --file vocab.json describe forced-marriage --scope "Marriage or marriage-like union entered without free and full consent ..."
 git checkout -b change/merge-debt-bondage && git commit -am "merge debt-bondage into forced-labour" && git push -u origin HEAD
 gh pr create --fill
 ```

@@ -113,8 +113,9 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **Roll back**: check out the previous tag and rebuild; images are reproducible from the tag.
 - **Disk**: after an upgrade run `docker system prune -f` to drop the old image layers. Logs are rotated by compose; `docker system df` shows what Docker holds.
 - **Vocabulary change merged**: the web service re-fetches the vocabulary every `CRSW_VOCAB_REFRESH_SECONDS` (default 600), so a merged change is in the form within ten minutes; `docker compose -f deploy/compose.yaml restart deposit-web` makes it immediate. `GET /vocabulary` shows the version, source and load time the service is using.
+- **Scope note or other spelling edited** (`describe`, or the "Describe a term" form; no new vocabulary version): nothing to do. The form and the find pages show it after the next refresh; the next promoter run, quiet or not, re-embeds only the datasets carrying that term and logs `embed_text_changed`.
 - **Rotate a key**: edit the env file, restart the service (web) or nothing (promoter picks it up next run). Old key revoked by eResearch.
-- **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the find page says "Ranking by meaning is off until the index is rebuilt for the current embedding model" and the search page "These passages were made with a different embedding model", and word search keeps working. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias. The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
+- **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the find page says "Ranking by meaning is off until the index is rebuilt for the current embedding model" and the search page "These passages were made with a different embedding model", and word search keeps working. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias (and, from v0.11, no `text_sha`). The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
 - **Check the service key's scope** after any policy change: `CRSW_INTEGRATION=1 .venv/Scripts/python -m pytest tests/test_integration_cluster.py` from a laptop on the VPN.
@@ -243,11 +244,16 @@ and `PROMOTER_LLM_EMBED_MODEL` set, the same runs also refresh
 platform from the record's title, abstract, subject terms and source
 note, never from a file. Only records of the sensitivities in
 `PROMOTER_LLM_SENSITIVITIES` (green by default) are sent; the others get
-a row with no vector. The work is incremental (a row is kept when its
-identifier, modified stamp, model and vector length are unchanged), the
-vectors are cut to `PROMOTER_LLM_EMBED_DIMS` numbers and stored at half
-precision, and a failure is logged as `embeddings_failed` without
-changing the run's exit code. `$P index --embed` rebuilds by hand. On the
+a row with no vector. Subject terms go in as their label and scope note
+from the vocabulary of the day ("Forced labour: work exacted under the
+menace of a penalty"), never as the bare slug. The work is incremental
+(a row is kept when its identifier, modified stamp, model, vector length
+and the text it was made from, `text_sha`, are unchanged), so a scope
+note or label edited in the vocabulary re-embeds the rows carrying that
+term on the next run, a quiet one included (`embed_text_changed`, with
+the count); the vectors are cut to `PROMOTER_LLM_EMBED_DIMS` numbers and
+stored at half precision, and a failure is logged as `embeddings_failed`
+without changing the run's exit code. `$P index --embed` rebuilds by hand. On the
 laptop, before the internal VM can reach the platform, that command with
 the key in `.env.promoter` does the same job. "Model" here is not the
 alias in the configuration but what the platform says is behind it

@@ -256,6 +256,23 @@ same expansion. One known divergence: cdisaw-parquet's datasets tab reads
 the hierarchy until it reads `/datasets.json` instead. The handoff note
 `vocabulary-hierarchy-and-scope-notes-handoff.md` has the reasoning.
 
+*9 October, scope notes:* a term may carry `scope` (what it covers and
+excludes, the source of the definition) and `aliases` (other spellings),
+set by `crsw-vocab describe` or the vocabulary repo's "Describe a term"
+form with no change entry and no new version, since description is not
+identity. The deposit form shows the note under the term ("what this
+covers", a `<details>`, no script) and as hover text; the CLI prints it
+for `?term` and accepts an alias, saying which term it used; the dataset
+page shows each subject as label, slug and note, linked to the filter;
+the chat model's term list carries the notes, the single biggest help to
+its choice. The embedded text names each subject by label and note, one
+line each after the abstract so a long note cannot swamp a short one,
+and every vector is keyed to the text it was made from (`text_sha`): a
+note edited later re-embeds exactly the rows carrying that term, on the
+next promoter run, a quiet one included (the quiet run reads the index in
+place, one GET, not every record). The first run after this version
+re-embeds everything once, for the fingerprint and the text together.
+
 **Switches, so any part can be turned off without touching code.** Each
 function is off when its model name is blank (`CRSW_LLM_CHAT_MODEL`,
 `CRSW_LLM_EMBED_MODEL`, `CRSW_LLM_RERANK_MODEL`; `PROMOTER_LLM_EMBED_MODEL`),
