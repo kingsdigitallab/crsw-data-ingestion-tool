@@ -36,7 +36,7 @@ except ImportError:                      # pragma: no cover
 log = logging.getLogger("crsw.passages")
 
 COLUMNS = ("identifier", "dataset_uuid", "sensitivity", "member", "checksum", "page",
-           "position", "words", "text", "dimension")
+           "position", "words", "text", "dimension", "model")
 
 # --- saying why a passage matched -------------------------------------------------
 # A vector cannot say which words matched; it can say which sentence of a
@@ -146,6 +146,12 @@ class PassageIndex:
             self._w.execute("DELETE FROM files")
         elif stored:
             self.dims = int(stored[0])
+        if self._has_table() and not self._has_column("model"):
+            # A copy from before vectors were keyed to a fingerprint: the
+            # same treatment, emptied and refilled from the bucket.
+            log.info("passages copy predates the model column: rebuilding")
+            self._w.execute("DROP TABLE IF EXISTS passages")
+            self._w.execute("DELETE FROM files")
         if self.dims:
             self._ensure_table()
 
@@ -160,12 +166,17 @@ class PassageIndex:
             "CREATE TABLE IF NOT EXISTS passages ("
             "identifier VARCHAR, dataset_uuid VARCHAR, sensitivity VARCHAR, member VARCHAR, "
             "checksum VARCHAR, page INTEGER, position INTEGER, words INTEGER, text VARCHAR, "
-            "dimension INTEGER, embedding FLOAT[%d], key VARCHAR)" % self.dims)
+            "dimension INTEGER, model VARCHAR, embedding FLOAT[%d], key VARCHAR)" % self.dims)
         self._w.execute("INSERT OR REPLACE INTO meta VALUES ('dims', ?)", [str(self.dims)])
 
     def _has_table(self, con=None) -> bool:
         return bool((con or self._w).execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name = 'passages'").fetchone())
+
+    def _has_column(self, name: str) -> bool:
+        return bool(self._w.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'passages' "
+            "AND column_name = ?", [name]).fetchone())
 
     # --- keeping in step with the bucket -----------------------------------------------
 
@@ -293,7 +304,7 @@ class PassageIndex:
     def search(self, vector: Sequence[float], limit: int = 20,
                sensitivities: Optional[Sequence[str]] = None,
                phrase: str = "", stems: Sequence[str] = (),
-               by_meaning: bool = False) -> List[Dict]:
+               by_meaning: bool = False, model: Optional[str] = None) -> List[Dict]:
         """Passages, best first, each a dict with a `score` (cosine) and a
         `why`: "phrase" when the passage contains the words as typed,
         "words" when it contains every telling word of the question, else
@@ -301,16 +312,20 @@ class PassageIndex:
         meaning, so a passage someone has seen and types back is found.
         A passage under MIN_WORDS is noise to a vector and is shown only
         on a phrase or words match. With `by_meaning` the order is by
-        similarity alone (each still says why)."""
+        similarity alone (each still says why). With `model`, only
+        passages whose vector was made with that fingerprint are
+        searched: a vector from another model is never scored against
+        the question's."""
         self._maybe_sync()
         con = self._cursor()
         try:
-            return self._search(con, vector, limit, sensitivities, phrase, stems, by_meaning)
+            return self._search(con, vector, limit, sensitivities, phrase, stems, by_meaning,
+                                model)
         finally:
             con.close()
 
     def _search(self, con, vector, limit, sensitivities, phrase, stems,
-                by_meaning) -> List[Dict]:
+                by_meaning, model=None) -> List[Dict]:
         if not self.dims or not self._has_table(con):
             return []
         vec = [float(x) for x in vector]
@@ -336,17 +351,20 @@ class PassageIndex:
             sens = list(sensitivities) or [""]
             where += " AND sensitivity IN (%s)" % ", ".join("?" for _ in sens)
             params += sens
+        if model is not None:
+            where += " AND model = ?"
+            params.append(model)
         params.append(int(limit))
         rows = con.execute(
             "SELECT * FROM (SELECT identifier, dataset_uuid, sensitivity, member, page, position, "
-            "words, text, array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score, "
+            "words, text, model, array_cosine_similarity(embedding, ?::FLOAT[%d]) AS score, "
             "(%s) AS phrase, (%s) AS allwords FROM passages)%s "
             "ORDER BY %s LIMIT ?"
             % (self.dims, phrase_sql, words_sql, where,
                "score DESC" if by_meaning else "phrase DESC, allwords DESC, score DESC"),
             params).fetchall()
         names = ("identifier", "dataset_uuid", "sensitivity", "member", "page", "position",
-                 "words", "text", "score", "phrase", "allwords")
+                 "words", "text", "model", "score", "phrase", "allwords")
         out = []
         for r in rows:
             d = dict(zip(names, r))
@@ -372,18 +390,27 @@ class PassageIndex:
             return None
         return dict(zip(("identifier", "sensitivity", "member", "page", "position", "text"), row))
 
-    def stats(self) -> Dict:
+    def stats(self, model: Optional[str] = None) -> Dict:
+        """Counts; with `model`, also `current`: the passages whose vector
+        was made with that fingerprint, the ones a search can use."""
         self._maybe_sync()
         con = self._cursor()
         try:
             if not self._has_table(con):
-                return {"passages": 0, "datasets": 0, "files": 0}
+                out = {"passages": 0, "datasets": 0, "files": 0}
+                if model is not None:
+                    out["current"] = 0
+                return out
             passages, datasets, files = con.execute(
                 "SELECT count(*), count(DISTINCT identifier), count(DISTINCT member || identifier) "
                 "FROM passages").fetchone()
+            out = {"passages": passages, "datasets": datasets, "files": files}
+            if model is not None:
+                out["current"] = con.execute(
+                    "SELECT count(*) FROM passages WHERE model = ?", [model]).fetchone()[0]
         finally:
             con.close()
-        return {"passages": passages, "datasets": datasets, "files": files}
+        return out
 
 
 def open_index(client, bucket: str, index_prefix: str, path: str, refresh_seconds: int,

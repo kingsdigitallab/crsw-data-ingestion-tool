@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import re
+import time
 from typing import Dict, List, Optional, Sequence
 
 import httpx
@@ -28,6 +29,9 @@ DEFAULT_RERANK_MODEL = "arc:rerankvl"
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_EMBED_DIMS = 1024   # keep the first N numbers of each vector (see embed)
 EMBED_BATCH = 32
+# How long a resolved embed fingerprint is trusted before GET /models is
+# asked again (the web passes its index cycle; the promoter asks once).
+DEFAULT_FINGERPRINT_SECONDS = 300.0
 
 # The filter a question is turned into. Each value is checked against
 # the allowed set before it is used; anything else is dropped.
@@ -64,6 +68,7 @@ class Platform:
                  embed_model: str = DEFAULT_EMBED_MODEL,
                  rerank_model: str = DEFAULT_RERANK_MODEL,
                  timeout: float = DEFAULT_TIMEOUT, embed_dims: Optional[int] = None,
+                 fingerprint_seconds: float = DEFAULT_FINGERPRINT_SECONDS,
                  transport=None):
         if not base_url or not api_key:
             raise ValueError("base_url and api_key are required")
@@ -73,6 +78,10 @@ class Platform:
         self.embed_model = embed_model or ""
         self.rerank_model = rerank_model or ""
         self.embed_dims = embed_dims or None
+        self.fingerprint_seconds = fingerprint_seconds
+        self._fingerprint: Optional[str] = None      # last good answer
+        self._fingerprint_at: Optional[float] = None
+        self._fingerprint_said: Optional[str] = None  # last warning, so it is said once
         self._client = httpx.Client(
             base_url=self.base_url, timeout=timeout, transport=transport,
             headers={"Authorization": "Bearer " + api_key,
@@ -92,18 +101,30 @@ class Platform:
                    rerank_model=getattr(settings, "llm_rerank_model", DEFAULT_RERANK_MODEL),
                    timeout=getattr(settings, "llm_timeout_seconds", DEFAULT_TIMEOUT),
                    embed_dims=getattr(settings, "llm_embed_dims", None),
+                   fingerprint_seconds=getattr(settings, "index_refresh_seconds",
+                                               DEFAULT_FINGERPRINT_SECONDS),
                    transport=transport)
 
     def close(self) -> None:
         self._client.close()
 
-    # --- one POST -----------------------------------------------------------
+    # --- one request --------------------------------------------------------
 
     def _post(self, path: str, payload: Dict) -> Dict:
         try:
             r = self._client.post(path, json=payload)
         except httpx.HTTPError as e:
             raise PlatformError("platform unreachable: %s" % e.__class__.__name__)
+        return self._body(r, path)
+
+    def _get(self, path: str) -> Dict:
+        try:
+            r = self._client.get(path)
+        except httpx.HTTPError as e:
+            raise PlatformError("platform unreachable: %s" % e.__class__.__name__)
+        return self._body(r, path)
+
+    def _body(self, r, path: str) -> Dict:
         if r.status_code != 200:
             raise PlatformError("platform returned HTTP %d for %s" % (r.status_code, path))
         try:
@@ -149,6 +170,52 @@ class Platform:
         vec = vec[:self.embed_dims]
         norm = sum(x * x for x in vec) ** 0.5 or 1.0
         return [x / norm for x in vec]
+
+    # --- what the embed alias is today ---------------------------------------
+
+    def embed_fingerprint(self) -> str:
+        """What the embed alias currently resolves to, as one string:
+        `alias|backend_model|backend_model_quant|created` from the
+        platform's model listing (LiteLLM's custom fields; `created`
+        changes when the alias is re-registered with the same backend).
+        Vectors are keyed to this, so a backend swapped behind an
+        unchanged alias still re-embeds. Never raises: without the
+        listing or its fields the alias alone is the fingerprint, and a
+        listing that fails after a good answer keeps that answer. Cached
+        for `fingerprint_seconds`."""
+        alias = self.embed_model
+        if not alias:
+            return ""
+        now = time.monotonic()
+        if (self._fingerprint is not None and self._fingerprint_at is not None
+                and now - self._fingerprint_at < self.fingerprint_seconds):
+            return self._fingerprint
+        try:
+            body = self._get("/models")
+        except PlatformError as e:
+            if self._fingerprint is not None:
+                self._say("model listing failed (%s); keeping %s" % (e, self._fingerprint))
+                return self._fingerprint
+            self._say("model listing failed (%s); vectors keyed to the alias %s only"
+                      % (e, alias))
+            return alias
+        listed = body.get("data")
+        entry = next((m for m in (listed if isinstance(listed, list) else [])
+                      if isinstance(m, dict) and m.get("id") == alias), None)
+        if entry and entry.get("backend_model"):
+            value = "|".join(str(entry.get(k) or "") for k in
+                             ("id", "backend_model", "backend_model_quant", "created"))
+        else:
+            self._say("model listing has no backend fields for %s; vectors keyed to "
+                      "the alias only" % alias)
+            value = alias
+        self._fingerprint, self._fingerprint_at = value, now
+        return value
+
+    def _say(self, message: str) -> None:
+        if message != self._fingerprint_said:
+            log.warning(message)
+            self._fingerprint_said = message
 
     # --- question to filter -------------------------------------------------
 

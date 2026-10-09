@@ -165,7 +165,9 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
           existing: Sequence[Dict], platform, model: str, dims: Optional[int],
           max_file_bytes: int, max_passages: int) -> Tuple[List[Dict], Summary]:
     """Rows for the dataset's passages file and a summary. `fetch(member)`
-    returns a member's bytes; it is called only for files that changed."""
+    returns a member's bytes; it is called only for files that changed
+    (or whose vectors were made by another `model`: the resolved
+    fingerprint of the embed alias, as in embed.py)."""
     s = Summary(identifier=identifier)
     by_member: Dict[str, List[Dict]] = {}
     for r in existing:

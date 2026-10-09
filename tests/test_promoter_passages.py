@@ -21,6 +21,7 @@ if HAVE_WEB:
 LLM_ENV = {"PROMOTER_LLM_BASE_URL": "https://ai.example/api/v1",
            "PROMOTER_LLM_API_KEY": "sk-test", "PROMOTER_PASSAGES": "1"}
 KEY = "index/passages/" + DEST + ".parquet"
+FP = "arc:embedvl|Fake/Model|FP16|1"      # the stubbed fingerprint of the default alias
 
 
 def make_pdf(pages):
@@ -237,6 +238,11 @@ class PassagesBase(PromoterBase):
             return [[float(len(t)), 0.5] for t in texts]
         p = mock.patch.object(llm.Platform, "embed", fake_embed)
         p.start(); self.addCleanup(p.stop)
+
+        def fake_fingerprint(platform):
+            return platform.embed_model + "|Fake/Model|FP16|1"
+        fp = mock.patch.object(llm.Platform, "embed_fingerprint", fake_fingerprint)
+        fp.start(); self.addCleanup(fp.stop)
         self.files = [("notes.txt", b"plain words here\n"),
                       ("paper.pdf", make_pdf(["Alpha page text", "Beta page text"])),
                       ("memo.docx", make_docx(["Memo paragraph one.", "Memo paragraph two."])),
@@ -291,7 +297,9 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["run"], env=LLM_ENV)
         self.assertEqual(code, 0, out)
         actions = [json.loads(o)["action"] for o in out]
-        self.assertEqual(actions[-4:], ["index_written", "embeddings_written",
+        # Each step that embeds says what it embedded with.
+        self.assertEqual(actions[-6:], ["index_written", "embed_model_resolved",
+                                        "embeddings_written", "embed_model_resolved",
                                         "passages_written", "finish"])
         s = self.written(out)[0]
         self.assertEqual((s["identifier"], s["files"], s["files_read"], s["files_other"],
@@ -311,13 +319,59 @@ class TestPassages(PassagesBase):
         self.assertEqual(by["memo.docx"]["text"], "Memo paragraph one. Memo paragraph two.")
         self.assertEqual((by["notes.txt"]["words"], by["notes.txt"]["model"],
                           by["notes.txt"]["cut"], by["notes.txt"]["sensitivity"]),
-                         (3, "arc:embedvl", 1024, "green"))
+                         (3, FP, 1024, "green"))
         self.assertEqual(len(by["notes.txt"]["checksum"]), 64)
         self.assertAlmostEqual(by["notes.txt"]["embedding"][1], 0.5, places=3)
         # What went to the platform: the dataset's own text (embeddings.parquet)
         # and the three passages. Never the CSV, never a file name.
         self.assertEqual(len(self.sent), 4)
         self.assertFalse(any("a,b" in t or ".csv" in t for t in self.sent))
+
+    def test_a_changed_fingerprint_re_reads_every_file(self):
+        """The alias unchanged, the backend behind it swapped: every
+        passage is embedded again, and the audit line says with what."""
+        self.stage(files=self.files)
+        self.cli(["run"], env=LLM_ENV)
+        new = "arc:embedvl|New/Model|FP8|2"
+        self.sent.clear()
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: new):
+            code, out = self.cli(["passages"], env=LLM_ENV)
+        self.assertEqual(code, 0, out)
+        s = self.written(out)[0]
+        self.assertEqual((s["embedded"], s["kept"]), (3, 0))
+        self.assertEqual({r["model"] for r in self.rows()}, {new})
+        self.assertEqual(self.written(out, "embed_model_resolved")[0]["model"], new)
+        self.assertEqual(len(self.sent), 3)
+        # The same fingerprint again: every passage kept, nothing sent.
+        self.sent.clear()
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: new):
+            code, out = self.cli(["passages"], env=LLM_ENV)
+        s = self.written(out)[0]
+        self.assertEqual((s["embedded"], s["kept"]), (0, 3))
+        self.assertEqual(self.sent, [])
+
+    def test_a_model_change_sweeps_every_passages_file(self):
+        """The backend behind the alias moved: the run rebuilds the
+        passages of every dataset in place, not only what it promoted."""
+        second = DEST.rsplit("/", 1)[0] + "/second"
+        self.stage(files=self.files); self.cli(["run"], env=LLM_ENV)
+        self.stage(files=self.files, dataset="second"); self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(len(self.keys_under("index/passages/")), 2)
+        new = "arc:embedvl|New/Model|FP8|2"
+        self.sent.clear()
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: new):
+            code, out = self.cli(["run"], env=LLM_ENV)          # nothing staged
+        self.assertEqual(code, 0, out)
+        actions = [json.loads(o)["action"] for o in out]
+        self.assertIn("embed_model_changed", actions)
+        written = self.written(out)
+        self.assertEqual(sorted(w["identifier"] for w in written), sorted([DEST, second]))
+        self.assertEqual([(w["embedded"], w["kept"]) for w in written], [(3, 0), (3, 0)])
+        self.assertEqual({r["model"] for r in self.rows()}, {new})
+        self.assertEqual({r["model"] for r in self.rows("index/passages/" + second + ".parquet")},
+                         {new})
+        # Dataset vectors (2) and passages (6): nothing else went out.
+        self.assertEqual(len(self.sent), 8)
 
     def test_incremental_by_checksum_and_drop(self):
         self.stage(files=self.files); self.cli(["run"], env=LLM_ENV)

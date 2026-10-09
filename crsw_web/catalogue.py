@@ -128,9 +128,10 @@ class Catalogue:
         self._rows: Optional[List[Dict]] = None
         self._loaded_at: Optional[float] = None
         self.error: Optional[str] = None
-        # (identifiers, unit rows one per identifier), replaced whole so a
-        # ranking in another thread never sees one without the other.
-        self._vectors: Tuple[List[str], object] = ([], None)
+        # (identifiers, unit rows one per identifier, the model each row
+        # was made with), replaced whole so a ranking in another thread
+        # never sees one without the others.
+        self._vectors: Tuple[List[str], object, List[str]] = ([], None, [])
 
     # --- the index ------------------------------------------------------
 
@@ -161,29 +162,30 @@ class Catalogue:
         or unreadable means no ranking by meaning, nothing worse."""
         self._vectors = self._read_vectors()
 
-    def _read_vectors(self) -> Tuple[List[str], object]:
+    def _read_vectors(self) -> Tuple[List[str], object, List[str]]:
         if np is None or pq is None:
-            return [], None
+            return [], None, []
         try:
             body = self._client.get_object(Bucket=self._bucket, Key=self._embed_key)["Body"].read()
-            ids, vecs = [], []
+            ids, vecs, models = [], [], []
             for r in pq.read_table(io.BytesIO(body)).to_pylist():
                 if r.get("identifier") and r.get("embedding"):
                     ids.append(r["identifier"])
                     vecs.append(r["embedding"])
+                    models.append(r.get("model") or "")
             if not ids:
-                return [], None
+                return [], None, []
             m = np.asarray(vecs, dtype=np.float32)
             norms = np.linalg.norm(m, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
-            return ids, m / norms
+            return ids, m / norms, models
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
             if code not in ("NoSuchKey", "404", "NotFound"):
                 log.warning("embeddings unreadable at %s: %s", self._embed_key, e)
         except Exception as e:                   # ragged rows, bad parquet
             log.warning("embeddings unusable at %s: %s", self._embed_key, e)
-        return [], None
+        return [], None, []
 
     def stale(self) -> bool:
         return (self._loaded_at is None or
@@ -262,13 +264,23 @@ class Catalogue:
         self._maybe_load()
         return self._vectors[1] is not None
 
-    def rank(self, vector: Sequence[float],
-             within: Optional[Set[str]] = None) -> List[Tuple[str, float]]:
-        """Datasets with a vector, best match first, as (identifier,
-        cosine). Empty when there are no vectors or the question's vector
-        is from a different model (a different length)."""
+    def vectors_for(self, model: str) -> int:
+        """How many vectors were made with `model` (the fingerprint the
+        promoter keyed them to): the ones a question embedded by that
+        model can be scored against."""
         self._maybe_load()
-        vec_ids, matrix = self._vectors
+        return sum(1 for m in self._vectors[2] if m == model)
+
+    def rank(self, vector: Sequence[float], within: Optional[Set[str]] = None,
+             model: Optional[str] = None) -> List[Tuple[str, float]]:
+        """Datasets with a vector, best match first, as (identifier,
+        cosine). With `model`, only vectors made with that fingerprint
+        take part: a vector from another model is never scored against
+        the question, since the numbers would mean nothing. Empty when
+        there are no vectors or the question's vector has another
+        length."""
+        self._maybe_load()
+        vec_ids, matrix, models = self._vectors
         if matrix is None:
             return []
         q = np.asarray(list(vector), dtype=np.float32)
@@ -279,6 +291,8 @@ class Catalogue:
         out = []
         for i in np.argsort(-scores):
             ident = vec_ids[int(i)]
+            if model is not None and models[int(i)] != model:
+                continue
             if within is None or ident in within:
                 out.append((ident, float(scores[int(i)])))
         return out
@@ -324,13 +338,21 @@ class Catalogue:
         words, all_of = (f["words"], True) if f.get("words") else (question, False)
         ranked: List[Dict] = []
         if self.has_vectors() and getattr(platform, "embed_model", True):
-            try:
-                vec = platform.embed([question])[0]
-                by_id = {r["identifier"]: r for r in candidates}
-                ranked = [by_id[i] for i, _ in self.rank(vec, set(by_id))]
-                ans.steps.append("meaning")
-            except PlatformError as e:
-                notices.append("Ranking by meaning is unavailable (%s)." % e)
+            # Only vectors made with what the alias resolves to today can
+            # be scored against the question's; with none of those, the
+            # promoter has not yet rebuilt the index for the new model.
+            model = platform.embed_fingerprint()
+            if not self.vectors_for(model):
+                notices.append("Ranking by meaning is off until the index is rebuilt "
+                               "for the current embedding model.")
+            else:
+                try:
+                    vec = platform.embed([question])[0]
+                    by_id = {r["identifier"]: r for r in candidates}
+                    ranked = [by_id[i] for i, _ in self.rank(vec, set(by_id), model=model)]
+                    ans.steps.append("meaning")
+                except PlatformError as e:
+                    notices.append("Ranking by meaning is unavailable (%s)." % e)
         seen = {r["identifier"] for r in ranked}
         rest = [r for r in candidates if r["identifier"] not in seen
                 and words_match(r, words, all_of)]

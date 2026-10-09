@@ -265,9 +265,18 @@ def create_app(settings: Optional[Settings] = None,
         cat = need_read()
         q = " ".join((q or "").split())[:500]
         sort = sort if sort in SORTS else "words"
-        out = {"q": q, "results": [], "notice": None, "steps": [], "stats": index.stats(),
-               "sort": sort, "can_explain": bool(platform.chat_model)}
+        # Only passages whose vector was made with what the alias resolves
+        # to today can be scored against the question's. The promoter
+        # rewrites the rest; until then they wait, and the page says so.
+        model = platform.embed_fingerprint()
+        out = {"q": q, "results": [], "notice": None, "steps": [],
+               "stats": index.stats(model=model), "sort": sort,
+               "can_explain": bool(platform.chat_model)}
         if not q:
+            return out
+        if out["stats"]["passages"] and not out["stats"]["current"]:
+            out["notice"] = ("These passages were made with a different embedding model; "
+                             "search inside documents is off until the promoter rewrites them.")
             return out
         try:
             vec = platform.embed([q])[0]
@@ -279,7 +288,7 @@ def create_app(settings: Optional[Settings] = None,
         sens = ("green",) if settings.amber_access == "off" else None
         stems = question_stems(q)
         hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems,
-                            by_meaning=(sort == "meaning"))
+                            by_meaning=(sort == "meaning"), model=model)
         allowed = []
         for h in hits:
             strand = (h["identifier"] or "").split("/", 1)[0]

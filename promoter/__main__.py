@@ -38,6 +38,7 @@ import argparse
 import getpass
 import json
 import sys
+from typing import Optional
 
 from crsw_deposit import keys, record, vocab
 from crsw_web import s3 as s3mod
@@ -144,30 +145,56 @@ def _setup(args):
     return cfg, client, log, vocab_dict, source
 
 
-def _write_index(cfg, client, log, dry_run: bool, changed: int) -> None:
+def _write_index(cfg, client, log, dry_run: bool, changed: int) -> Optional[dict]:
     """Rewrite the index after a real run that changed a record. Never
     on a dry run, never when nothing changed (the bucket is versioned;
     a write every five minutes would pile up versions). A failure is
     logged and does not change the exit code: the index is a cache
-    that `promoter index` rebuilds."""
-    if not cfg.index_prefix or dry_run or not changed:
-        return
+    that `promoter index` rebuilds. A run that changed nothing still
+    asks what the embed alias resolves to today, and replaces every
+    vector when that moved. Returns the embeddings summary when vectors
+    were written, else None."""
+    if not cfg.index_prefix or dry_run:
+        return None
+    if not changed:
+        return _embed_if_model_changed(cfg, client, log)
     try:
         rows_ = index_mod.rows(client, cfg.s3_bucket)
         keys_ = index_mod.write(client, cfg.s3_bucket, cfg.index_prefix, rows_)
     except Exception as e:
         log.write("index_write_failed", error=str(e))
-        return
+        return None
     log.write("index_written", datasets=len(rows_), **keys_)
     if keys_["parquet"] is None:
         log.write("index_parquet_skipped", reason="pyarrow is not installed")
-    if cfg.embed_enabled:
-        try:
-            summary = _refresh_embeddings(cfg, client, rows_)
-        except Exception as e:
-            log.write("embeddings_failed", error=str(e))
-            return
+    if not cfg.embed_enabled:
+        return None
+    try:
+        summary = _refresh_embeddings(cfg, client, rows_, log.write)
+    except Exception as e:
+        log.write("embeddings_failed", error=str(e))
+        return None
+    log.write("embeddings_written", **summary)
+    return summary
+
+
+def _embed_if_model_changed(cfg, client, log) -> Optional[dict]:
+    """The quiet run's check: one GET for the fingerprint, one for the
+    previous file; nothing more unless the backend behind the alias has
+    moved, in which case every vector in place is from another model
+    and is replaced now rather than at the next promotion."""
+    if not cfg.embed_enabled:
+        return None
+    try:
+        summary = _refresh_embeddings(cfg, client,
+                                      lambda: index_mod.rows(client, cfg.s3_bucket),
+                                      log.write, only_if_model_changed=True)
+    except Exception as e:
+        log.write("embeddings_failed", error=str(e))
+        return None
+    if summary:
         log.write("embeddings_written", **summary)
+    return summary
 
 
 def _write_passages(cfg, client, log, prefixes) -> None:
@@ -178,6 +205,7 @@ def _write_passages(cfg, client, log, prefixes) -> None:
         return
     platform = Platform.from_settings(cfg)
     try:
+        model = _embed_model(cfg, platform, log.write, "passages")
         for prefix in prefixes:
             rec = _record_in_place(client, cfg.s3_bucket, prefix)
             if rec is None:
@@ -197,8 +225,7 @@ def _write_passages(cfg, client, log, prefixes) -> None:
                 continue
             try:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, prefix, rec,
-                                         platform, cfg.llm_embed_model,
-                                         cfg.llm_embed_dims or None,
+                                         platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
                                          cfg.passages_max_per_dataset)
             except Exception as e:
@@ -227,16 +254,51 @@ def _passages_skip_reason(cfg, prefix, rec):
     return None
 
 
-def _refresh_embeddings(cfg, client, rows_) -> dict:
+def _embed_model(cfg, platform, emit, step: str) -> str:
+    """What the vectors of this step are keyed to: the fingerprint of
+    what the embed alias resolves to on the platform right now (or the
+    alias alone when the platform does not say). Said on the trail, so
+    the audit shows what made the vectors and when it changed."""
+    model = platform.embed_fingerprint()
+    emit("embed_model_resolved", step=step, alias=cfg.llm_embed_model, model=model)
+    return model
+
+
+def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False
+                        ) -> Optional[dict]:
     """Embed what changed and rewrite embeddings.parquet. Only record
-    metadata goes to the platform (promoter/embed.py, text_for)."""
+    metadata goes to the platform (promoter/embed.py, text_for). `emit`
+    is the run's log line writer (or print, from the command); `rows_`
+    may be a callable, read only when there is something to write. A
+    previous file keyed to another fingerprint is said on the trail
+    (`embed_model_changed`); with `only_if_model_changed` that is the
+    only case anything is written or said, else None."""
     platform = Platform.from_settings(cfg)
     try:
-        return embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
-                                 platform, cfg.llm_embed_model,
-                                 set(cfg.llm_sensitivities), cfg.llm_embed_dims or None)
+        model = platform.embed_fingerprint()
+        existing = embed_mod.read_existing(client, cfg.s3_bucket,
+                                           embed_mod.embeddings_key(cfg.index_prefix))
+        previous = embed_mod.models_in(existing)
+        changed = bool(previous) and previous != [model]
+        if only_if_model_changed and not changed:
+            return None                  # the quiet run has nothing to say
+        emit("embed_model_resolved", step="embeddings", alias=cfg.llm_embed_model, model=model)
+        if changed:
+            emit("embed_model_changed", previous=previous, model=model)
+        if callable(rows_):
+            rows_ = rows_()
+        summary = embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
+                                    platform, model, set(cfg.llm_sensitivities),
+                                    cfg.llm_embed_dims or None, existing=existing)
     finally:
         platform.close()
+    summary["model"] = model
+    summary["model_changed"] = changed
+    return summary
+
+
+def _print_line(action: str, **detail) -> None:
+    print(json.dumps({"action": action, **detail}, ensure_ascii=False))
 
 
 def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
@@ -299,7 +361,12 @@ def cmd_run(args) -> int:
         else:
             refused += 1
 
-    _write_index(cfg, client, log, args.dry_run, promoted)
+    summary = _write_index(cfg, client, log, args.dry_run, promoted)
+    if summary and summary.get("model_changed"):
+        # Every passage in place is from the old model too: sweep them
+        # all, not only what this run promoted.
+        promoted_prefixes = [ref.prefix for ref, rec, _ in
+                             index_mod.read_records(client, cfg.s3_bucket) if rec]
     _write_passages(cfg, client, log, promoted_prefixes)
     log.write("finish", seen=seen, promoted=promoted, refused_or_failed=refused,
               dry_run=args.dry_run)
@@ -366,8 +433,8 @@ def cmd_index(args) -> int:
             print("PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY and PROMOTER_LLM_EMBED_MODEL "
                   "must all be set for embeddings", file=sys.stderr)
             return 2
-        summary = _refresh_embeddings(cfg, client, rows_)
-        print(json.dumps({"action": "embeddings_written", **summary}, ensure_ascii=False))
+        summary = _refresh_embeddings(cfg, client, rows_, _print_line)
+        _print_line("embeddings_written", **summary)
         if summary["key"] is None:
             print("pyarrow is not installed: embeddings were not written", file=sys.stderr)
     return 0
@@ -435,6 +502,7 @@ def cmd_passages(args) -> int:
                          ensure_ascii=False))
         return 1
     platform = Platform.from_settings(cfg)
+    model = _embed_model(cfg, platform, _print_line, "passages")
 
     def in_scope(identifier):
         return ((not args.dataset or identifier == args.dataset) and
@@ -477,8 +545,7 @@ def cmd_passages(args) -> int:
                 continue
             try:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix,
-                                         rec, platform, cfg.llm_embed_model,
-                                         cfg.llm_embed_dims or None,
+                                         rec, platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
                                          cfg.passages_max_per_dataset)
             except Exception as e:

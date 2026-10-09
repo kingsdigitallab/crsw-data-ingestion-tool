@@ -36,14 +36,20 @@ class FakePlatform:
     """Records what it was sent; each method can be told to fail."""
 
     chat_model, embed_model, rerank_model = "arc:lite", "arc:embedvl", "arc:rerankvl"
+    fingerprint = "toy"      # what the stores the fixtures write are keyed to
 
-    def __init__(self, filter_reply=None, fail=(), reverse=False, off=()):
+    def __init__(self, filter_reply=None, fail=(), reverse=False, off=(), fingerprint=None):
         self.filter_reply = filter_reply or {}
         self.fail = set(fail)
         self.reverse = reverse              # a reranker that disagrees, so it shows
         for name in off:                    # a blank model name is the off switch
             setattr(self, name + "_model", "")
+        if fingerprint is not None:         # the alias repointed to another backend
+            self.fingerprint = fingerprint
         self.filter_calls, self.embed_calls, self.rerank_calls = [], [], []
+
+    def embed_fingerprint(self):
+        return self.fingerprint
 
     def filter_for(self, question, strands, states, sensitivities, subjects, projects):
         self.filter_calls.append((question, tuple(subjects), tuple(projects)))
@@ -85,9 +91,16 @@ class AskBase(CatalogueBase):
         index_mod.write(self.s3, "crsw", "index", rows)
         self.index_rows = rows
 
-    def embed_store(self, include_amber=False):
+    def embed_store(self, include_amber=False, model="toy"):
         embed_mod.refresh(self.s3, "crsw", "index", self.index_rows, FakePlatform(),
-                          "toy", {"green", "amber"} if include_amber else {"green"})
+                          model, {"green", "amber"} if include_amber else {"green"})
+
+    def rekey(self, identifier, model):
+        """Rewrite the store with one dataset's vector keyed to `model`,
+        as it is while the promoter is between two embedding models."""
+        rows = embed_mod.read_existing(self.s3, "crsw", "index/embeddings.parquet")
+        rows[identifier]["model"] = model
+        embed_mod.write(self.s3, "crsw", "index", list(rows.values()))
 
     def app(self, platform=None, **overrides):
         settings = Settings(**dict(ASK, **overrides))
@@ -320,6 +333,46 @@ class TestAsk(AskBase):
         self.assertEqual([i for i, _ in ranked], [CLEAN, GREEN])   # amber has no vector
         self.assertEqual([i for i, _ in cat.rank(bag("x"), within={GREEN})], [GREEN])
         self.assertEqual(cat.rank(bag("x"), within=set()), [])
+
+    def test_only_vectors_of_the_given_fingerprint_are_ranked(self):
+        """A vector made by another model is never scored against the
+        question: rows keyed to another fingerprint stay out of the
+        ranking, and the catalogue can say how many are current."""
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        self.assertEqual((cat.vectors_for("toy"), cat.vectors_for("other")), (2, 0))
+        self.assertEqual(cat.rank(bag("conflict deaths per year"), model="other"), [])
+        self.assertEqual([i for i, _ in cat.rank(bag("conflict deaths per year"), model="toy")],
+                         [CLEAN, GREEN])
+        self.rekey(GREEN, "other")
+        cat = Catalogue(self.s3, "crsw")
+        self.assertEqual((cat.vectors_for("toy"), cat.vectors_for("other")), (1, 1))
+        self.assertEqual([i for i, _ in cat.rank(bag("x"), model="toy")], [CLEAN])
+        self.assertEqual([i for i, _ in cat.rank(bag("x"), model="other")], [GREEN])
+        self.assertEqual(len(cat.rank(bag("x"))), 2)            # no fingerprint: as before
+
+    def test_a_repointed_alias_turns_meaning_off_with_a_notice(self):
+        """The platform now resolves the alias to another backend; the
+        vectors in the store are from the old one. Nothing is ranked by
+        meaning, the words still match, and the page says why."""
+        self.embed_store()
+        c = self.app(platform=FakePlatform(fingerprint="other", off=("chat", "rerank")))
+        body = c.get("/datasets.json", params={"ask": "conflict deaths per year"}).json()
+        self.assertEqual(body["steps"], [])
+        self.assertIn("Ranking by meaning is off until the index is rebuilt for the "
+                      "current embedding model", body["notice"])
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [CLEAN])   # by words
+        html = c.get("/datasets", params={"ask": "conflict deaths per year"}).text
+        self.assertIn("Ranking by meaning is off", html)
+        # Half way through a rebuild: what is current ranks, the rest
+        # falls through to the words, and there is nothing to notice.
+        self.rekey(GREEN, "other")
+        p = FakePlatform(off=("chat", "rerank"))
+        c = self.app(platform=p)
+        body = c.get("/datasets.json", params={"ask": "conflict deaths per year"}).json()
+        self.assertEqual(body["steps"], ["meaning"])
+        self.assertIsNone(body["notice"])
+        self.assertEqual([d["identifier"] for d in body["datasets"]][0], CLEAN)
 
     def test_ranking_during_a_refresh_uses_the_vectors_already_loaded(self):
         import threading

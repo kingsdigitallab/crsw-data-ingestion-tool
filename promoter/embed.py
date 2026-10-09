@@ -8,11 +8,16 @@ What is embedded is the record's title, abstract, subject terms and
 source note, nothing from the file manifest and nothing from any file.
 The work is incremental: a row whose identifier, modified stamp and
 model match the previous file is kept, so a routine run embeds only
-what changed. Only records of the sensitivities the configuration
-allows are sent to the platform (green until the Centre allows amber);
-the other rows are still written, with no vector, so the file says the
-dataset exists. Vectors are stored at half precision (16-bit floats),
-which the ranking cannot tell apart from full precision."""
+what changed. `model` is not the alias from the configuration but the
+fingerprint of what that alias resolves to on the platform
+(`Platform.embed_fingerprint`): a backend swapped behind an unchanged
+alias gives a new fingerprint, and every row is embedded again, since
+vectors from different models cannot be compared. Only records of the
+sensitivities the configuration allows are sent to the platform (green
+until the Centre allows amber); the other rows are still written, with
+no vector, so the file says the dataset exists. Vectors are stored at
+half precision (16-bit floats), which the ranking cannot tell apart
+from full precision."""
 import io
 import logging
 from typing import Dict, List, Optional, Sequence, Set
@@ -70,11 +75,20 @@ def read_existing(client, bucket: str, key: str) -> Dict[str, Dict]:
     return {r["identifier"]: r for r in table.to_pylist() if r.get("identifier")}
 
 
+def models_in(existing: Dict[str, Dict]) -> List[str]:
+    """The distinct `model` values of the rows that carry a vector,
+    sorted: what the file's vectors are keyed to. A run compares this
+    with the fingerprint of the day to notice a backend change."""
+    return sorted({r.get("model") for r in existing.values()
+                   if r.get("embedding") and r.get("model")})
+
+
 def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
           model: str, sensitivities: Set[str], dims: Optional[int] = None) -> Dict:
     """Rows for the new file, and a summary of what was done. `platform`
-    is anything with `embed(texts) -> vectors`. `dims` is the vector
-    length in use; a kept row must have it, so a change re-embeds."""
+    is anything with `embed(texts) -> vectors`; `model` is the resolved
+    fingerprint the vectors are keyed to, `dims` the vector length in
+    use; a kept row must have both, so a change of either re-embeds."""
     out: List[Dict] = []
     todo: List[Dict] = []
     kept = skipped = 0
@@ -150,16 +164,19 @@ def write(client, bucket: str, prefix: str, rows: Sequence[Dict]) -> Optional[st
 
 
 def refresh(client, bucket: str, prefix: str, index_rows: Sequence[Dict], platform,
-            model: str, sensitivities: Set[str], dims: Optional[int] = None) -> Dict:
-    """Read the previous file, embed what changed, write the new one.
-    Returns the summary from `build` plus the key written ('key' is None
-    when pyarrow is absent, in which case nothing was embedded either)."""
+            model: str, sensitivities: Set[str], dims: Optional[int] = None,
+            existing: Optional[Dict[str, Dict]] = None) -> Dict:
+    """Read the previous file (or take it as `existing`, already read),
+    embed what changed, write the new one. Returns the summary from
+    `build` plus the key written ('key' is None when pyarrow is absent,
+    in which case nothing was embedded either)."""
     if pq is None:
         return {"key": None, "embedded": 0, "kept": 0, "skipped": 0,
                 "dropped": 0, "dimension": None}
     key = embeddings_key(prefix)
-    result = build(index_rows, read_existing(client, bucket, key), platform,
-                   model, sensitivities, dims)
+    if existing is None:
+        existing = read_existing(client, bucket, key)
+    result = build(index_rows, existing, platform, model, sensitivities, dims)
     rows = result.pop("rows")
     result["key"] = write(client, bucket, prefix, rows)
     result["datasets"] = len(rows)

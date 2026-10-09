@@ -241,3 +241,90 @@ class TestParseJsonObject(unittest.TestCase):
         self.assertEqual(llm.parse_json_object('x {"a": {"b": 2}} y'), {"a": {"b": 2}})
         self.assertIsNone(llm.parse_json_object("nothing"))
         self.assertIsNone(llm.parse_json_object("{broken"))
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestEmbedFingerprint(unittest.TestCase):
+    """What the embed alias resolves to, from GET /models. Never raises:
+    without the listing or its backend fields the alias itself is the
+    fingerprint, and a listing that fails after one good answer keeps
+    that answer."""
+
+    EMBEDVL = {"id": "arc:embedvl", "object": "model", "created": 1782483199,
+               "backend_model": "Qwen/Qwen3-VL-Embedding-2B", "backend_model_size": "2B",
+               "backend_model_quant": "FP16", "backend_model_type": "Embedding",
+               "mode": "embedding"}
+    LITE = {"id": "arc:lite", "object": "model", "created": 1772641436,
+            "backend_model": "Qwen/Qwen3.8-27B", "backend_model_quant": "NVFP4"}
+
+    def listing(self, *models, fingerprint_seconds=300):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(200, json={"object": "list", "data": list(models)})
+        p = llm.Platform("https://ai.example/api/v1", "sk-test",
+                         fingerprint_seconds=fingerprint_seconds,
+                         transport=httpx.MockTransport(handler))
+        return p, seen
+
+    def test_backend_quant_and_created_behind_the_alias(self):
+        p, seen = self.listing(self.LITE, self.EMBEDVL)
+        self.assertEqual(p.embed_fingerprint(),
+                         "arc:embedvl|Qwen/Qwen3-VL-Embedding-2B|FP16|1782483199")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual((seen[0].method, seen[0].url.path), ("GET", "/api/v1/models"))
+        self.assertEqual(seen[0].headers["authorization"], "Bearer sk-test")
+
+    def test_alias_alone_when_the_listing_does_not_say(self):
+        p, _ = self.listing(self.LITE)                       # alias not listed
+        self.assertEqual(p.embed_fingerprint(), "arc:embedvl")
+        p, _ = self.listing({"id": "arc:embedvl", "created": 1})   # no backend fields
+        self.assertEqual(p.embed_fingerprint(), "arc:embedvl")
+        p = fake_platform(lambda r: httpx.Response(200, json={"data": "nonsense"}))
+        self.assertEqual(p.embed_fingerprint(), "arc:embedvl")
+
+    def test_alias_alone_when_the_listing_fails_and_nothing_is_known(self):
+        p = fake_platform(lambda r: httpx.Response(503, text="down"))
+        self.assertEqual(p.embed_fingerprint(), "arc:embedvl")
+
+        def boom(request):
+            raise httpx.ConnectError("no route")
+        self.assertEqual(fake_platform(boom).embed_fingerprint(), "arc:embedvl")
+
+    def test_a_good_answer_outlives_a_failed_listing(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(200, json={"data": [self.EMBEDVL]})
+            return httpx.Response(503, text="down")
+        p = llm.Platform("https://ai.example/api/v1", "k", fingerprint_seconds=0,
+                         transport=httpx.MockTransport(handler))
+        first = p.embed_fingerprint()
+        self.assertEqual(p.embed_fingerprint(), first)
+        self.assertEqual(len(calls), 2)                      # it did ask again
+        self.assertIn("Qwen", first)
+
+    def test_cached_within_the_window(self):
+        p, seen = self.listing(self.EMBEDVL)
+        p.embed_fingerprint(); p.embed_fingerprint()
+        self.assertEqual(len(seen), 1)
+        p, seen = self.listing(self.EMBEDVL, fingerprint_seconds=0)
+        p.embed_fingerprint(); p.embed_fingerprint()
+        self.assertEqual(len(seen), 2)
+
+    def test_blank_model_is_blank(self):
+        p, seen = self.listing(self.EMBEDVL)
+        p.embed_model = ""
+        self.assertEqual(p.embed_fingerprint(), "")
+        self.assertEqual(seen, [])
+
+    def test_from_settings_takes_the_index_cycle(self):
+        class S:
+            llm_base_url, llm_api_key = "https://ai.example/api/v1", "k"
+            index_refresh_seconds = 42
+        p = llm.Platform.from_settings(S())
+        self.assertEqual(p.fingerprint_seconds, 42)
+        p.close()

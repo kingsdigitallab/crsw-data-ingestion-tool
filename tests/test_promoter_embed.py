@@ -15,12 +15,14 @@ if HAVE_WEB:
     from crsw_web import llm
     from promoter import __main__ as cli
     from promoter import embed as embed_mod
+    from promoter import index as index_mod
     from promoter.config import ConfigError, PromoterConfig
 
 PARENT = "rs2/csac/amber/1_interim/parent"
 PARENT_UUID = "22222222-2222-4222-8222-222222222222"
 LLM_ENV = {"PROMOTER_LLM_BASE_URL": "https://ai.example/api/v1",
            "PROMOTER_LLM_API_KEY": "sk-test"}
+FP = "arc:embedvl|Fake/Model|FP16|1"      # the stubbed fingerprint of the default alias
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
@@ -39,6 +41,13 @@ class EmbedBase(PromoterBase):
             return [[float(len(t)), 0.5, -1.0] for t in texts]
         self.embed_patch = mock.patch.object(llm.Platform, "embed", fake_embed)
         self.embed_patch.start(); self.addCleanup(self.embed_patch.stop)
+
+        def fake_fingerprint(platform):
+            # What GET /models would say, derived from the alias so a
+            # changed alias still changes the fingerprint.
+            return platform.embed_model + "|Fake/Model|FP16|1"
+        fp = mock.patch.object(llm.Platform, "embed_fingerprint", fake_fingerprint)
+        fp.start(); self.addCleanup(fp.stop)
 
     def cli(self, argv, env=None):
         with mock.patch.dict(os.environ, dict(self.ENV, **(env or {}))), \
@@ -104,7 +113,7 @@ class TestIndexEmbed(EmbedBase):
         self.assertEqual(sorted(rows), [PARENT, DEST])
         self.assertIsNone(rows[PARENT]["embedding"])
         self.assertEqual(rows[PARENT]["sensitivity"], "amber")
-        self.assertEqual(rows[DEST]["model"], "arc:embedvl")
+        self.assertEqual(rows[DEST]["model"], FP)
         self.assertEqual(rows[DEST]["dimension"], 3)
         self.assertEqual(len(rows[DEST]["embedding"]), 3)
         # Stored at half precision: close, not equal.
@@ -158,7 +167,8 @@ class TestIndexEmbed(EmbedBase):
                                       PROMOTER_LLM_EMBED_MODEL="other:v2"))
         s = self.summary(out)
         self.assertEqual((s["embedded"], s["kept"]), (2, 0))
-        self.assertEqual({r["model"] for r in self.table().values()}, {"other:v2"})
+        self.assertEqual({r["model"] for r in self.table().values()},
+                         {"other:v2|Fake/Model|FP16|1"})
         # So does a change of vector length (the stub gives 3; ask for 2).
         self.sent.clear()
         code, out = self.cli(["index", "--embed"],
@@ -176,14 +186,71 @@ class TestIndexEmbed(EmbedBase):
         self.assertEqual(self.table()[DEST]["cut"], 2)
         self.assertEqual(list(self.table()), [DEST])
 
+    def test_rows_keyed_to_the_bare_alias_are_re_embedded_once(self):
+        """A store from before the fingerprint says arc:embedvl in every
+        row. The first run with a fingerprint re-embeds them all; the
+        next keeps them all."""
+        self.put_parent()
+        self.stage(); self.cli(["run"])
+        rows_ = index_mod.rows(self.s3, "crsw")
+        embed_mod.refresh(self.s3, "crsw", "index", rows_,
+                          llm.Platform("https://ai.example/api/v1", "k"), "arc:embedvl",
+                          {"green", "amber"})
+        self.assertEqual({r["model"] for r in self.table().values()}, {"arc:embedvl"})
+        self.sent.clear()
+        env = dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green,amber")
+        code, out = self.cli(["index", "--embed"], env=env)
+        self.assertEqual(code, 0, out)
+        s = self.summary(out)
+        self.assertEqual((s["embedded"], s["kept"], s["model"]), (2, 0, FP))
+        self.assertEqual({r["model"] for r in self.table().values()}, {FP})
+        resolved = next(json.loads(o) for o in out if '"embed_model_resolved"' in o)
+        self.assertEqual((resolved["alias"], resolved["model"]), ("arc:embedvl", FP))
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"], env=env)
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (0, 2))
+        self.assertEqual(self.sent, [])
+
+    def test_a_quiet_run_notices_a_changed_model_and_re_embeds(self):
+        """Nothing to promote, but the backend behind the alias moved:
+        the run says so and replaces every vector, without rewriting the
+        index itself. The next quiet run, same fingerprint, writes nothing."""
+        self.stage(); code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(self.summary(out)["model"], FP)
+        new = "arc:embedvl|New/Model|FP8|2"
+        self.sent.clear()
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: new):
+            code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(code, 0, out)
+        lines = [json.loads(o) for o in out]
+        actions = [l["action"] for l in lines]
+        self.assertNotIn("index_written", actions)
+        changed = next(l for l in lines if l["action"] == "embed_model_changed")
+        self.assertEqual((changed["previous"], changed["model"]), ([FP], new))
+        s = self.summary(out)
+        self.assertEqual((s["embedded"], s["kept"], s["model"]), (1, 0, new))
+        self.assertEqual({r["model"] for r in self.table().values()}, {new})
+        self.assertEqual(len(self.sent), 1)
+        # Same fingerprint, nothing staged: the run has nothing to say.
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: new):
+            code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertNotIn("embed", "".join(out))
+        # A dry run never writes, so it never checks either.
+        self.stage(dataset="later")
+        code, out = self.cli(["run", "--dry-run"], env=LLM_ENV)
+        self.assertNotIn("embed", "".join(out))
+
     def test_a_run_refreshes_embeddings_and_a_failure_is_only_logged(self):
         self.stage()
         code, out = self.cli(["run"], env=LLM_ENV)
         self.assertEqual(code, 0, out)
         lines = [json.loads(o) for o in out]
         actions = [l["action"] for l in lines]
-        self.assertEqual(actions[-3:], ["index_written", "embeddings_written", "finish"])
-        self.assertEqual(self.summary(out)["embedded"], 1)
+        self.assertEqual(actions[-4:], ["index_written", "embed_model_resolved",
+                                        "embeddings_written", "finish"])
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["model"]), (1, FP))
+        resolved = next(l for l in lines if l["action"] == "embed_model_resolved")
+        self.assertEqual((resolved["alias"], resolved["model"]), ("arc:embedvl", FP))
         # Platform down on the next run that changes something: logged, exit 0.
         self.stage(dataset="second")
         with mock.patch.object(llm.Platform, "embed",

@@ -11,6 +11,7 @@ from tests.test_web_ask import (AskBase, FakePlatform, bag, ASK, CLEAN, GREEN, A
 from tests.test_web_catalogue import HAVE_WEB, VOCAB, READ
 
 if HAVE_WEB:
+    import duckdb
     from fastapi.testclient import TestClient
     from crsw_web import s3 as s3mod
     from crsw_web.app import create_app
@@ -55,14 +56,15 @@ class SearchBase(AskBase):
         self.s3.put_object(Bucket="crsw", Key=key, Body=json.dumps(rec).encode())
         self.s3.put_object(Bucket="crsw", Key=identifier + "/" + member, Body=data)
 
-    def write_passages(self, identifiers=(CLEAN, GREEN), sensitivities=("green",)):
+    def write_passages(self, identifiers=(CLEAN, GREEN), sensitivities=("green",),
+                       model="toy"):
         import json
         for ident in identifiers:
             key = ident + "/dataset.%s.json" % ident.rsplit("/", 1)[-1]
             rec = json.loads(self.s3.get_object(Bucket="crsw", Key=key)["Body"].read())
             if rec["sensitivity"] not in sensitivities:
                 continue
-            pmod.refresh(self.s3, "crsw", PREFIX, ident, rec, FakePlatform(), "toy", None,
+            pmod.refresh(self.s3, "crsw", PREFIX, ident, rec, FakePlatform(), model, None,
                          50 * 1024 * 1024, 1000)
 
     def index(self, path=None, **kw):
@@ -249,6 +251,46 @@ class TestCopy(SearchBase):
         self.assertTrue(ix.search(bag("battles")[:small]))
         # Reopened with the same size: nothing rebuilt.
         self.assertEqual(self.index(dims=small).sync()["unchanged"], 2)
+
+    def test_only_passages_of_the_given_fingerprint_are_searched(self):
+        """Two datasets, one rebuilt for the new model and one not yet:
+        a search keyed to the new fingerprint sees only the first, and
+        the stats say how many passages are current."""
+        self.write_passages((CLEAN,), model="toy")
+        self.write_passages((GREEN,), model="other")
+        ix = self.index()
+        ix.sync()
+        self.assertEqual(ix.stats(), {"passages": 4, "datasets": 2, "files": 4})
+        self.assertEqual(ix.stats(model="toy")["current"], 1)
+        self.assertEqual(ix.stats(model="other")["current"], 3)
+        self.assertEqual(ix.stats(model="none")["current"], 0)
+        hits = ix.search(bag("conflict deaths per year"), model="toy")
+        self.assertEqual({h["identifier"] for h in hits}, {CLEAN})
+        hits = ix.search(bag("conflict deaths per year"), model="other")
+        self.assertEqual({h["identifier"] for h in hits}, {GREEN})
+        # No fingerprint asked: every row (bar the two-word passage, under MIN_WORDS).
+        self.assertEqual(len(ix.search(bag("conflict deaths per year"))), 3)
+
+    def test_a_copy_without_the_model_column_is_rebuilt(self):
+        """A copy made before vectors were keyed to a fingerprint has no
+        `model` column: it is emptied and refilled from the bucket, as
+        for a change of vector size."""
+        self.write_passages()
+        os.makedirs(os.path.dirname(self.path))
+        con = duckdb.connect(self.path)
+        con.execute("CREATE TABLE files (key VARCHAR PRIMARY KEY, etag VARCHAR)")
+        con.execute("CREATE TABLE meta (name VARCHAR PRIMARY KEY, value VARCHAR)")
+        con.execute("INSERT INTO meta VALUES ('dims', ?)", [str(DIM)])
+        con.execute("CREATE TABLE passages (identifier VARCHAR, dataset_uuid VARCHAR, "
+                    "sensitivity VARCHAR, member VARCHAR, checksum VARCHAR, page INTEGER, "
+                    "position INTEGER, words INTEGER, text VARCHAR, dimension INTEGER, "
+                    "embedding FLOAT[%d], key VARCHAR)" % DIM)
+        con.execute("INSERT INTO files VALUES ('stale', 'etag')")
+        con.close()
+        ix = self.index(dims=DIM)
+        s = ix.sync()
+        self.assertEqual((s["loaded"], s["dropped"]), (2, 0))
+        self.assertEqual(ix.stats(model="toy")["current"], 4)
 
     def test_a_file_that_will_not_load_is_not_fetched_again_until_it_changes(self):
         self.write_passages()
@@ -442,6 +484,29 @@ class TestSearchPage(SearchBase):
         c = self.app(platform=FakePlatform(), amber_access="groups",
                      dev_groups=("er_prj_kdl_slavery_rs1",))
         self.assertIn(AMBER, [h["identifier"] for h in self.hits(c, "survivor")["passages"]])
+
+    def test_passages_from_another_model_are_refused_with_a_notice(self):
+        """The alias now resolves to another backend than the one that
+        made the copy: no passage is scored, the page says so, and the
+        question is not even embedded. Once some datasets are rebuilt,
+        those are searched and the rest wait."""
+        self.write_passages((CLEAN, GREEN))
+        p = FakePlatform(fingerprint="other")
+        clock = {"now": 0.0}
+        ix = self.index(refresh_seconds=60, clock=lambda: clock["now"])
+        c = self.app(platform=p, index=ix)
+        body = self.hits(c, "conflict deaths per year")
+        self.assertEqual((body["passages"], body["steps"]), ([], []))
+        self.assertIn("different embedding model", body["notice"])
+        self.assertEqual(p.embed_calls, [])
+        self.assertIn("different embedding model", c.get("/search", params={"q": "x"}).text)
+        # One dataset rebuilt under the new fingerprint, seen on the next cycle.
+        self.write_passages((CLEAN,), model="other")
+        clock["now"] = 61
+        body = self.hits(c, "conflict deaths per year")
+        self.assertIsNone(body["notice"])
+        self.assertEqual({h["identifier"] for h in body["passages"]}, {CLEAN})
+        self.assertEqual(body["stats"]["current"], 1)
 
     def test_typing_back_a_phrase_finds_it_and_marks_it(self):
         self.write_passages((CLEAN, GREEN))
