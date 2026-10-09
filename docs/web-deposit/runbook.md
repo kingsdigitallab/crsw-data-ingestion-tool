@@ -114,6 +114,7 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **Disk**: after an upgrade run `docker system prune -f` to drop the old image layers. Logs are rotated by compose; `docker system df` shows what Docker holds.
 - **Vocabulary change merged**: the web service re-fetches the vocabulary every `CRSW_VOCAB_REFRESH_SECONDS` (default 600), so a merged change is in the form within ten minutes; `docker compose -f deploy/compose.yaml restart deposit-web` makes it immediate. `GET /vocabulary` shows the version, source and load time the service is using.
 - **Rotate a key**: edit the env file, restart the service (web) or nothing (promoter picks it up next run). Old key revoked by eResearch.
+- **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the find page says "Ranking by meaning is off until the index is rebuilt for the current embedding model" and the search page "These passages were made with a different embedding model", and word search keeps working. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias. The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
 - **Check the service key's scope** after any policy change: `CRSW_INTEGRATION=1 .venv/Scripts/python -m pytest tests/test_integration_cluster.py` from a laptop on the VPN.
@@ -248,7 +249,11 @@ vectors are cut to `PROMOTER_LLM_EMBED_DIMS` numbers and stored at half
 precision, and a failure is logged as `embeddings_failed` without
 changing the run's exit code. `$P index --embed` rebuilds by hand. On the
 laptop, before the internal VM can reach the platform, that command with
-the key in `.env.promoter` does the same job.
+the key in `.env.promoter` does the same job. "Model" here is not the
+alias in the configuration but what the platform says is behind it
+(`alias|backend|quantisation|registered`, from `GET /models`), logged on
+every embedding step as `embed_model_resolved`; see "ARC change the
+embedding model" in section 4.
 
 **Passages (searching inside documents; `finding-and-reuse.md` §7).** With
 `PROMOTER_PASSAGES=1` as well, a promotion also reads each promoted

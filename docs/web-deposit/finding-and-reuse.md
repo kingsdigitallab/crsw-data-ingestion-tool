@@ -228,8 +228,13 @@ is the thin `httpx` client (embed, question-to-filter, rerank; every failure
 one error type so callers fall back). `promoter/embed.py` writes one vector
 per dataset to `index/embeddings.parquet`, a file of its own beside the index
 so it can be dropped or rebuilt alone, incremental by identifier, modified
-stamp and model. Vectors are cut to their first 1,024 numbers and stored at
-half precision (`PROMOTER_LLM_EMBED_DIMS`), a quarter of the storage.
+stamp and model. "Model" is not the alias but what the platform resolves it
+to (`Platform.embed_fingerprint`, from `GET /models`), so a backend swapped
+behind `arc:embedvl` re-embeds everything and the catalogue ranks only
+vectors made with the backend of the day (9 October; the handoff note
+`embedding-model-fingerprint-handoff.md` has the reasoning). Vectors are
+cut to their first 1,024 numbers and stored at half precision
+(`PROMOTER_LLM_EMBED_DIMS`), a quarter of the storage.
 `Catalogue.ask` runs filter, meaning and rerank in turn, each degrading on its
 own; the page shows "Understood as" with the filter as the filled-in form. Two
 rules from the first live run: a dataset named in the question comes first,
@@ -339,8 +344,10 @@ writes `index/passages/<identifier>.parquet`. One departure from the choice
 above: the file sits under the index prefix, not beside the record, so a
 dataset prefix holds only what its depositor put there and the web VM's
 read-scoped key over `index/` covers it without a wider grant. Incremental by
-the record's checksum per file; a file read and found to have no text leaves
-one marker row so it is not fetched again. Switches: `PROMOTER_PASSAGES` (off
+the record's checksum per file and the resolved embedding model (as for
+section 5; a run that finds a new backend sweeps every passages file); a file
+read and found to have no text leaves one marker row so it is not fetched
+again. Switches: `PROMOTER_PASSAGES` (off
 by default), `PROMOTER_LLM_SENSITIVITIES`, `PROMOTER_PASSAGES_EXCLUDE`, and
 caps `PROMOTER_PASSAGES_MAX_FILE_BYTES` / `_MAX_PER_DATASET`. A promotion
 runs it for the datasets it promoted; `promoter passages [--dataset ID |
