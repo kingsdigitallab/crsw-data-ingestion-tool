@@ -1248,21 +1248,57 @@ class TestSubjectSelection(unittest.TestCase):
 
     def test_resolve_numbers_terms_and_mix(self):
         entries = deposit.subject_entries(self.VOCAB)
-        resolved, unknown = deposit.resolve_subjects("1, 3, sexual-slavery", entries)
+        resolved, unknown, aliased = deposit.resolve_subjects("1, 3, sexual-slavery", entries)
         self.assertEqual(resolved,
                          ["forced-labour", "armed-conflict", "sexual-slavery"])
         self.assertEqual(unknown, [])
+        self.assertEqual(aliased, [])
 
     def test_unknown_tokens_named_not_dropped(self):
         entries = deposit.subject_entries(self.VOCAB)
-        resolved, unknown = deposit.resolve_subjects("1, dragons, 99", entries)
+        resolved, unknown, _ = deposit.resolve_subjects("1, dragons, 99", entries)
         self.assertEqual(resolved, ["forced-labour"])
         self.assertEqual(unknown, ["dragons", "99"])
 
     def test_duplicates_collapse(self):
         entries = deposit.subject_entries(self.VOCAB)
-        resolved, _ = deposit.resolve_subjects("1, forced-labour, 1", entries)
+        resolved, _, _ = deposit.resolve_subjects("1, forced-labour, 1", entries)
         self.assertEqual(resolved, ["forced-labour"])
+
+    def test_an_alias_resolves_to_its_term_and_is_reported(self):
+        entries = deposit.subject_entries(self.VOCAB)
+        aliases = {"slave-labour": "forced-labour", "war": "armed-conflict"}
+        resolved, unknown, aliased = deposit.resolve_subjects(
+            "Slave-Labour, 1, war, dragons", entries, aliases)
+        self.assertEqual(resolved, ["forced-labour", "armed-conflict"])
+        self.assertEqual(unknown, ["dragons"])          # nobody's alias: still refused
+        self.assertEqual(aliased, [("Slave-Labour", "forced-labour"), ("war", "armed-conflict")])
+        # A number is never an alias, and a term beats an alias of the same spelling.
+        self.assertEqual(deposit.resolve_subjects("1", entries, {"1": "armed-conflict"})[0],
+                         ["forced-labour"])
+
+    def test_question_mark_describes_a_term(self):
+        from crsw_deposit import authority
+        v = {"vocabulary_version": "x", "terms": [
+            {"slug": "forced-labour", "facet": "practices", "label": "Forced labour",
+             "status": "current", "since": "2026-07-23",
+             "scope": "Work exacted under the menace of a penalty."},
+            {"slug": "armed-conflict", "facet": "contexts", "label": "Armed conflict",
+             "status": "current", "since": "2026-07-23"}], "changes": []}
+        v["facets"] = authority.facets_from_terms(v)
+        entries = deposit.subject_entries(v)
+        self.assertEqual(deposit.subject_help("1", entries, v),
+                         "forced-labour (Forced labour): Work exacted under the menace of a penalty.")
+        self.assertEqual(deposit.subject_help("Armed-Conflict", entries, v),
+                         "armed-conflict (Armed conflict): no scope note yet.")
+        self.assertEqual(deposit.subject_help("dragons", entries, v),
+                         "No term dragons in the listing.")
+        self.assertEqual(deposit.subject_help("", entries, v),
+                         "Type ? and a number or term, e.g. ?1 or ?forced-labour.")
+        # A flat, pre-r9 file has neither labels nor scope notes: the slug stands in.
+        flat = deposit.subject_entries(self.VOCAB)
+        self.assertEqual(deposit.subject_help("1", flat, self.VOCAB),
+                         "forced-labour (forced-labour): no scope note yet.")
 
     def test_listing_single_column_when_narrow(self):
         entries = deposit.subject_entries(self.VOCAB)
@@ -1530,6 +1566,27 @@ class TestStaleSubjectsDefault(TestExistingRecordFlow):
         self.assertTrue(any("civil-war -> armed-conflict" in s for s in said), said)
         warned.assert_not_called()
 
+    def test_question_mark_prints_the_scope_note_and_an_alias_is_substituted(self):
+        import json
+        from crsw_deposit import authority
+        v = authority.apply_change(self._vocab(), {
+            "kind": "merge", "from": ["civil-war"], "to": ["armed-conflict"],
+            "date": "2026-10-01", "by": "k1"})
+        v = authority.describe_term(v, "survey", scope="A questionnaire put to a sample.",
+                                    aliases=["questionnaire"])
+        fetch = self._fetcher((json.dumps(self._existing(
+            subject=["civil-war"])), None))
+        said = []
+        # version, coverage x2, "?2" (printed, asked again), an alias, abstract n
+        with mock.patch("builtins.input",
+                        side_effect=["", "", "", "?2", "questionnaire, 1", "n"]), \
+             mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn"):
+            meta, _ = deposit.prompt_metadata(_flagged_args(), v, None, None, fetch)
+        self.assertEqual(meta["subject"], ["survey", "armed-conflict"])
+        self.assertIn("survey (Survey): A questionnaire put to a sample.", said)
+        self.assertIn("Using survey for questionnaire.", said)
+
     def test_typed_answer_overrides_the_default(self):
         import json
         from crsw_deposit import authority
@@ -1618,5 +1675,5 @@ class TestHierarchyListing(unittest.TestCase):
         body = [l for l in lines if "[" in l]
         self.assertIn("  osint-social", body[1])
         self.assertNotIn("  osint ", body[0].replace("[1] osint", "[1]osint"))
-        resolved, _ = deposit.resolve_subjects("2", entries)
+        resolved, _, _ = deposit.resolve_subjects("2", entries)
         self.assertEqual(resolved, ["osint-social"])

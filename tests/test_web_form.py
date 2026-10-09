@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from crsw_deposit import noise, vocab
+from crsw_deposit import authority, noise, vocab
 
 VOCAB = json.loads((Path(__file__).resolve().parent.parent
                     / "crsw_deposit" / "vocab.json").read_text(encoding="utf-8"))
@@ -55,6 +55,23 @@ class TestForm(unittest.TestCase):
         self.assertIn('value="forced-labour"', html)       # a subject checkbox
         self.assertIn("Depositing as <strong>k1078591", html)
         self.assertIn("/static/deposit.js", html)
+
+    def test_scope_note_renders_as_hover_text_and_an_expand_control(self):
+        described = authority.describe_term(
+            VOCAB, "forced-labour", scope='Work exacted under the menace of a "penalty".')
+        client = TestClient(create_app(Settings(**SETTINGS), s3_client=self.s3,
+                                       vocab_dict=described))
+        html = client.get("/").text
+        note = "Work exacted under the menace of a &#34;penalty&#34;."
+        self.assertIn('<label class="depth-0" title="%s">' % note, html)
+        self.assertIn('<details class="scope depth-0"><summary>what this covers</summary>'
+                      '<p>%s</p></details>' % note, html)
+        self.assertEqual(html.count('<details class="scope'), 1)   # only the described term
+        self.assertIn('value="forced-labour"> forced-labour</label>', html)   # text is the slug
+        # A vocabulary without scope notes renders exactly as before.
+        plain = self.client.get("/").text
+        self.assertNotIn('<details class="scope', plain)
+        self.assertNotIn("title=", plain.split('data-field="subject"')[1].split("</fieldset>")[0])
 
     def test_origin_section_renders_with_the_activity_vocabulary(self):
         html = self.client.get("/").text

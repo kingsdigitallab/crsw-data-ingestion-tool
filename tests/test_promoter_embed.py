@@ -1,6 +1,7 @@
 """Embeddings beside the index: incremental, metadata only, amber off by
 default, a failure logged and never fatal. The platform is a stub on the
 client's `embed` method; nothing here talks HTTP."""
+import hashlib
 import io
 import json
 import os
@@ -11,7 +12,7 @@ from tests.test_promoter import (HAVE_WEB, PromoterBase, FORM, DEST, VOCAB)
 
 if HAVE_WEB:
     import pyarrow.parquet as pq
-    from crsw_deposit import deposit_logic, record
+    from crsw_deposit import authority, deposit_logic, record
     from crsw_web import llm
     from promoter import __main__ as cli
     from promoter import embed as embed_mod
@@ -49,17 +50,19 @@ class EmbedBase(PromoterBase):
         fp = mock.patch.object(llm.Platform, "embed_fingerprint", fake_fingerprint)
         fp.start(); self.addCleanup(fp.stop)
 
-    def cli(self, argv, env=None):
+    def cli(self, argv, env=None, vocab=None):
         with mock.patch.dict(os.environ, dict(self.ENV, **(env or {}))), \
              mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
-             mock.patch("promoter.__main__.vocab.load_vocabulary", return_value=(VOCAB, "bundled")), \
+             mock.patch("promoter.__main__.vocab.load_vocabulary",
+                        return_value=(vocab or VOCAB, "bundled")), \
              mock.patch("builtins.print") as printed:
             code = cli.main(argv + ["--env-file", os.devnull])
         return code, [c.args[0] for c in printed.call_args_list if c.args]
 
-    def put_parent(self, abstract="parent words " * 10, modified="2026-01-01T00:00:00Z"):
+    def put_parent(self, abstract="parent words " * 10, modified="2026-01-01T00:00:00Z",
+                   subject=None):
         meta = dict(FORM, sensitivity="amber", state="1_interim", dataset="parent",
-                    abstract=abstract)
+                    abstract=abstract, subject=subject or FORM["subject"])
         rec, _, _, _ = deposit_logic.assemble_record(
             meta, None, [record.manifest_entry("p.csv", "c" * 64, 3)],
             "alice", modified, PARENT_UUID)
@@ -125,7 +128,8 @@ class TestIndexEmbed(EmbedBase):
         text = self.sent[0]
         self.assertTrue(text.startswith("promo\n"))
         self.assertIn(FORM["abstract"].strip(), text)
-        self.assertIn("forced-labour", text)
+        self.assertIn("Forced labour", text)             # the label, from the vocabulary
+        self.assertNotIn("forced-labour", text)
         self.assertNotIn("one.csv", text)
         self.assertNotIn("r.md", text)
 
@@ -185,6 +189,62 @@ class TestIndexEmbed(EmbedBase):
         self.assertEqual((s["datasets"], s["dropped"], s["kept"]), (1, 1, 1))
         self.assertEqual(self.table()[DEST]["cut"], 2)
         self.assertEqual(list(self.table()), [DEST])
+
+    def test_text_sha_keys_rows_and_a_scope_note_re_embeds_only_its_carriers(self):
+        """Vectors are keyed to the text they were made from. A scope
+        note added to a term re-embeds the rows carrying that term and
+        no other, on the next index rebuild or the next quiet run."""
+        self.put_parent(subject=["survey"])
+        self.stage(); self.cli(["run"])
+        env = dict(LLM_ENV, PROMOTER_LLM_SENSITIVITIES="green,amber")
+        code, out = self.cli(["index", "--embed"], env=env)
+        before = self.table()
+        self.assertEqual({len(r["text_sha"]) for r in before.values()}, {16})
+        described = authority.describe_term(
+            VOCAB, "forced-labour", scope="Work exacted under the menace of a penalty.")
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"], env=env, vocab=described)
+        s = self.summary(out)
+        self.assertEqual((s["embedded"], s["kept"]), (1, 1))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Forced labour: Work exacted under the menace of a penalty.", self.sent[0])
+        after = self.table()
+        self.assertNotEqual(after[DEST]["text_sha"], before[DEST]["text_sha"])
+        self.assertEqual(after[PARENT]["text_sha"], before[PARENT]["text_sha"])
+        # The same vocabulary again: nothing to do.
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"], env=env, vocab=described)
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (0, 2))
+        self.assertEqual(self.sent, [])
+        # A quiet run reads the vocabulary of the day too: the note gone
+        # again, the one row is re-embedded without the index being rewritten.
+        self.sent.clear()
+        code, out = self.cli(["run"], env=env)
+        self.assertEqual(code, 0, out)
+        actions = [json.loads(o)["action"] for o in out]
+        self.assertNotIn("index_written", actions)
+        self.assertIn("embed_text_changed", actions)
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (1, 1))
+        self.assertEqual(self.table()[DEST]["text_sha"], before[DEST]["text_sha"])
+        # And the next quiet run has nothing to say.
+        code, out = self.cli(["run"], env=env)
+        self.assertNotIn("embed", "".join(out))
+
+    def test_rows_without_a_text_sha_are_re_embedded_once(self):
+        """A file from before this version carries no text_sha: every
+        vector is remade once, then kept."""
+        self.stage(); self.cli(["run"])
+        self.cli(["index", "--embed"], env=LLM_ENV)
+        embed_mod.write(self.s3, "crsw", "index",
+                        [dict(r, text_sha=None) for r in self.table().values()])
+        self.assertIsNone(self.table()[DEST]["text_sha"])
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"], env=LLM_ENV)
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (1, 0))
+        self.assertEqual(len(self.table()[DEST]["text_sha"]), 16)
+        self.sent.clear()
+        code, out = self.cli(["index", "--embed"], env=LLM_ENV)
+        self.assertEqual((self.summary(out)["embedded"], self.summary(out)["kept"]), (0, 1))
 
     def test_rows_keyed_to_the_bare_alias_are_re_embedded_once(self):
         """A store from before the fingerprint says arc:embedvl in every
@@ -275,3 +335,20 @@ class TestTextFor(unittest.TestCase):
                "depositor": "k1", "identifier": "rs2/csac/green/2_final/csac-clean"}
         self.assertEqual(embed_mod.text_for(row), "csac-clean\nAn extract.\na, b")
         self.assertEqual(embed_mod.text_for({}), "")
+
+    def test_subjects_become_label_and_scope_lines_with_a_vocabulary(self):
+        row = {"dataset": "csac-clean", "abstract": "An extract.",
+               "subject": ["forced-labour", "survey", "dragons"], "source_detail": "CSAC"}
+        described = authority.describe_term(
+            VOCAB, "forced-labour", scope="Work exacted under the menace of a penalty.")
+        self.assertEqual(embed_mod.text_for(row, described),
+                         "csac-clean\nAn extract.\n"
+                         "Forced labour: Work exacted under the menace of a penalty.\n"
+                         "Survey\ndragons\nCSAC")
+        # Labels alone where there is no note; a slug only when the
+        # vocabulary does not know it; a flat pre-r9 file gives today's text.
+        self.assertEqual(embed_mod.text_for(row, VOCAB).splitlines()[2:5],
+                         ["Forced labour", "Survey", "dragons"])
+        self.assertEqual(embed_mod.text_for(row, {"facets": {"m": ["survey"]}}),
+                         embed_mod.text_for(row))
+        self.assertEqual(embed_mod.text_sha("x"), hashlib.sha256(b"x").hexdigest()[:16])

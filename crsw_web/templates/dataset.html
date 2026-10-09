@@ -21,7 +21,7 @@
     <p class="lede"><code>{{ identifier }}</code></p>
     <p>{{ rec.abstract }}</p>
     <dl>
-      <dt>Subjects</dt><dd>{{ rec.subject|join(", ") }}</dd>
+      <dt>Subjects</dt><dd>{% for s in subjects %}<a href="/datasets?subject={{ s.slug }}"{% if s.scope %} title="{{ s.scope }}"{% endif %}>{% if s.label %}{{ s.label }} <code>{{ s.slug }}</code>{% else %}{{ s.slug }}{% endif %}</a>{% if not loop.last %}, {% endif %}{% endfor %}</dd>
       <dt>Coverage</dt><dd>{{ rec.temporal.start }} to {{ rec.temporal.end }}</dd>
       <dt>Domain</dt><dd>{{ rec.domain }}{% if rec.steward %} (steward {{ rec.steward }}){% endif %}</dd>
       <dt>Version</dt><dd>{{ rec.version }}</dd>

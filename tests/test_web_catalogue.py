@@ -143,6 +143,22 @@ class TestFind(CatalogueBase):
         self.assertTrue(body["built_at"])
         self.assertEqual(len(c.get("/datasets.json").json()["datasets"]), 2)
 
+    def test_dataset_page_shows_subject_labels_with_scope_notes(self):
+        described = authority.describe_term(
+            VOCAB, "forced-labour", scope="Work exacted under the menace of a penalty.")
+        page = self.app(vocab=described).get("/datasets/" + GREEN).text
+        self.assertIn('<a href="/datasets?subject=forced-labour" '
+                      'title="Work exacted under the menace of a penalty.">'
+                      'Forced labour <code>forced-labour</code></a>', page)
+        # No scope note: no hover text. A flat pre-r9 file: the slug alone.
+        page = self.app().get("/datasets/" + GREEN).text
+        self.assertIn('<a href="/datasets?subject=forced-labour">'
+                      'Forced labour <code>forced-labour</code></a>', page)
+        flat = {"vocabulary_version": "x", "domains": VOCAB["domains"],
+                "facets": {"practices": ["forced-labour"]}}
+        page = self.app(vocab=flat).get("/datasets/" + GREEN).text
+        self.assertIn('<a href="/datasets?subject=forced-labour">forced-labour</a>', page)
+
     def test_dataset_page_and_record(self):
         c = self.app()
         page = c.get("/datasets/" + GREEN)

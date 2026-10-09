@@ -145,7 +145,8 @@ def _setup(args):
     return cfg, client, log, vocab_dict, source
 
 
-def _write_index(cfg, client, log, dry_run: bool, changed: int) -> Optional[dict]:
+def _write_index(cfg, client, log, dry_run: bool, changed: int,
+                 vocab_doc: Optional[dict] = None) -> Optional[dict]:
     """Rewrite the index after a real run that changed a record. Never
     on a dry run, never when nothing changed (the bucket is versioned;
     a write every five minutes would pile up versions). A failure is
@@ -157,7 +158,7 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int) -> Optional[dict
     if not cfg.index_prefix or dry_run:
         return None
     if not changed:
-        return _embed_if_model_changed(cfg, client, log)
+        return _embed_if_model_changed(cfg, client, log, vocab_doc)
     try:
         rows_ = index_mod.rows(client, cfg.s3_bucket)
         keys_ = index_mod.write(client, cfg.s3_bucket, cfg.index_prefix, rows_)
@@ -170,7 +171,7 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int) -> Optional[dict
     if not cfg.embed_enabled:
         return None
     try:
-        summary = _refresh_embeddings(cfg, client, rows_, log.write)
+        summary = _refresh_embeddings(cfg, client, rows_, log.write, vocab_doc=vocab_doc)
     except Exception as e:
         log.write("embeddings_failed", error=str(e))
         return None
@@ -178,17 +179,23 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int) -> Optional[dict
     return summary
 
 
-def _embed_if_model_changed(cfg, client, log) -> Optional[dict]:
+def _embed_if_model_changed(cfg, client, log, vocab_doc: Optional[dict] = None
+                            ) -> Optional[dict]:
     """The quiet run's check: one GET for the fingerprint, one for the
-    previous file; nothing more unless the backend behind the alias has
-    moved, in which case every vector in place is from another model
-    and is replaced now rather than at the next promotion."""
+    previous file, one for the index; nothing more unless the backend
+    behind the alias has moved (every vector in place is from another
+    model and is replaced now rather than at the next promotion) or the
+    vocabulary of the day gives some row other text than its vector was
+    made from (a scope note or label edited: those rows are remade).
+    The rows come from the index in place, not from every record."""
     if not cfg.embed_enabled:
         return None
     try:
         summary = _refresh_embeddings(cfg, client,
-                                      lambda: index_mod.rows(client, cfg.s3_bucket),
-                                      log.write, only_if_model_changed=True)
+                                      lambda: index_mod.read_rows(client, cfg.s3_bucket,
+                                                                  cfg.index_prefix),
+                                      log.write, only_if_model_changed=True,
+                                      vocab_doc=vocab_doc)
     except Exception as e:
         log.write("embeddings_failed", error=str(e))
         return None
@@ -264,15 +271,18 @@ def _embed_model(cfg, platform, emit, step: str) -> str:
     return model
 
 
-def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False
-                        ) -> Optional[dict]:
+def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False,
+                        vocab_doc=None) -> Optional[dict]:
     """Embed what changed and rewrite embeddings.parquet. Only record
-    metadata goes to the platform (promoter/embed.py, text_for). `emit`
+    metadata goes to the platform (promoter/embed.py, text_for), with
+    the subject terms' labels and scope notes from `vocab_doc`. `emit`
     is the run's log line writer (or print, from the command); `rows_`
     may be a callable, read only when there is something to write. A
     previous file keyed to another fingerprint is said on the trail
-    (`embed_model_changed`); with `only_if_model_changed` that is the
-    only case anything is written or said, else None."""
+    (`embed_model_changed`); with `only_if_model_changed` that, or
+    rows whose text the vocabulary has since changed
+    (`embed_text_changed`), are the only cases anything is written or
+    said, else None."""
     platform = Platform.from_settings(cfg)
     try:
         model = platform.embed_fingerprint()
@@ -280,16 +290,23 @@ def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False
                                            embed_mod.embeddings_key(cfg.index_prefix))
         previous = embed_mod.models_in(existing)
         changed = bool(previous) and previous != [model]
+        stale = []
         if only_if_model_changed and not changed:
-            return None                  # the quiet run has nothing to say
+            rows_ = rows_() if callable(rows_) else rows_
+            stale = embed_mod.stale_text(rows_, existing, vocab_doc)
+            if not stale:
+                return None              # the quiet run has nothing to say
         emit("embed_model_resolved", step="embeddings", alias=cfg.llm_embed_model, model=model)
         if changed:
             emit("embed_model_changed", previous=previous, model=model)
+        if stale:
+            emit("embed_text_changed", datasets=len(stale))
         if callable(rows_):
             rows_ = rows_()
         summary = embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
                                     platform, model, set(cfg.llm_sensitivities),
-                                    cfg.llm_embed_dims or None, existing=existing)
+                                    cfg.llm_embed_dims or None, existing=existing,
+                                    vocab_doc=vocab_doc)
     finally:
         platform.close()
     summary["model"] = model
@@ -361,7 +378,7 @@ def cmd_run(args) -> int:
         else:
             refused += 1
 
-    summary = _write_index(cfg, client, log, args.dry_run, promoted)
+    summary = _write_index(cfg, client, log, args.dry_run, promoted, vocab_doc=vocab_dict)
     if summary and summary.get("model_changed"):
         # Every passage in place is from the old model too: sweep them
         # all, not only what this run promoted.
@@ -409,7 +426,7 @@ def cmd_recategorise(args) -> int:
         else:
             failed += 1
     refused = len(plan.problems) + len(plan.refused) + failed
-    _write_index(cfg, client, log, args.dry_run, rewritten)
+    _write_index(cfg, client, log, args.dry_run, rewritten, vocab_doc=vocab_dict)
     log.write("finish", command="recategorise", seen=len(plan.items),
               would_rewrite=len(plan.to_write) if args.dry_run else None,
               rewritten=rewritten, refused_or_failed=refused, dry_run=args.dry_run)
@@ -433,7 +450,11 @@ def cmd_index(args) -> int:
             print("PROMOTER_LLM_BASE_URL, PROMOTER_LLM_API_KEY and PROMOTER_LLM_EMBED_MODEL "
                   "must all be set for embeddings", file=sys.stderr)
             return 2
-        summary = _refresh_embeddings(cfg, client, rows_, _print_line)
+        # The vocabulary of the day: its labels and scope notes are in the text.
+        vocab_dict, source = vocab.load_vocabulary()
+        _print_line("vocabulary", source=source,
+                    version=vocab_dict.get("vocabulary_version"))
+        summary = _refresh_embeddings(cfg, client, rows_, _print_line, vocab_doc=vocab_dict)
         _print_line("embeddings_written", **summary)
         if summary["key"] is None:
             print("pyarrow is not installed: embeddings were not written", file=sys.stderr)

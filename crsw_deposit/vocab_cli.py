@@ -3,6 +3,8 @@
     crsw-vocab validate [--file vocab.json]
     crsw-vocab tree FACET
     crsw-vocab add SLUG --facet F --label "Text" [--broader PARENT]
+                   [--scope "What it covers"] [--alias OTHER ...]
+    crsw-vocab describe SLUG [--scope "..."] [--alias OTHER ...] [--clear-aliases]
     crsw-vocab rename OLD NEW [--label "Text"]
     crsw-vocab merge OLD [OLD ...] --into TARGET[=Label]
     crsw-vocab split OLD --into NEW=Label NEW2=Label [...]
@@ -11,9 +13,12 @@
 
 Every editing command takes --by (default: your login), --date (default:
 today), --note. The file is validated after the change and only written
-if it passes; the input file is never touched on refusal. No git calls:
-commit the result yourself, or let the vocabulary repo's Action do it.
-Stdlib only, the only user I/O in the package besides deposit.py.
+if it passes; the input file is never touched on refusal. `describe`
+edits a term's scope note and other spellings, which is description,
+not a change: no entry in the change list, the version stays, and the
+git history is the record. No git calls: commit the result yourself, or
+let the vocabulary repo's Action do it. Stdlib only, the only user I/O
+in the package besides deposit.py.
 """
 import argparse
 import datetime
@@ -105,8 +110,31 @@ def cmd_add(args) -> int:
     change.update(kind="add", to=[args.slug], facet=args.facet, label=args.label)
     if args.broader:
         change["broader"] = args.broader
+    if args.scope:
+        change["scope"] = args.scope
+    if args.aliases:
+        change["aliases"] = list(args.aliases)
     _write(args.file, _apply(args, doc, [change]))
     print("added %s to %s" % (args.slug, args.facet))
+    return 0
+
+
+def cmd_describe(args) -> int:
+    doc = _load(args.file)
+    try:
+        doc = authority.describe_term(doc, args.slug, scope=args.scope,
+                                      aliases=args.aliases,
+                                      clear_aliases=args.clear_aliases)
+    except authority.AuthorityError as e:
+        raise SystemExit("Refused: %s" % e)
+    _write(args.file, doc)
+    term = authority.terms_by_slug(doc)[args.slug]
+    did = []
+    if args.scope:
+        did.append("scope note set")
+    if args.clear_aliases or args.aliases:
+        did.append("other spellings: %s" % (", ".join(term.get("aliases") or []) or "none"))
+    print("described %s: %s (no change entry; commit it)" % (args.slug, "; ".join(did)))
     return 0
 
 
@@ -225,7 +253,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--facet", required=True)
     s.add_argument("--label", required=True)
     s.add_argument("--broader", default=None, help="parent term, same facet")
+    s.add_argument("--scope", default=None,
+                   help="scope note: what the term covers and excludes")
+    s.add_argument("--alias", dest="aliases", action="append", default=None,
+                   help="another spelling people use (repeatable)")
     s.set_defaults(func=cmd_add)
+
+    s = sub.add_parser("describe", help="set a term's scope note or other spellings "
+                                        "(not a change: no entry, version kept)")
+    s.add_argument("slug")
+    s.add_argument("--scope", default=None,
+                   help="scope note: what the term covers and excludes")
+    s.add_argument("--alias", dest="aliases", action="append", default=None,
+                   help="another spelling people use (repeatable, added)")
+    s.add_argument("--clear-aliases", action="store_true",
+                   help="drop the spellings it has before adding any")
+    s.set_defaults(func=cmd_describe)
 
     s = editing("rename", "give a term a new slug; the old one is retired")
     s.add_argument("old")

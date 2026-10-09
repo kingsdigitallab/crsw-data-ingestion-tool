@@ -6,9 +6,14 @@ rebuilt on its own (finding-and-reuse.md §5).
 
 What is embedded is the record's title, abstract, subject terms and
 source note, nothing from the file manifest and nothing from any file.
-The work is incremental: a row whose identifier, modified stamp and
-model match the previous file is kept, so a routine run embeds only
-what changed. `model` is not the alias from the configuration but the
+With the vocabulary to hand, a subject term is sent as its label and
+scope note ("Forced labour: work exacted under the menace of a
+penalty"), one line each after the abstract, never as the bare slug.
+The work is incremental: a row whose identifier, modified stamp, model
+and `text_sha` (the text it was made from) match the previous file is
+kept, so a routine run embeds only what changed, and a scope note or
+label edited in the vocabulary re-embeds exactly the rows carrying that
+term. `model` is not the alias from the configuration but the
 fingerprint of what that alias resolves to on the platform
 (`Platform.embed_fingerprint`): a backend swapped behind an unchanged
 alias gives a new fingerprint, and every row is embedded again, since
@@ -18,11 +23,14 @@ until the Centre allows amber); the other rows are still written, with
 no vector, so the file says the dataset exists. Vectors are stored at
 half precision (16-bit floats), which the ranking cannot tell apart
 from full precision."""
+import hashlib
 import io
 import logging
 from typing import Dict, List, Optional, Sequence, Set
 
 from botocore.exceptions import ClientError
+
+from crsw_deposit import authority
 
 try:                                    # optional, as in index.py
     import numpy as np
@@ -37,22 +45,63 @@ EMBEDDINGS_NAME = "embeddings.parquet"
 # `cut` is the vector length that was asked for (0 = the model's full
 # length); a row is kept only when the same cut is still asked for.
 COLUMNS = ("identifier", "dataset_uuid", "modified", "sensitivity",
-           "model", "cut", "dimension", "embedding")
+           "model", "cut", "dimension", "text_sha", "embedding")
 # The record fields whose text is embedded. Nothing else ever is.
 TEXT_FIELDS = ("dataset", "abstract", "subject", "source_detail")
 
 
-def text_for(row: Dict) -> str:
+def text_for(row: Dict, vocab_doc: Optional[Dict] = None) -> str:
     """The text one dataset is embedded from: title, abstract, subject
-    terms and source note, one per line, blanks left out."""
+    terms and source note, one per line, blanks left out. With a term
+    authority file, each subject is its label and scope note on a line
+    of its own ("Label: scope"; the label alone without a note; the
+    slug only when the vocabulary does not know it). Without one, or
+    with a flat pre-r9 file, the slugs as before."""
     parts = []
     for f in TEXT_FIELDS:
         v = row.get(f)
+        if f == "subject" and isinstance(v, list) and vocab_doc is not None \
+                and authority.is_authority(vocab_doc):
+            parts.extend(_subject_lines(v, vocab_doc))
+            continue
         if isinstance(v, list):
             v = ", ".join(str(x) for x in v if x)
         if v:
             parts.append(str(v).strip())
     return "\n".join(parts)
+
+
+def _subject_lines(subjects: Sequence, vocab_doc: Dict) -> List[str]:
+    labels = authority.labels_of(vocab_doc)
+    scopes = authority.scopes_of(vocab_doc)
+    out = []
+    for s in subjects:
+        if not s:
+            continue
+        line = labels.get(s, str(s))
+        if scopes.get(s):
+            line += ": " + scopes[s]
+        out.append(line)
+    return out
+
+
+def text_sha(text: str) -> str:
+    """Sixteen hex characters that name the text a vector was made from."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def stale_text(index_rows: Sequence[Dict], existing: Dict[str, Dict],
+               vocab_doc: Optional[Dict] = None) -> List[str]:
+    """Identifiers whose vector in `existing` was made from other text
+    than the row gives today (a scope note or label changed in the
+    vocabulary, or a file from before text_sha). Rows without a vector
+    are not counted: nothing was made from their text."""
+    stale = []
+    for r in index_rows:
+        old = existing.get(r.get("identifier"))
+        if old and old.get("embedding") and old.get("text_sha") != text_sha(text_for(r, vocab_doc)):
+            stale.append(r["identifier"])
+    return stale
 
 
 def embeddings_key(prefix: str) -> str:
@@ -84,13 +133,17 @@ def models_in(existing: Dict[str, Dict]) -> List[str]:
 
 
 def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
-          model: str, sensitivities: Set[str], dims: Optional[int] = None) -> Dict:
+          model: str, sensitivities: Set[str], dims: Optional[int] = None,
+          vocab_doc: Optional[Dict] = None) -> Dict:
     """Rows for the new file, and a summary of what was done. `platform`
     is anything with `embed(texts) -> vectors`; `model` is the resolved
     fingerprint the vectors are keyed to, `dims` the vector length in
-    use; a kept row must have both, so a change of either re-embeds."""
+    use, `text_sha` names the text; a kept row must match on all three,
+    so a change of any re-embeds. `vocab_doc` is the vocabulary whose
+    labels and scope notes go into the text (see `text_for`)."""
     out: List[Dict] = []
     todo: List[Dict] = []
+    texts: Dict[str, str] = {}
     kept = skipped = 0
     for r in index_rows:
         ident = r.get("identifier")
@@ -98,15 +151,19 @@ def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
             continue
         base = {"identifier": ident, "dataset_uuid": r.get("dataset_uuid"),
                 "modified": r.get("modified"), "sensitivity": r.get("sensitivity"),
-                "model": model, "cut": dims or 0, "dimension": None, "embedding": None}
+                "model": model, "cut": dims or 0, "dimension": None,
+                "text_sha": None, "embedding": None}
         if r.get("sensitivity") not in sensitivities:
             skipped += 1
             out.append(base)
             continue
+        texts[ident] = text_for(r, vocab_doc)
+        base["text_sha"] = text_sha(texts[ident])
         old = existing.get(ident)
         if (old and old.get("embedding") and old.get("model") == model
                 and old.get("modified") == r.get("modified")
-                and (old.get("cut") or 0) == (dims or 0)):
+                and (old.get("cut") or 0) == (dims or 0)
+                and old.get("text_sha") == base["text_sha"]):
             base["dimension"] = old.get("dimension") or len(old["embedding"])
             base["embedding"] = list(old["embedding"])
             kept += 1
@@ -115,8 +172,7 @@ def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
         out.append(base)
         todo.append(base)
     if todo:
-        vectors = platform.embed([text_for(_index_row(index_rows, t["identifier"]))
-                                  for t in todo])
+        vectors = platform.embed([texts[t["identifier"]] for t in todo])
         for row_, vec in zip(todo, vectors):
             row_["embedding"] = vec
             row_["dimension"] = len(vec)
@@ -126,10 +182,6 @@ def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
             "dropped": dropped, "dimension": max(dims) if dims else None}
 
 
-def _index_row(index_rows: Sequence[Dict], identifier: str) -> Dict:
-    return next(r for r in index_rows if r.get("identifier") == identifier)
-
-
 def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
     if pa is None:
         return None
@@ -137,7 +189,8 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
         pa.field("identifier", pa.string()), pa.field("dataset_uuid", pa.string()),
         pa.field("modified", pa.string()), pa.field("sensitivity", pa.string()),
         pa.field("model", pa.string()), pa.field("cut", pa.int64()),
-        pa.field("dimension", pa.int64()), pa.field("embedding", pa.list_(pa.float16())),
+        pa.field("dimension", pa.int64()), pa.field("text_sha", pa.string()),
+        pa.field("embedding", pa.list_(pa.float16())),
     ])
     # pyarrow takes 16-bit floats only from numpy, not from Python floats.
     vectors = pa.array([np.asarray(r["embedding"], dtype=np.float16)
@@ -165,7 +218,8 @@ def write(client, bucket: str, prefix: str, rows: Sequence[Dict]) -> Optional[st
 
 def refresh(client, bucket: str, prefix: str, index_rows: Sequence[Dict], platform,
             model: str, sensitivities: Set[str], dims: Optional[int] = None,
-            existing: Optional[Dict[str, Dict]] = None) -> Dict:
+            existing: Optional[Dict[str, Dict]] = None,
+            vocab_doc: Optional[Dict] = None) -> Dict:
     """Read the previous file (or take it as `existing`, already read),
     embed what changed, write the new one. Returns the summary from
     `build` plus the key written ('key' is None when pyarrow is absent,
@@ -176,7 +230,7 @@ def refresh(client, bucket: str, prefix: str, index_rows: Sequence[Dict], platfo
     key = embeddings_key(prefix)
     if existing is None:
         existing = read_existing(client, bucket, key)
-    result = build(index_rows, existing, platform, model, sensitivities, dims)
+    result = build(index_rows, existing, platform, model, sensitivities, dims, vocab_doc)
     rows = result.pop("rows")
     result["key"] = write(client, bucket, prefix, rows)
     result["datasets"] = len(rows)

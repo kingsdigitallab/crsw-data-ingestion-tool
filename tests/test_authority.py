@@ -96,6 +96,37 @@ class TestValidate(unittest.TestCase):
         d["terms"][1]["broader"] = "forced-labour"; d["facets"]["practices"] = ["debt-bondage"]
         self.assertRefused(d, "is retired")
 
+    def test_scope_and_alias_rules(self):
+        def errors_with(**fields):
+            d = small()
+            d["terms"][0].update(fields)
+            return authority.validate_authority(d)
+
+        self.assertEqual(errors_with(scope="Work exacted under menace of penalty."), [])
+        self.assertEqual(errors_with(aliases=["forced-work", "compulsory-labour"]), [])
+        for bad in ("", "   ", 3):
+            self.assertIn("term forced-labour: scope must be a non-empty string",
+                          errors_with(scope=bad))
+        self.assertIn("term forced-labour: aliases must be a list of slugs",
+                      errors_with(aliases="forced-work"))
+        self.assertIn("term forced-labour: alias 'Forced Work' is not lower-case words "
+                      "joined by hyphens", errors_with(aliases=["Forced Work"]))
+        self.assertIn("term forced-labour: aliases repeat", errors_with(aliases=["a-b", "a-b"]))
+        self.assertIn("term forced-labour: alias debt-bondage is a current term's slug",
+                      errors_with(aliases=["debt-bondage"]))
+        d = small()
+        d["terms"][0]["aliases"] = ["bonded"]
+        d["terms"][1]["aliases"] = ["bonded"]
+        self.assertIn("term debt-bondage: alias bonded is also on forced-labour",
+                      authority.validate_authority(d))
+        # A retired term keeps its description; its alias may even be a
+        # retired slug, which is the natural case after a rename.
+        d = authority.apply_change(small(), change(
+            "rename", **{"from": ["debt-bondage"], "to": ["bonded-labour"]}))
+        authority.terms_by_slug(d)["debt-bondage"]["scope"] = "What it meant."
+        authority.terms_by_slug(d)["bonded-labour"]["aliases"] = ["debt-bondage"]
+        self.assertEqual(authority.validate_authority(d), [])
+
     def test_flat_file_is_not_an_authority(self):
         flat = {"vocabulary_version": "x", "facets": {"a": ["b"]}}
         self.assertFalse(authority.is_authority(flat))
@@ -125,6 +156,20 @@ class TestApplyChange(unittest.TestCase):
                                              label="Mining", date="2026-10-02"))
         self.assertNotIn("broader", authority.terms_by_slug(d)["mining"])
         self.assertEqual(d["vocabulary_version"], "2026-10-02")
+
+    def test_add_puts_scope_and_aliases_on_the_term_not_the_change(self):
+        d = authority.apply_change(small(), change(
+            "add", to=["servile-marriage"], facet="practices", label="Servile marriage",
+            scope="Marriage under the 1956 Convention art. 1(c). ",
+            aliases=["slave-marriage"]))
+        t = authority.terms_by_slug(d)["servile-marriage"]
+        self.assertEqual(t["scope"], "Marriage under the 1956 Convention art. 1(c).")
+        self.assertEqual(t["aliases"], ["slave-marriage"])
+        self.assertNotIn("scope", d["changes"][-1])
+        self.assertNotIn("aliases", d["changes"][-1])
+        with self.assertRaises(authority.AuthorityError):
+            authority.apply_change(small(), change(
+                "add", to=["x"], facet="practices", label="X", aliases=["survey"]))
 
     def test_rename_keeps_facet_parent_and_children(self):
         d = authority.apply_change(small(), change(
@@ -277,6 +322,63 @@ class TestMapSubjects(unittest.TestCase):
         subjects, applied = authority.map_subjects(["debt-bondage"], d)
         self.assertEqual(subjects, ["forced-labour"])
         self.assertEqual(applied[0]["kind"], "replaced")
+
+
+class TestDescribeTerm(unittest.TestCase):
+    """A scope note or alias is description, not identity: no change
+    entry, the version stays, the input is untouched."""
+
+    def test_scope_on_a_current_term(self):
+        before = small()
+        d = authority.describe_term(before, "forced-labour", scope="  Work exacted.  ")
+        self.assertEqual(authority.terms_by_slug(d)["forced-labour"]["scope"], "Work exacted.")
+        self.assertEqual(d["changes"], [])
+        self.assertEqual(d["vocabulary_version"], "2026-07-23")
+        self.assertEqual(before, small())
+        self.assertEqual(authority.validate_authority(d), [])
+
+    def test_aliases_add_deduplicate_and_clear(self):
+        d = authority.describe_term(small(), "forced-labour", aliases=["forced-work"])
+        d = authority.describe_term(d, "forced-labour", aliases=["forced-work", "unfree-labour"])
+        self.assertEqual(authority.terms_by_slug(d)["forced-labour"]["aliases"],
+                         ["forced-work", "unfree-labour"])
+        d = authority.describe_term(d, "forced-labour", aliases=["slave-labour"],
+                                    clear_aliases=True)
+        self.assertEqual(authority.terms_by_slug(d)["forced-labour"]["aliases"], ["slave-labour"])
+        d = authority.describe_term(d, "forced-labour", clear_aliases=True)
+        self.assertNotIn("aliases", authority.terms_by_slug(d)["forced-labour"])
+
+    def test_a_retired_term_can_be_described(self):
+        d = authority.apply_change(small(), change("retire", **{"from": ["maritime"]}))
+        d = authority.describe_term(d, "maritime", scope="What it meant.")
+        self.assertEqual(authority.terms_by_slug(d)["maritime"]["scope"], "What it meant.")
+        self.assertEqual(len(d["changes"]), 1)
+
+    def test_refusals(self):
+        for kwargs, message in (
+                (dict(scope="x"), "unknown term 'dragons'"),
+                (dict(), "nothing to do"),
+                (dict(scope=""), "scope must be a non-empty string"),
+                (dict(aliases=["debt-bondage"]), "is a current term's slug"),
+                (dict(aliases=["Bad Alias"]), "not lower-case words")):
+            slug = "dragons" if message.startswith("unknown") else "forced-labour"
+            with self.assertRaises(authority.AuthorityError) as cm:
+                authority.describe_term(small(), slug, **kwargs)
+            self.assertIn(message, str(cm.exception))
+        with self.assertRaises(authority.AuthorityError):
+            authority.describe_term({"facets": {}}, "x", scope="y")
+
+    def test_readers(self):
+        d = authority.describe_term(small(), "forced-labour", scope="Work exacted.",
+                                    aliases=["forced-work"])
+        d = authority.apply_change(d, change("retire", **{"from": ["maritime"]}))
+        authority.terms_by_slug(d)["maritime"]["aliases"] = ["sea"]   # retired: not offered
+        self.assertEqual(authority.aliases_of(d), {"forced-work": "forced-labour"})
+        self.assertEqual(authority.scopes_of(d), {"forced-labour": "Work exacted."})
+        self.assertEqual(authority.labels_of(d)["osint"], "OSINT")
+        self.assertEqual(authority.aliases_of({"facets": {}}), {})
+        self.assertEqual(authority.scopes_of({"facets": {}}), {})
+        self.assertEqual(authority.labels_of({"facets": {}}), {})
 
 
 class TestHierarchyReads(unittest.TestCase):

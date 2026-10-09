@@ -12,6 +12,13 @@ A file with no `terms` key is the pre-r9 flat shape and is left alone by
 everything here except `facets_of`, which reads it as-is. A file whose
 terms have no `broader` parents is flat too; every function below then
 behaves exactly as if the hierarchy did not exist.
+
+A term may also carry a description: `scope`, a note on what it covers
+and excludes (a SKOS scope note), and `aliases`, other spellings people
+use that the deposit tool resolves to the term. Description is not
+identity: it changes which records a term applies to not at all, so
+`describe_term` edits it without a change entry and the promoter never
+acts on it.
 """
 import copy
 import datetime
@@ -49,6 +56,28 @@ def terms_by_slug(doc: dict) -> Dict[str, dict]:
 def current_terms(doc: dict) -> List[dict]:
     return [t for t in doc.get("terms") or []
             if isinstance(t, dict) and t.get("status") == "current"]
+
+
+def labels_of(doc: dict) -> Dict[str, str]:
+    """slug -> label, every term, current or retired."""
+    return {s: t.get("label") or s for s, t in terms_by_slug(doc).items()}
+
+
+def scopes_of(doc: dict) -> Dict[str, str]:
+    """slug -> scope note, for the terms that have one."""
+    return {s: t["scope"] for s, t in terms_by_slug(doc).items()
+            if isinstance(t.get("scope"), str) and t["scope"].strip()}
+
+
+def aliases_of(doc: dict) -> Dict[str, str]:
+    """alias -> the current term it stands for. A retired term's aliases
+    are not offered: nothing should resolve to a retired term."""
+    out = {}
+    for t in current_terms(doc):
+        for alias in t.get("aliases") or []:
+            if isinstance(alias, str):
+                out[alias] = t["slug"]
+    return out
 
 
 def facet_order(doc: dict) -> List[str]:
@@ -218,8 +247,37 @@ def validate_authority(doc) -> List[str]:
         broader = t.get("broader")
         if broader is not None and not isinstance(broader, str):
             errors.append("%s: broader must be a slug or null" % label)
+        scope = t.get("scope")
+        if scope is not None and not (isinstance(scope, str) and scope.strip()):
+            errors.append("%s: scope must be a non-empty string" % label)
+        aliases = t.get("aliases")
+        if aliases is not None:
+            if not (isinstance(aliases, list)
+                    and all(isinstance(a, str) for a in aliases)):
+                errors.append("%s: aliases must be a list of slugs" % label)
+            else:
+                for alias in aliases:
+                    if not SLUG_RE.match(alias):
+                        errors.append("%s: alias %r is not lower-case words joined "
+                                      "by hyphens" % (label, alias))
+                if len(set(aliases)) != len(aliases):
+                    errors.append("%s: aliases repeat" % label)
 
     # Cross-term rules.
+    seen_alias: Dict[str, str] = {}
+    for slug, t in by_slug.items():
+        if t.get("status") == "current" and isinstance(t.get("aliases"), list):
+            for alias in t["aliases"]:
+                if not isinstance(alias, str):
+                    continue
+                if alias in by_slug and by_slug[alias].get("status") == "current":
+                    errors.append("term %s: alias %s is a current term's slug"
+                                  % (slug, alias))
+                elif alias in seen_alias:
+                    errors.append("term %s: alias %s is also on %s"
+                                  % (slug, alias, seen_alias[alias]))
+                else:
+                    seen_alias[alias] = slug
     for slug, t in by_slug.items():
         for succ in t.get("replaced_by") or []:
             if succ not in by_slug:
@@ -365,7 +423,7 @@ def apply_change(doc: dict, change: dict) -> dict:
         if successors:
             t["replaced_by"] = list(successors)
 
-    def new_term(slug, facet, label, broader):
+    def new_term(slug, facet, label, broader, scope=None, aliases=None):
         _require(bool(SLUG_RE.match(slug or "")),
                  "slug %r is not lower-case words joined by hyphens" % slug)
         _require(slug not in by_slug, "term %s already exists" % slug)
@@ -380,14 +438,20 @@ def apply_change(doc: dict, change: dict) -> dict:
              "status": "current", "since": date}
         if broader:
             t["broader"] = broader
+        if scope is not None:
+            t["scope"] = scope.strip() if isinstance(scope, str) else scope
+        if aliases:
+            t["aliases"] = list(aliases)
         out["terms"].append(t)
         by_slug[slug] = t
         return t
 
     if kind == "add":
         _require(len(to) == 1, "add names exactly one term in to")
+        # Description travels on the term, not in the change entry.
         new_term(to[0], change.get("facet"), change.get("label"),
-                 change.get("broader"))
+                 change.get("broader"), change.pop("scope", None),
+                 change.pop("aliases", None))
     elif kind == "rename":
         _require(len(frm) == 1 and len(to) == 1,
                  "rename takes one term in from and one in to")
@@ -438,6 +502,41 @@ def apply_change(doc: dict, change: dict) -> dict:
     out["facets"] = facets_from_terms(out)
     if date > str(out.get("vocabulary_version") or ""):
         out["vocabulary_version"] = date
+    errors = validate_authority(out)
+    _require(not errors, "; ".join(errors))
+    return out
+
+
+# --- describing a term -------------------------------------------------
+
+def describe_term(doc: dict, slug: str, scope: Optional[str] = None,
+                  aliases: Optional[List[str]] = None,
+                  clear_aliases: bool = False) -> dict:
+    """The authority file with one term's description changed, as a new
+    document: `scope` replaced when given, the aliases cleared when
+    asked, `aliases` added (without repeats). The term may be current
+    or retired. No change entry and the version stays, since nothing
+    about which records the term applies to has moved; the vocabulary
+    repo's history is the audit trail. Refuses an unknown term, nothing
+    to do, or anything the validator would; the input is untouched."""
+    _require(is_authority(doc), "not an authority file (no terms list)")
+    _require(scope is not None or bool(aliases) or clear_aliases,
+             "nothing to do: no scope note, no alias, nothing to clear")
+    out = copy.deepcopy(doc)
+    term = terms_by_slug(out).get(slug)
+    _require(term is not None, "unknown term %r" % slug)
+    if scope is not None:
+        _require(isinstance(scope, str) and bool(scope.strip()),
+                 "scope must be a non-empty string")
+        term["scope"] = scope.strip()
+    if clear_aliases:
+        term.pop("aliases", None)
+    if aliases:
+        kept = list(term.get("aliases") or [])
+        for alias in aliases:
+            if alias not in kept:
+                kept.append(alias)
+        term["aliases"] = kept
     errors = validate_authority(out)
     _require(not errors, "; ".join(errors))
     return out

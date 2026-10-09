@@ -14,6 +14,8 @@ import io
 import json
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from botocore.exceptions import ClientError
+
 from crsw_deposit import record
 
 from .scan import DatasetRef, list_datasets
@@ -109,6 +111,21 @@ def rows(client, bucket: str, strand: Optional[str] = None,
     now = now or record.utc_now_iso()
     return [row(ref, rec, labels, now)
             for ref, rec, labels in read_records(client, bucket, strand)]
+
+
+def read_rows(client, bucket: str, prefix: str) -> List[Dict]:
+    """The rows of the index in place (one GET), or [] when there is
+    none yet. For the quiet run's embedding check, which must not read
+    every record every five minutes."""
+    key = prefix.strip("/") + "/" + JSONL_NAME
+    try:
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("NoSuchKey", "404", "NotFound"):
+            return []
+        raise
+    return [json.loads(line) for line in body.decode("utf-8").splitlines() if line.strip()]
 
 
 def jsonl_bytes(rows_: List[Dict]) -> bytes:

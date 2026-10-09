@@ -124,7 +124,7 @@
         {% for facet, terms in facets.items() %}
         <div class="facet">
           <h3>{{ facet }}</h3>
-          {% for t, depth in facet_tree[facet] %}<label class="depth-{{ depth }}"><input type="checkbox" name="subject" value="{{ t }}"> {{ t }}</label>{% endfor %}
+          {% for t in facet_tree[facet] %}<label class="depth-{{ t.depth }}"{% if t.scope %} title="{{ t.scope }}"{% endif %}><input type="checkbox" name="subject" value="{{ t.slug }}"> {{ t.slug }}</label>{% if t.scope %}<details class="scope depth-{{ t.depth }}"><summary>what this covers</summary><p>{{ t.scope }}</p></details>{% endif %}{% endfor %}
         </div>
         {% endfor %}
       </div>

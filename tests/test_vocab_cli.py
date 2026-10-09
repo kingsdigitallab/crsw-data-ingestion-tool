@@ -108,6 +108,49 @@ class TestVocabCli(unittest.TestCase):
         self.assertEqual(authority.validate_authority(d), [])
         self.assertEqual(d["vocabulary_version"], "2026-10-03")
 
+    def test_add_with_scope_and_aliases(self):
+        self.run_cli("add", "servile-marriage", "--facet", "practices",
+                     "--label", "Servile marriage", "--broader", "forced-marriage",
+                     "--scope", "Marriage under the 1956 Convention art. 1(c).",
+                     "--alias", "slave-marriage", "--alias", "forced-wife",
+                     *self.common())
+        t = authority.terms_by_slug(self.doc())["servile-marriage"]
+        self.assertEqual(t["scope"], "Marriage under the 1956 Convention art. 1(c).")
+        self.assertEqual(t["aliases"], ["slave-marriage", "forced-wife"])
+        self.assertNotIn("scope", self.doc()["changes"][-1])
+        self.assertEqual(authority.validate_authority(self.doc()), [])
+
+    def test_describe_touches_only_the_term_line_and_no_change_entry(self):
+        before = self.file.read_text(encoding="utf-8")
+        out = self.run_cli("describe", "forced-labour",
+                           "--scope", "Work exacted under menace of penalty.",
+                           "--alias", "forced-work")
+        self.assertIn("described forced-labour", out)
+        after = self.file.read_text(encoding="utf-8")
+        changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
+        self.assertEqual(len(changed), 1)
+        self.assertIn('"slug": "forced-labour"', changed[0][1])
+        self.assertIn('"scope": "Work exacted under menace of penalty."', changed[0][1])
+        d = self.doc()
+        self.assertEqual(d["changes"], [])
+        self.assertEqual(d["vocabulary_version"], "2026-07-23")
+        self.assertEqual(authority.terms_by_slug(d)["forced-labour"]["aliases"], ["forced-work"])
+        # Aliases replaced, a retired term described, refusals leave the file alone.
+        self.run_cli("describe", "forced-labour", "--clear-aliases", "--alias", "unfree-labour")
+        self.assertEqual(authority.terms_by_slug(self.doc())["forced-labour"]["aliases"],
+                         ["unfree-labour"])
+        self.run_cli("retire", "maritime", *self.common())
+        self.run_cli("describe", "maritime", "--scope", "What it meant.")
+        self.assertEqual(authority.terms_by_slug(self.doc())["maritime"]["scope"], "What it meant.")
+        kept = self.file.read_text(encoding="utf-8")
+        out = self.run_cli("describe", "dragons", "--scope", "x", expect=1)
+        self.assertIn("unknown term", out)
+        out = self.run_cli("describe", "forced-labour", expect=1)
+        self.assertIn("nothing to do", out)
+        out = self.run_cli("describe", "forced-labour", "--alias", "survey", expect=1)
+        self.assertIn("current term's slug", out)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), kept)
+
     def test_move_under_parent_and_earlier_date_refused(self):
         self.run_cli("add", "osint-social", "--facet", "methods", "--label", "x",
                      *self.common())

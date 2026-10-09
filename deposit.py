@@ -310,24 +310,51 @@ def subject_listing_lines(entries, width, depths=None):
     return lines
 
 
-def resolve_subjects(raw, entries):
+def resolve_subjects(raw, entries, aliases=None):
     """Resolve comma-separated numbers/terms (r2 §4). Returns
-    (resolved deduped in order, unknown tokens). Unknown tokens are
-    named, never silently dropped."""
+    (resolved deduped in order, unknown tokens, aliased). Unknown tokens
+    are named, never silently dropped. `aliases` (other spelling -> term,
+    from the vocabulary) lets someone type child-soldiers for
+    child-soldiering: the term is taken and `aliased` carries
+    (as typed, term) so the prompt can say so. A number or a term's own
+    slug is never read as an alias."""
     by_number = {n: t for n, t, _f in entries}
     by_term = {t.lower(): t for _n, t, _f in entries}
+    by_alias = {a.lower(): t for a, t in (aliases or {}).items()
+                if t in by_term.values()}
     resolved = []
     unknown = []
+    aliased = []
     for token in (raw or "").split(","):
         token = token.strip()
         if not token:
             continue
         term = by_number.get(token) or by_term.get(token.lower())
+        if term is None and token.lower() in by_alias:
+            term = by_alias[token.lower()]
+            aliased.append((token, term))
         if term is None:
             unknown.append(token)
         elif term not in resolved:
             resolved.append(term)
-    return resolved, unknown
+    return resolved, unknown, aliased
+
+
+def subject_help(token, entries, vocab_dict):
+    """One line for `?TOKEN` at the Subjects prompt: the term, its label
+    and its scope note (what it covers and excludes), or why there is
+    none. A flat, pre-r9 file has neither, so the slug stands in."""
+    from crsw_deposit import authority
+    token = (token or "").strip()
+    if not token:
+        return "Type ? and a number or term, e.g. ?1 or ?forced-labour."
+    term = ({n: t for n, t, _f in entries}.get(token)
+            or {t.lower(): t for _n, t, _f in entries}.get(token.lower()))
+    if term is None:
+        return "No term %s in the listing." % token
+    label = authority.labels_of(vocab_dict).get(term, term)
+    scope = authority.scopes_of(vocab_dict).get(term)
+    return "%s (%s): %s" % (term, label, scope or "no scope note yet.")
 
 
 def ask_yes_no(prompt: str, default_no: bool = True) -> bool:
@@ -1181,12 +1208,15 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             else:
                 warn("the existing record's subjects are no longer all in the "
                      "vocabulary - please choose again.")
+        from crsw_deposit import authority
         entries = subject_entries(vocab_dict)
+        aliases = authority.aliases_of(vocab_dict)
         width = shutil.get_terminal_size().columns
         for line in subject_listing_lines(entries, width,
                                           subject_depths(vocab_dict)):
             say(line)
         say("")
+        say("Type ? and a number or term to read what it covers, e.g. ?1")
         while True:
             if default:
                 raw = input(style("Subjects - select one or more "
@@ -1198,13 +1228,18 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
             else:
                 raw = input(style("Subjects - select one or more "
                                   "(comma-separated numbers or terms): ", "bold"))
-            subjects, unknown = resolve_subjects(raw, entries)
+            if raw.strip().startswith("?"):
+                say(subject_help(raw.strip()[1:], entries, vocab_dict))
+                continue
+            subjects, unknown, aliased = resolve_subjects(raw, entries, aliases)
             if unknown:
                 say(MESSAGES["unknown_subject"].format(terms=", ".join(unknown)))
                 continue
             if not subjects:
                 say("At least one subject term is required.")
                 continue
+            for typed, term in aliased:
+                say("Using %s for %s." % (term, typed))
             say("Subjects: %s" % ", ".join(subjects))
             meta["subject"] = subjects
             break

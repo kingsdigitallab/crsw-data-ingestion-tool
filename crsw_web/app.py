@@ -11,7 +11,7 @@ import re
 from datetime import timezone
 from email.utils import format_datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Sequence
 from urllib.parse import quote
 
 from botocore.exceptions import ClientError
@@ -140,16 +140,26 @@ def create_app(settings: Optional[Settings] = None,
             "strands": keys.STRANDS,
             "domains": vocab.domains(vocab_dict),
             "facets": facets,
-            # r9 §1.8: narrower terms sit indented under their broader term
-            "facet_tree": {name: authority.tree(vocab_dict, name)
-                           if authority.is_authority(vocab_dict)
-                           else [(t, 0) for t in terms]
+            # r9 §1.8: narrower terms sit indented under their broader
+            # term; a scope note, where the term has one, is hover text
+            # and an expand control (no JS). The checkbox text stays the
+            # slug: the script and the picker prefill match on it.
+            "facet_tree": {name: form_terms(vocab_dict, name, terms)
                            for name, terms in facets.items()},
             "vocabulary_version": vocab_dict.get("vocabulary_version"),
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
             "activities": vocab.activities(vocab_dict),
             "rules": client_rules(),
         })
+
+    def form_terms(vocab_dict: dict, facet: str, terms: Sequence[str]) -> List[Dict]:
+        if not authority.is_authority(vocab_dict):
+            return [{"slug": t, "depth": 0, "label": t, "scope": None} for t in terms]
+        scopes = authority.scopes_of(vocab_dict)
+        labels = authority.labels_of(vocab_dict)
+        return [{"slug": slug, "depth": depth, "label": labels.get(slug, slug),
+                 "scope": scopes.get(slug)}
+                for slug, depth in authority.tree(vocab_dict, facet)]
 
     @app.get("/deposits/{deposit_id}/summary", response_class=HTMLResponse)
     def summary(deposit_id: str, request: Request,
@@ -566,8 +576,14 @@ def create_app(settings: Optional[Settings] = None,
         rec = load_record_or_404(cat, identifier)
         files = rec.get("files") or []
         derived = [r for r in cat.rows() if identifier in (r.get("derived_from_identifiers") or [])]
+        vocab_dict = vocab_cache.current()
+        labels = authority.labels_of(vocab_dict)
+        scopes = authority.scopes_of(vocab_dict)
         return templates.TemplateResponse(request, "dataset.html", {
             "user": user, "identifier": identifier, "rec": rec, "derived": derived,
+            # Each subject as its label, slug and scope note, linked to the filter.
+            "subjects": [{"slug": s, "label": labels.get(s), "scope": scopes.get(s)}
+                         for s in (rec.get("subject") or [])],
             "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings),
             "sizes": {f["path"]: record.human_bytes(f.get("bytes") or 0) for f in files},
             "total": record.human_bytes(sum(int(f.get("bytes") or 0) for f in files)),
