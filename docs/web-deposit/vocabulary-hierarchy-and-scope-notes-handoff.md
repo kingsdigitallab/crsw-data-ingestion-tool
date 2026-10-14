@@ -19,6 +19,13 @@
 > the live repository, and its apply-issue workflow installs the tool from
 > `main`, so `describe` must be pushed before the "Describe a term" form
 > works there. The "First content" below remains a proposal.
+>
+> 14 October: v0.11.0 on both VMs; the kit and the first two scope notes
+> (child-soldiering, forced-labour) merged in the vocabulary repo. One
+> decision reversed on seeing it live: the find page's dropdown shows the
+> whole vocabulary tree, not the in-use terms plus parents, and the count
+> line names only narrower terms the results carry (see
+> `finding-and-reuse.md` §5, 14 October).
 
 Written 9 October 2026 from a design conversation with Neil. Repos: `crsw-data-ingestion-tool` and the public `kingsdigitallab/crsw-vocabulary`. Two related proposals for the Claude Code session, in the order they should land. Stop at the checkpoints and wait for review, as `docs/web-deposit/plan.md` requires. Nothing here touches `crsw_deposit/`'s stdlib-only rule or writes to the vocabulary repo from the tool.
 

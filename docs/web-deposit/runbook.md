@@ -116,6 +116,7 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **Scope note or other spelling edited** (`describe`, or the "Describe a term" form; no new vocabulary version): nothing to do. The form and the find pages show it after the next refresh; the next promoter run, quiet or not, re-embeds only the datasets carrying that term and logs `embed_text_changed`.
 - **Rotate a key**: edit the env file, restart the service (web) or nothing (promoter picks it up next run). Old key revoked by eResearch.
 - **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the find page says "Ranking by meaning is off until the index is rebuilt for the current embedding model" and the search page "These passages were made with a different embedding model", and word search keeps working. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias (and, from v0.11, no `text_sha`). The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
+- **"Ranking by meaning is off" stays after an upgrade**: nothing needs kicking off; the timer's quiet runs rewrite the embeddings by themselves, but only when the internal VM has `PROMOTER_LLM_BASE_URL`, `PROMOTER_LLM_API_KEY` and `PROMOTER_LLM_EMBED_MODEL` set *and* can reach the platform, and the notice clears only when the web VM resolves the same backend (both ask `GET /models` with their own key). On the internal VM: `grep -c '^PROMOTER_LLM_' .env.promoter` (three or more; never print the values), `journalctl -u crsw-promoter.service -n 60 --no-pager`, and `$P audit --action embed_model_resolved`, `--action embed_model_unresolved`, `--action embeddings_failed`. No `embed_*` line at all on a quiet run means the LLM settings are blank there, or the file is already current. `embed_model_unresolved` means `GET /models` failed from that VM (the route to `ai.create.kcl.ac.uk`, the key, or the URL); nothing is written until it resolves, and the datasets left without a row are embedded then (`embed_rows_missing`). `embeddings_failed` names the HTTP error. On the web VM, `docker compose -f deploy/compose.yaml logs deposit-web | grep -i "models\|fingerprint"`: a bare `arc:embedvl` there means the web cannot reach the platform either, and the notice stays however current the file is. From a laptop on the VPN, `.venv/Scripts/python -m promoter index --embed` with a key in `.env.promoter` writes the file by hand (section 6).
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
 - **Check the service key's scope** after any policy change: `CRSW_INTEGRATION=1 .venv/Scripts/python -m pytest tests/test_integration_cluster.py` from a laptop on the VPN.
@@ -259,7 +260,13 @@ the key in `.env.promoter` does the same job. "Model" here is not the
 alias in the configuration but what the platform says is behind it
 (`alias|backend|quantisation|registered`, from `GET /models`), logged on
 every embedding step as `embed_model_resolved`; see "ARC change the
-embedding model" in section 4.
+embedding model" in section 4. When `GET /models` fails or names no
+backend, the run logs `embed_model_unresolved` and writes nothing
+(vectors keyed to the bare alias would only be replaced wholesale by the
+next run that resolves); a dataset promoted meanwhile has no row in the
+file, and the next quiet run that resolves embeds it, logging
+`embed_rows_missing` with the count. By hand, `$P index --embed` prints
+the same line and exits 1.
 
 **Passages (searching inside documents; `finding-and-reuse.md` §7).** With
 `PROMOTER_PASSAGES=1` as well, a promotion also reads each promoted
@@ -391,6 +398,29 @@ datasets with a notice. The log line per question records the user, the
 question's length, the steps that ran and the result count, never the
 question. Everything above is off when the two variables are blank, and the
 find page is then exactly as before.
+
+**What a page costs.** On a warm cache a find page makes no network
+call: the index and the embeddings file are held in memory per worker
+and re-read every `CRSW_INDEX_REFRESH_SECONDS` (default 60) with
+`If-None-Match`, so an unchanged file is a 304 and nothing is parsed; the
+vocabulary is re-fetched every `CRSW_VOCAB_REFRESH_SECONDS` on a
+background thread, so no request waits on GitHub; the record page and
+the record route fetch the record once; the sidecar compresses pages and
+JSON and keeps its connections to the app open. The image runs two
+uvicorn workers, each with its own caches, so every refresh happens
+twice. Known limit: the two workers share one DuckDB file for passages,
+and only one can hold it, so the second worker keeps its copy in memory
+and rebuilds it from the bucket at each start (a GET per passages file);
+search still works in both. If a page is slow for a researcher and
+`curl -s -o /dev/null -w '%{time_total}' http://127.0.0.1:8080/datasets`
+on the VM is quick, the time is in the KCL proxy.
+
+The subject dropdown on the find page lists the whole vocabulary of the
+moment, grouped by facet and indented under broader terms, a term no
+dataset carries yet included; the count line names only the narrower
+terms the results actually carry ("3 datasets with subject
+armed-conflict (and 1 narrower term)"), and `subject_filter.matched` in
+`/datasets.json` still lists every term the filter searched.
 
 **Searching inside documents.** With `CRSW_PASSAGES=1` as well (and the
 promoter writing passages, section 6), the service keeps a copy of

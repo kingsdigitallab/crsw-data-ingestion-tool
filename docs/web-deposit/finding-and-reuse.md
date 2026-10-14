@@ -273,6 +273,28 @@ next promoter run, a quiet one included (the quiet run reads the index in
 place, one GET, not every record). The first run after this version
 re-embeds everything once, for the fingerprint and the text together.
 
+*14 October, the dropdown and the cost of a page:* the find page's subject
+select now lists the whole vocabulary tree (every current term, indented
+under its parent), not only the terms in use plus their parents: with
+the live corpus the old rule showed none of the five contexts under
+`armed-conflict` while the count line said "(and 5 narrower terms)", and
+Neil preferred to see every term over never seeing an empty one. The
+count line now names only the narrower terms the results carry, so it
+cannot promise what the dropdown does not show; the chat model is still
+offered the in-use terms plus their parents (`Catalogue.subject_tree`),
+since it must pick something that can match; `subject_filter.matched`
+keeps the full list searched. The same day, after a read-path audit: the
+index and embeddings are re-read with `If-None-Match` (an unchanged file
+is a 304, not a download and a parse), the vocabulary refresh runs on a
+background thread instead of inside the first request after the
+interval, the record route fetches once, the upload handler's storage
+calls run in the threadpool rather than on the event loop, the passages
+counts are remembered between syncs, and the sidecar compresses pages
+and keeps its upstream connections. The promoter, when `GET /models`
+fails, now says `embed_model_unresolved` and writes nothing rather than
+keying vectors to the bare alias, and a quiet run embeds datasets missing
+from the file (`embed_rows_missing`).
+
 **Switches, so any part can be turned off without touching code.** Each
 function is off when its model name is blank (`CRSW_LLM_CHAT_MODEL`,
 `CRSW_LLM_EMBED_MODEL`, `CRSW_LLM_RERANK_MODEL`; `PROMOTER_LLM_EMBED_MODEL`),
