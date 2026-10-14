@@ -56,6 +56,19 @@ class TestForm(unittest.TestCase):
         self.assertIn("Depositing as <strong>k1078591", html)
         self.assertIn("/static/deposit.js", html)
 
+    def test_the_form_terms_are_built_once_per_vocabulary(self):
+        from crsw_deposit import authority as auth_mod
+        c = self.client
+        with mock.patch("crsw_web.app.authority.tree", wraps=auth_mod.tree) as tree:
+            self.assertEqual(c.get("/").status_code, 200)
+            first = tree.call_count
+            self.assertGreater(first, 0)
+            self.assertEqual(c.get("/").status_code, 200)
+            self.assertEqual(tree.call_count, first)        # not rebuilt
+            c.app.state.vocab_cache._set(dict(VOCAB), "remote")  # a refresh swapped the doc
+            self.assertEqual(c.get("/").status_code, 200)
+            self.assertEqual(tree.call_count, 2 * first)    # rebuilt once
+
     def test_scope_note_renders_as_hover_text_and_an_expand_control(self):
         described = authority.describe_term(
             VOCAB, "forced-labour", scope='Work exacted under the menace of a "penalty".')

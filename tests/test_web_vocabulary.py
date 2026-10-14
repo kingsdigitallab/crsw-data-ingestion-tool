@@ -2,6 +2,7 @@
 narrower terms indented."""
 import copy
 import json
+import threading
 import unittest
 from pathlib import Path
 
@@ -62,6 +63,8 @@ class TestVocabularyCache(unittest.TestCase):
     def test_newer_remote_file_replaces_the_copy_after_the_interval(self):
         cache, clock, calls = self.make([(newer(), "remote")])
         clock.now += 600
+        cache.current()
+        cache.join()
         doc = cache.current()
         self.assertEqual(doc["vocabulary_version"], "2026-10-01")
         self.assertIn("interstate-war", cache.terms)
@@ -75,16 +78,22 @@ class TestVocabularyCache(unittest.TestCase):
         cache, clock, calls = self.make([OSError("down"), (newer(), "remote")])
         clock.now += 600
         self.assertEqual(cache.current()["vocabulary_version"], "2026-07-23")
+        cache.join()
         self.assertEqual(calls, [1])
         clock.now += 1
         cache.current()
+        cache.join()
         self.assertEqual(calls, [1])     # backed off
         clock.now += 600
+        cache.current()
+        cache.join()
         self.assertEqual(cache.current()["vocabulary_version"], "2026-10-01")
 
     def test_bundled_result_is_not_an_upgrade(self):
         cache, clock, calls = self.make([(newer(), "bundled")])
         clock.now += 600
+        cache.current()
+        cache.join()
         self.assertEqual(cache.current()["vocabulary_version"], "2026-07-23")
 
     def test_invalid_remote_file_is_ignored(self):
@@ -92,7 +101,30 @@ class TestVocabularyCache(unittest.TestCase):
         bad["terms"][0]["status"] = "gone"
         cache, clock, calls = self.make([(bad, "remote")])
         clock.now += 600
+        cache.current()
+        cache.join()
         self.assertEqual(cache.current()["vocabulary_version"], "2026-07-23")
+
+    def test_a_request_is_not_held_up_by_the_fetch(self):
+        release = threading.Event()
+        fetching = threading.Event()
+
+        def slow_loader():
+            fetching.set()
+            release.wait(5)
+            return newer(), "remote"
+        clock = FakeClock()
+        cache = VocabularyCache(copy.deepcopy(VOCAB), "bundled", refresh_seconds=600,
+                                loader=slow_loader, clock=clock)
+        clock.now += 600
+        # The first request after the interval starts the fetch and
+        # returns the copy in hand at once; the fetch is still running.
+        self.assertEqual(cache.current()["vocabulary_version"], "2026-07-23")
+        self.assertTrue(fetching.wait(2))
+        self.assertEqual(cache.current()["vocabulary_version"], "2026-07-23")
+        release.set()
+        cache.join()
+        self.assertEqual(cache.current()["vocabulary_version"], "2026-10-01")
 
     def test_zero_interval_never_refreshes(self):
         cache, clock, calls = self.make([(newer(), "remote")], refresh=0)
@@ -138,6 +170,8 @@ class TestFormAndEndpoint(unittest.TestCase):
         cache._loader = lambda: (newer(), "remote")
         cache.refresh_seconds = 1
         cache._loaded_at -= 5
+        cache.current()
+        cache.join()
         self.assertEqual(cache.current()["vocabulary_version"], "2026-10-01")
         self.assertIn("interstate-war", cache.terms)
 

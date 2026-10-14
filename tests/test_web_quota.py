@@ -55,6 +55,29 @@ class TestQuota(unittest.TestCase):
         # 150 bytes of members plus the finalised record's bytes; control objects excluded.
         self.assertGreater(use.bytes_in_staging, 150)
 
+    def test_storage_calls_run_off_the_event_loop(self):
+        import asyncio
+        from crsw_web.deposits import DepositStore as Store
+        where = {}
+
+        def spy(name, real):
+            def f(*a, **kw):
+                try:
+                    asyncio.get_running_loop()
+                    where[name] = "event loop"
+                except RuntimeError:
+                    where[name] = "thread"
+                return real(*a, **kw)
+            return f
+        c = self.client(user_quota_bytes=120)
+        d = c.post("/deposits", json=FORM).json()
+        with mock.patch("crsw_web.app.quota.usage", spy("usage", quota.usage)), \
+             mock.patch.object(Store, "stored_size", spy("stored_size", Store.stored_size)), \
+             mock.patch.object(Store, "save", spy("save", Store.save)):
+            r = c.put("/deposits/%s/files/a" % d["id"], content=b"x" * 10)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(where, {"usage": "thread", "stored_size": "thread", "save": "thread"})
+
     def test_declared_length_over_remaining_quota_is_413(self):
         c = self.client(user_quota_bytes=120)
         d = c.post("/deposits", json=FORM).json()

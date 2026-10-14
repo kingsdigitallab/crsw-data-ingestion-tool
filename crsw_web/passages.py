@@ -120,6 +120,9 @@ class PassageIndex:
         self._clock = clock
         self._lock = threading.Lock()
         self._synced_at: Optional[float] = None
+        # stats(), forgotten at every sync: the counts only move when the
+        # copy does. "base" is the three counts; "current" is per model.
+        self._stats_memo: Dict[str, Dict] = {"current": {}}
         self.error: Optional[str] = None
         # Files that would not load (bad parquet, wrong vector size), by
         # key: (etag, why). Not fetched again until the bucket holds a
@@ -205,6 +208,7 @@ class PassageIndex:
         """Fetch what changed, drop what went. Returns counts. A failure
         leaves what was loaded before and sets `error`."""
         summary = {"loaded": 0, "dropped": 0, "unchanged": 0, "skipped": 0}
+        self._stats_memo = {"current": {}}
         try:
             wanted = self._listing()
         except Exception as e:
@@ -394,6 +398,13 @@ class PassageIndex:
         """Counts; with `model`, also `current`: the passages whose vector
         was made with that fingerprint, the ones a search can use."""
         self._maybe_sync()
+        memo = self._stats_memo
+        base = memo.get("base")
+        if base is not None and (model is None or model in memo["current"]):
+            out = dict(base)
+            if model is not None:
+                out["current"] = memo["current"][model]
+            return out
         con = self._cursor()
         try:
             if not self._has_table(con):
@@ -404,12 +415,18 @@ class PassageIndex:
             passages, datasets, files = con.execute(
                 "SELECT count(*), count(DISTINCT identifier), count(DISTINCT member || identifier) "
                 "FROM passages").fetchone()
-            out = {"passages": passages, "datasets": datasets, "files": files}
+            base = {"passages": passages, "datasets": datasets, "files": files}
+            current = None
             if model is not None:
-                out["current"] = con.execute(
+                current = con.execute(
                     "SELECT count(*) FROM passages WHERE model = ?", [model]).fetchone()[0]
         finally:
             con.close()
+        memo["base"] = base
+        out = dict(base)
+        if model is not None:
+            memo["current"][model] = current
+            out["current"] = current
         return out
 
 

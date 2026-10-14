@@ -15,6 +15,7 @@ try:
     from crsw_web.catalogue import Catalogue
     from crsw_web.config import Settings
     from promoter import index as index_mod
+    from promoter import embed as embed_mod
     HAVE_WEB = True
 except ImportError:
     HAVE_WEB = False
@@ -106,6 +107,15 @@ class TestReadOnlyClient(unittest.TestCase):
 
 
 class TestFind(CatalogueBase):
+    def test_the_record_route_fetches_the_record_once(self):
+        counting = Counting(self.s3)
+        c = TestClient(create_app(Settings(**READ), s3_client=self.s3, vocab_dict=VOCAB,
+                                  read_client=s3mod.ReadOnly(counting)))
+        r = c.get("/datasets/" + GREEN + "/record")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(json.loads(r.text)["identifier"], GREEN)
+        self.assertEqual(counting.gets[GREEN + "/dataset.events.json"], 1)
+
     def test_lists_search_and_filters(self):
         c = self.app()
         html = c.get("/").text
@@ -270,8 +280,61 @@ class TestHierarchy(CatalogueBase):
                       html)
         self.assertIn('<option value="interstate-war">\u2007\u2007Interstate war '
                       '(interstate-war)</option>', html)
-        self.assertNotIn('value="occupation"', html)            # not in use, not above one
+        # The whole vocabulary is offered, a term nobody has used yet too.
+        self.assertIn('<option value="occupation">Occupation (occupation)</option>', html)
         self.assertNotIn('value="forced-displacement"', html)   # retired
+        self.assertIn('<option value="displacement">', html)
+
+    def test_a_term_the_vocabulary_does_not_know_is_still_offered(self):
+        self.put_record("rs2/csac/green/2_final/old", dict(META, state="2_final", dataset="old",
+                                                           subject=["zzz-old"]),
+                        [record.manifest_entry("o.csv", "9" * 64, 10)],
+                        "k1078591", "66666666-6666-4666-8666-666666666666")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        html = self.app(vocab=self.vocab).get("/datasets").text
+        self.assertIn('<option value="zzz-old">zzz-old (zzz-old)</option>', html)
+
+    def test_the_tree_is_built_once_per_vocabulary(self):
+        docs = {"doc": self.vocab}
+        cat = Catalogue(s3mod.ReadOnly(self.s3), "crsw", "index",
+                        vocabulary=lambda: docs["doc"])
+        first = cat.term_tree()
+        self.assertIn("occupation", [t["slug"] for t in first])
+        self.assertIs(cat.term_tree(), first)
+        docs["doc"] = authority.apply_change(self.vocab, {
+            "kind": "add", "to": ["civil-unrest"], "facet": "contexts",
+            "label": "Civil unrest", "date": "2026-10-04", "by": "k1"})
+        again = cat.term_tree()
+        self.assertIsNot(again, first)
+        self.assertIn("civil-unrest", [t["slug"] for t in again])
+
+    # A1: the count line names only the narrower terms the results carry.
+    def test_the_count_line_counts_only_narrower_terms_the_results_carry(self):
+        v = authority.apply_change(self.vocab, {
+            "kind": "add", "to": ["civil-war"], "facet": "contexts",
+            "label": "Civil war", "broader": "armed-conflict",
+            "date": "2026-10-04", "by": "k1"})
+        c = self.app(vocab=v)
+        page = c.get("/datasets", params={"subject": "armed-conflict"})
+        self.assertIn("1 dataset with subject armed-conflict (and 1 narrower term)", page.text)
+        self.assertNotIn("2 narrower", page.text)
+        body = c.get("/datasets.json", params={"subject": "armed-conflict"}).json()
+        self.assertEqual(body["subject_filter"]["matched"],
+                         ["armed-conflict", "interstate-war", "civil-war"])
+
+    def test_no_narrower_phrase_when_no_result_carries_a_narrower_term(self):
+        v = authority.apply_change(self.vocab, {
+            "kind": "add", "to": ["bonded-labour"], "facet": "practices",
+            "label": "Bonded labour", "broader": "forced-labour",
+            "date": "2026-10-04", "by": "k1"})
+        c = self.app(vocab=v)
+        page = c.get("/datasets", params={"subject": "forced-labour"})
+        self.assertIn('href="/datasets/%s"' % GREEN, page.text)
+        self.assertNotIn("narrower", page.text)
+        body = c.get("/datasets.json", params={"subject": "forced-labour"}).json()
+        self.assertEqual(body["subject_filter"],
+                         {"asked": "forced-labour", "matched": ["forced-labour", "bonded-labour"],
+                          "how": "narrower"})
 
     def test_a_flat_vocabulary_is_a_plain_list(self):
         html = self.app().get("/datasets").text
@@ -349,7 +412,60 @@ class TestDownload(CatalogueBase):
         staging.put_object.assert_not_called()
 
 
+class Counting:
+    """An S3 client that counts get_object calls per key and keeps the
+    arguments, passing everything through."""
+    def __init__(self, client):
+        self._client = client
+        self.gets = {}
+        self.calls = []
+
+    def get_object(self, **kw):
+        self.gets[kw["Key"]] = self.gets.get(kw["Key"], 0) + 1
+        self.calls.append(kw)
+        return self._client.get_object(**kw)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+class Toy:
+    def embed(self, texts):
+        return [[1.0, 0.0] for _ in texts]
+
+
 class TestCatalogueCache(CatalogueBase):
+    def test_unchanged_files_are_not_downloaded_or_parsed_again(self):
+        embed_mod.refresh(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"),
+                          Toy(), "toy", {"green"})
+        counting = Counting(self.s3)
+        clock = {"now": 0.0}
+        cat = Catalogue(s3mod.ReadOnly(counting), "crsw", "index", refresh_seconds=60,
+                        clock=lambda: clock["now"])
+        self.assertEqual(len(cat.rows()), 2)
+        self.assertTrue(cat.has_vectors())
+        rows_obj, vec_obj = cat._rows, cat._vectors
+        self.assertEqual(counting.gets, {"index/datasets.jsonl": 1, "index/embeddings.parquet": 1})
+        # The interval passes, nothing changed: asked with the ETags, told
+        # "not modified", nothing parsed.
+        clock["now"] = 61
+        self.assertEqual(len(cat.rows()), 2)
+        self.assertEqual(counting.gets, {"index/datasets.jsonl": 2, "index/embeddings.parquet": 2})
+        self.assertTrue(all(kw.get("IfNoneMatch") for kw in counting.calls[2:]))
+        self.assertIs(cat._rows, rows_obj)
+        self.assertIs(cat._vectors, vec_obj)
+        self.assertIsNone(cat.error)
+        # The index changes, the embeddings do not: only the index is re-read.
+        self.put_record("rs3/x/green/2_final/third", dict(META, strand="rs3", project="x",
+                                                         state="2_final", dataset="third", creator="Cy"),
+                        [record.manifest_entry("a", "d" * 64, 1)], "k3",
+                        "33333333-3333-4333-8333-333333333333")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        clock["now"] = 122
+        self.assertEqual(len(cat.rows()), 3)
+        self.assertIsNot(cat._rows, rows_obj)
+        self.assertIs(cat._vectors, vec_obj)
+
     def test_refreshes_after_the_interval_and_keeps_rows_on_failure(self):
         clock = {"now": 0.0}
         cat = Catalogue(s3mod.ReadOnly(self.s3), "crsw", "index", refresh_seconds=60,

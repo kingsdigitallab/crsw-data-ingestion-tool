@@ -2,11 +2,12 @@
 
 The service used to load the vocabulary once at start-up, so a change
 merged in the vocabulary repository reached the form only on a restart.
-This cache re-fetches at most once per `refresh_seconds`, inline on the
-first request after the interval (one fetch, bounded by the fetch
-timeout), and swaps the held copy only when the fetch produced a
-remote or cached file that passes every authority rule. Any failure
-keeps the copy already in hand, so the form never goes blank."""
+This cache re-fetches at most once per `refresh_seconds`: the first
+request after the interval starts the fetch on a background thread and
+goes on with the copy in hand (no request waits on GitHub), and the held
+copy is swapped only when the fetch produced a remote or cached file
+that passes every authority rule. Any failure keeps the copy already in
+hand, so the form never goes blank."""
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -22,6 +23,7 @@ class VocabularyCache:
         self._loader = loader or vocab.load_vocabulary
         self._clock = clock
         self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
         self._set(doc, source)
 
     def _set(self, doc: Dict, source: str) -> None:
@@ -71,13 +73,27 @@ class VocabularyCache:
         if not self.stale():
             return
         if not self._lock.acquire(blocking=False):
-            return          # another request in this process is already on it
+            return          # a fetch is already running in this process
+        if not self.stale():
+            self._lock.release()
+            return
+        # The fetch runs on its own thread; this request, and every one
+        # until it finishes, keeps the copy in hand.
+        self._thread = threading.Thread(target=self._refresh_then_release,
+                                        name="vocabulary-refresh", daemon=True)
+        self._thread.start()
+
+    def _refresh_then_release(self) -> None:
         try:
-            if not self.stale():
-                return
             self.refresh()
         finally:
             self._lock.release()
+
+    def join(self, timeout: float = 5.0) -> None:
+        """Wait for a running refresh (tests, and a tidy shutdown)."""
+        t = self._thread
+        if t is not None:
+            t.join(timeout)
 
     def refresh(self) -> bool:
         """Try once; True if a newer usable file replaced the held copy.

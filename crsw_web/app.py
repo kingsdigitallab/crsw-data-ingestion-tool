@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from markupsafe import Markup, escape
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 import crsw_deposit
 from crsw_deposit import authority, deposit_logic, keys, labels as labels_mod, noise, record, vocab
@@ -130,25 +131,47 @@ def create_app(settings: Optional[Settings] = None,
     templates.env.filters["emphasise"] = emphasise
 
     # --- Phase 3: the browser form ----------------------------------------
+    views_held: Dict[str, object] = {}
+
+    def vocab_views(vocab_dict: dict) -> Dict:
+        """What the templates derive from the vocabulary (facets, domains,
+        activities, the form's facet trees, labels, scope notes), built
+        once per document: the cache swaps the document whole on a
+        refresh, so identity says whether anything changed."""
+        held = views_held.get("held")
+        if held is None or held[0] is not vocab_dict:
+            facets = vocab.facets(vocab_dict)
+            views = {
+                "facets": facets,
+                "domains": vocab.domains(vocab_dict),
+                "activities": vocab.activities(vocab_dict),
+                # r9 §1.8: narrower terms sit indented under their broader
+                # term; a scope note, where the term has one, is hover text
+                # and an expand control (no JS). The checkbox text stays the
+                # slug: the script and the picker prefill match on it.
+                "facet_tree": {name: form_terms(vocab_dict, name, terms)
+                               for name, terms in facets.items()},
+                "labels": authority.labels_of(vocab_dict),
+                "scopes": authority.scopes_of(vocab_dict),
+            }
+            held = (vocab_dict, views)
+            views_held["held"] = held
+        return held[1]
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, user: User = Depends(current_user)):
         vocab_dict = vocab_cache.current()
-        facets = vocab.facets(vocab_dict)
+        v = vocab_views(vocab_dict)
         return templates.TemplateResponse(request, "index.html", {
             "user": user,
             "read_enabled": read_enabled,
             "strands": keys.STRANDS,
-            "domains": vocab.domains(vocab_dict),
-            "facets": facets,
-            # r9 §1.8: narrower terms sit indented under their broader
-            # term; a scope note, where the term has one, is hover text
-            # and an expand control (no JS). The checkbox text stays the
-            # slug: the script and the picker prefill match on it.
-            "facet_tree": {name: form_terms(vocab_dict, name, terms)
-                           for name, terms in facets.items()},
+            "domains": v["domains"],
+            "facets": v["facets"],
+            "facet_tree": v["facet_tree"],
             "vocabulary_version": vocab_dict.get("vocabulary_version"),
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
-            "activities": vocab.activities(vocab_dict),
+            "activities": v["activities"],
             "rules": client_rules(),
         })
 
@@ -197,17 +220,20 @@ def create_app(settings: Optional[Settings] = None,
                     sensitivity=sensitivity or None, subject=subject or None,
                     project=project or None)
 
-    def subject_view(cat: Catalogue, subject: str) -> Optional[Dict]:
+    def subject_view(cat: Catalogue, subject: str, results=()) -> Optional[Dict]:
         """How a subject filter was read, for the page and the JSON feed:
         the slugs it matched through the vocabulary and how (exact,
         narrower, replaced, removed), a notice when the asked slug is
-        retired, and the option the form shows as chosen. None without
-        a subject filter."""
+        retired, and the option the form shows as chosen. `narrower`
+        counts only the narrower terms the results actually carry, so
+        the count line never names terms the dropdown shows as unused.
+        None without a subject filter."""
         if not subject:
             return None
         matched, how = cat.expand(subject)
+        carried = {s for r in results for s in (r.get("subject") or [])}
         view = {"asked": subject, "matched": matched, "how": how,
-                "narrower": len(matched) - 1 if how == "narrower" else 0,
+                "narrower": len(set(matched[1:]) & carried) if how == "narrower" else 0,
                 "notice": None, "selected": subject}
         if how == "replaced":
             successors = authority.map_subjects([subject], vocab_cache.current())[0]
@@ -224,11 +250,11 @@ def create_app(settings: Optional[Settings] = None,
         return {k: view[k] for k in ("asked", "matched", "how")} if view else None
 
     def subject_groups(cat: Catalogue):
-        """[(facet, [term, ...])] for the subject select: the terms in use
-        and those above them, each with the figure spaces that indent it
-        under its parent."""
+        """[(facet, [term, ...])] for the subject select: the whole
+        vocabulary in tree order, each term with the figure spaces that
+        indent it under its parent."""
         groups = []
-        for t in cat.subject_tree():
+        for t in cat.term_tree():
             t = dict(t, pad="\u2007\u2007" * t["depth"])
             facet = t["facet"] or "other"
             if not groups or groups[-1][0] != facet:
@@ -268,7 +294,7 @@ def create_app(settings: Optional[Settings] = None,
         else:
             ask = ""
             results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
-        view = subject_view(cat, subject)
+        view = subject_view(cat, subject, results)
         return templates.TemplateResponse(request, "datasets.html", {
             "user": user, "q": q, "strand": strand, "state": state,
             "sensitivity": sensitivity, "subject": view["selected"] if view else subject,
@@ -294,14 +320,14 @@ def create_app(settings: Optional[Settings] = None,
             out = {"datasets": [public_row(r) for r in ans.rows], "built_at": cat.built_at(),
                    "understood": ans.understood(), "filter": ans.filter,
                    "steps": ans.steps, "notice": ans.notice}
-            view = subject_view(cat, ans.filter.get("subject", ""))
+            view = subject_view(cat, ans.filter.get("subject", ""), ans.rows)
             if view:
                 out["subject_filter"] = subject_public(view)
             return out
         rows = cat.search(limit=limit,
                           **search_args(q, strand, state, sensitivity, subject, project))
         out = {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
-        view = subject_view(cat, subject)
+        view = subject_view(cat, subject, rows)
         if view:
             out["subject_filter"] = subject_public(view)
             if view["notice"]:
@@ -485,16 +511,23 @@ def create_app(settings: Optional[Settings] = None,
                                                      "why", "weak", "sentences")}
                              for h in found["results"]]}
 
-    def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:
+    def load_record_text_or_404(cat: Catalogue, identifier: str):
+        """The record as parsed and as stored, from one GET."""
         if cat.get(identifier) is None and not keys.dataset_prefix_ok(identifier):
             raise HTTPException(status_code=404, detail="no such dataset")
         try:
-            rec = cat.record(identifier)
+            text = cat.record_text(identifier)
         except Exception as exc:
             raise storage_error(exc)
-        if rec is None:
+        if text is None:
             raise HTTPException(status_code=404, detail="no such dataset")
-        return rec
+        try:
+            return record.parse_record(text), text
+        except record.RecordParseError:
+            raise HTTPException(status_code=404, detail="no such dataset")
+
+    def load_record_or_404(cat: Catalogue, identifier: str) -> Dict:
+        return load_record_text_or_404(cat, identifier)[0]
 
     @app.get("/datasets/{identifier:path}/files/{member:path}")
     def download(identifier: str, member: str, request: Request,
@@ -567,8 +600,8 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/datasets/{identifier:path}/record")
     def dataset_record(identifier: str, user: User = Depends(current_user)):
         cat = need_read()
-        load_record_or_404(cat, identifier)
-        return Response(content=cat.record_text(identifier), media_type="application/json")
+        _, text = load_record_text_or_404(cat, identifier)
+        return Response(content=text, media_type="application/json")
 
     @app.get("/datasets/{identifier:path}", response_class=HTMLResponse)
     def dataset_page(identifier: str, request: Request, user: User = Depends(current_user)):
@@ -576,9 +609,8 @@ def create_app(settings: Optional[Settings] = None,
         rec = load_record_or_404(cat, identifier)
         files = rec.get("files") or []
         derived = [r for r in cat.rows() if identifier in (r.get("derived_from_identifiers") or [])]
-        vocab_dict = vocab_cache.current()
-        labels = authority.labels_of(vocab_dict)
-        scopes = authority.scopes_of(vocab_dict)
+        v = vocab_views(vocab_cache.current())
+        labels, scopes = v["labels"], v["scopes"]
         return templates.TemplateResponse(request, "dataset.html", {
             "user": user, "identifier": identifier, "rec": rec, "derived": derived,
             # Each subject as its label, slug and scope note, linked to the filter.
@@ -775,7 +807,10 @@ def create_app(settings: Optional[Settings] = None,
     async def put_file(deposit_id: str, member: str, request: Request,
                        include_noise: bool = False,
                        user: User = Depends(current_user)):
-        dep = load_or_404(user, deposit_id)
+        # This handler is async because it streams the body; every
+        # blocking storage call goes to the threadpool so a slow one
+        # never stalls the other requests on this worker.
+        dep = await run_in_threadpool(load_or_404, user, deposit_id)
         must_be_open(dep)
 
         member = keys.normalise_member_path(member.split("/"))
@@ -813,7 +848,7 @@ def create_app(settings: Optional[Settings] = None,
         limit = settings.max_body_bytes
         if settings.user_quota_bytes is not None:
             try:
-                use = quota.usage(store, dep.user)
+                use = await run_in_threadpool(quota.usage, store, dep.user)
             except Exception as exc:
                 raise storage_error(exc)
             remaining = quota.remaining_bytes(settings, use)
@@ -833,9 +868,9 @@ def create_app(settings: Optional[Settings] = None,
             raise storage_error(exc)
 
         # Size, never checksum-vs-ETag (r2 §0).
-        stored = store.stored_size(staged)
+        stored = await run_in_threadpool(store.stored_size, staged)
         if stored != size:
-            store.delete(staged)
+            await run_in_threadpool(store.delete, staged)
             raise HTTPException(
                 status_code=502,
                 detail="the upload appeared to finish but the stored object "
@@ -846,7 +881,7 @@ def create_app(settings: Optional[Settings] = None,
                                       fmt=record.guess_format(member))
         dep.put_entry(entry)
         try:
-            store.save(dep)
+            await run_in_threadpool(store.save, dep)
         except Exception as exc:
             raise storage_error(exc)
         log.info("file stored user=%s deposit=%s member=%s bytes=%d",

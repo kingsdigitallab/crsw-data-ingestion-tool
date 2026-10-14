@@ -141,6 +141,24 @@ class TestCopy(SearchBase):
         self.assertEqual(ix2.sync()["unchanged"], 2)
         self.assertEqual(ix2.stats()["passages"], 4)
 
+    def test_stats_are_counted_once_per_sync(self):
+        self.write_passages()
+        ix = self.index()
+        ix.sync()
+        self.assertEqual(ix.stats(model="m")["passages"], 4)
+        cursor = ix._cursor
+
+        def no_query():
+            raise AssertionError("stats queried the copy again")
+        ix._cursor = no_query
+        self.assertEqual(ix.stats(model="m")["passages"], 4)   # remembered
+        self.assertEqual(ix.stats()["passages"], 4)
+        ix._cursor = cursor
+        self.put_member(CLEAN, "method.txt", b"Different words about deaths in war.\n")
+        self.write_passages((CLEAN, AMBER), ("green", "amber"))
+        ix.sync()
+        self.assertEqual(ix.stats(model="m")["passages"], 5)   # a sync forgets
+
     def test_marker_rows_and_wrong_dims_are_left_out(self):
         self.put_member(GREEN, "scan.pdf", b"%PDF-1.4 nothing")       # unreadable: no text
         self.write_passages((GREEN,))

@@ -118,6 +118,12 @@ def _plain_term(slug: str) -> Dict:
     return {"facet": "", "slug": slug, "depth": 0, "label": slug, "scope": ""}
 
 
+def _not_modified(e: ClientError) -> bool:
+    code = e.response.get("Error", {}).get("Code", "")
+    status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return code in ("304", "NotModified") or status == 304
+
+
 class Catalogue:
     def __init__(self, client, bucket: str, index_prefix: str = "index",
                  refresh_seconds: int = 60,
@@ -136,17 +142,48 @@ class Catalogue:
         self._lock = threading.Lock()
         self._rows: Optional[List[Dict]] = None
         self._loaded_at: Optional[float] = None
+        # ETags of the copies in hand: a refresh asks for the files only
+        # if they changed (If-None-Match), so an unchanged index costs a
+        # 304 and no parse.
+        self._index_etag: Optional[str] = None
+        self._embed_etag: Optional[str] = None
         self.error: Optional[str] = None
         # (identifiers, unit rows one per identifier, the model each row
         # was made with), replaced whole so a ranking in another thread
         # never sees one without the others.
         self._vectors: Tuple[List[str], object, List[str]] = ([], None, [])
+        # term_tree's result for the vocabulary document it was built from
+        # (the cache swaps the document whole, so identity is the key).
+        self._tree_cache: Tuple[Optional[Dict], List[Dict]] = (None, [])
 
     # --- the index ------------------------------------------------------
 
-    def _load(self) -> None:
+    def _fetch(self, key: str, etag: Optional[str]) -> Optional[Tuple[bytes, str]]:
+        """The object's bytes and ETag, or None when the copy with `etag`
+        is still current (304). Other errors propagate."""
+        kw = {"Bucket": self._bucket, "Key": key}
+        if etag:
+            kw["IfNoneMatch"] = etag
         try:
-            body = self._client.get_object(Bucket=self._bucket, Key=self._index_key)["Body"].read()
+            obj = self._client.get_object(**kw)
+        except ClientError as e:
+            if _not_modified(e):
+                return None
+            raise
+        return obj["Body"].read(), obj.get("ETag") or ""
+
+    def _load(self) -> None:
+        self._load_index()
+        self._load_vectors()
+        self._loaded_at = self._clock()
+
+    def _load_index(self) -> None:
+        try:
+            got = self._fetch(self._index_key, self._index_etag)
+            if got is None:                       # unchanged: keep the rows in hand
+                self.error = None
+                return
+            body, etag = got
             rows = [json.loads(line) for line in body.decode("utf-8").splitlines()
                     if line.strip()]
         except ClientError as e:
@@ -163,25 +200,31 @@ class Catalogue:
         else:
             self.error = None
             self._rows = sorted(rows, key=lambda r: r.get("identifier") or "")
-        self._load_vectors()
-        self._loaded_at = self._clock()
+            self._index_etag = etag
 
     def _load_vectors(self) -> None:
         """The embeddings file, into one unit-normalised matrix. Missing
-        or unreadable means no ranking by meaning, nothing worse."""
-        self._vectors = self._read_vectors()
+        or unreadable means no ranking by meaning, nothing worse; unchanged
+        means the matrix in hand."""
+        read = self._read_vectors()
+        if read is not None:
+            self._vectors = read
 
-    def _read_vectors(self) -> Tuple[List[str], object, List[str]]:
+    def _read_vectors(self) -> Optional[Tuple[List[str], object, List[str]]]:
         if np is None or pq is None:
             return [], None, []
         try:
-            body = self._client.get_object(Bucket=self._bucket, Key=self._embed_key)["Body"].read()
+            got = self._fetch(self._embed_key, self._embed_etag)
+            if got is None:
+                return None
+            body, etag = got
             ids, vecs, models = [], [], []
             for r in pq.read_table(io.BytesIO(body)).to_pylist():
                 if r.get("identifier") and r.get("embedding"):
                     ids.append(r["identifier"])
                     vecs.append(r["embedding"])
                     models.append(r.get("model") or "")
+            self._embed_etag = etag
             if not ids:
                 return [], None, []
             m = np.asarray(vecs, dtype=np.float32)
@@ -194,6 +237,7 @@ class Catalogue:
                 log.warning("embeddings unreadable at %s: %s", self._embed_key, e)
         except Exception as e:                   # ragged rows, bad parquet
             log.warning("embeddings unusable at %s: %s", self._embed_key, e)
+        self._embed_etag = None
         return [], None, []
 
     def stale(self) -> bool:
@@ -307,6 +351,32 @@ class Catalogue:
         # A term the vocabulary no longer knows (a record not yet rewritten).
         out.extend(_plain_term(s) for s in used if s not in known)
         return out
+
+    def term_tree(self) -> List[Dict]:
+        """Every current term of the vocabulary, in its order and with
+        its depth, for the subject select: the whole tree is offered, a
+        term nobody has used yet too, so the page and the dropdown agree
+        about what exists. Terms in use that the vocabulary does not
+        know follow, flat. Built once per vocabulary document. Without
+        a vocabulary, or with a flat pre-r9 file, the terms in use at
+        depth 0."""
+        doc = self._vocabulary() if self._vocabulary is not None else None
+        if not authority.is_authority(doc):
+            return [_plain_term(s) for s in self.subjects()]
+        cached_doc, cached = self._tree_cache
+        if cached_doc is None or cached_doc is not doc:
+            by_slug = authority.terms_by_slug(doc)
+            cached = []
+            for facet in authority.facet_order(doc):
+                for slug, depth in authority.tree(doc, facet):
+                    t = by_slug[slug]
+                    cached.append({"facet": facet, "slug": slug, "depth": depth,
+                                   "label": t.get("label") or slug,
+                                   "scope": t.get("scope") or ""})
+            self._tree_cache = (doc, cached)
+        known = {o["slug"] for o in cached}
+        unknown = [_plain_term(s) for s in self.subjects() if s not in known]
+        return cached + unknown if unknown else cached
 
     # --- asking in plain words (finding-and-reuse.md §5) -------------------
 
