@@ -300,6 +300,67 @@ class TestIndexEmbed(EmbedBase):
         code, out = self.cli(["run", "--dry-run"], env=LLM_ENV)
         self.assertNotIn("embed", "".join(out))
 
+    def test_an_unresolved_model_is_said_and_nothing_is_written(self):
+        """GET /models failed or named no backend: the fingerprint would be
+        the bare alias. Keying vectors to it would undo the fingerprint,
+        so the run says `embed_model_unresolved` and leaves the file."""
+        self.stage(); code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(self.summary(out)["model"], FP)
+        self.sent.clear()
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: "arc:embedvl"):
+            code, out = self.cli(["run"], env=LLM_ENV)              # quiet
+        self.assertEqual(code, 0, out)
+        lines = [json.loads(o) for o in out]
+        unresolved = next(l for l in lines if l["action"] == "embed_model_unresolved")
+        self.assertEqual((unresolved["alias"], unresolved["model"]), ("arc:embedvl", "arc:embedvl"))
+        self.assertIn("/models", unresolved["hint"])
+        self.assertNotIn("embeddings_written", [l["action"] for l in lines])
+        self.assertNotIn("embed_model_changed", [l["action"] for l in lines])
+        self.assertEqual({r["model"] for r in self.table().values()}, {FP})
+        self.assertEqual(self.sent, [])
+        # A promotion while the platform cannot be resolved: promoted and
+        # indexed, embeddings left alone, the same line.
+        self.stage(dataset="second")
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: "arc:embedvl"):
+            code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(code, 0, out)
+        actions = [json.loads(o)["action"] for o in out]
+        self.assertIn("index_written", actions)
+        self.assertIn("embed_model_unresolved", actions)
+        self.assertNotIn("embeddings_written", actions)
+        self.assertEqual(list(self.table()), [DEST])
+        self.assertEqual(self.sent, [])
+        # By hand: the line, nothing written, a non-zero exit.
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: "arc:embedvl"):
+            code, out = self.cli(["index", "--embed"], env=LLM_ENV)
+        self.assertEqual(code, 1)
+        self.assertIn("embed_model_unresolved", "".join(out))
+        self.assertNotIn("embeddings_written", "".join(out))
+
+    def test_a_dataset_missing_from_the_file_is_embedded_by_the_next_quiet_run(self):
+        """A dataset promoted while the platform was unresolved has no row
+        in the file; the next quiet run that resolves the model notices
+        (`embed_rows_missing`) and embeds just that one."""
+        self.stage(); code, out = self.cli(["run"], env=LLM_ENV)
+        self.stage(dataset="second")
+        with mock.patch.object(llm.Platform, "embed_fingerprint", lambda p: "arc:embedvl"):
+            self.cli(["run"], env=LLM_ENV)
+        self.assertEqual(list(self.table()), [DEST])
+        self.sent.clear()
+        code, out = self.cli(["run"], env=LLM_ENV)                  # quiet, resolved
+        self.assertEqual(code, 0, out)
+        lines = [json.loads(o) for o in out]
+        missing = next(l for l in lines if l["action"] == "embed_rows_missing")
+        self.assertEqual(missing["datasets"], 1)
+        self.assertNotIn("embed_text_changed", [l["action"] for l in lines])
+        s = self.summary(out)
+        self.assertEqual((s["embedded"], s["kept"]), (1, 1))
+        self.assertEqual(len(self.table()), 2)
+        self.assertEqual(len(self.sent), 1)
+        # And then nothing more to say.
+        code, out = self.cli(["run"], env=LLM_ENV)
+        self.assertNotIn("embed", "".join(out))
+
     def test_a_run_refreshes_embeddings_and_a_failure_is_only_logged(self):
         self.stage()
         code, out = self.cli(["run"], env=LLM_ENV)
@@ -328,6 +389,16 @@ class TestIndexEmbed(EmbedBase):
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestMissingRows(unittest.TestCase):
+    def test_identifiers_without_a_row_are_missing_vectorless_rows_are_not(self):
+        rows = [{"identifier": "a"}, {"identifier": "b"}, {"identifier": "c"}]
+        existing = {"a": {"identifier": "a", "embedding": [1.0]},
+                    "b": {"identifier": "b", "embedding": None}}    # amber: never embedded
+        self.assertEqual(embed_mod.missing_rows(rows, existing), ["c"])
+        self.assertEqual(embed_mod.missing_rows(rows, {}), ["a", "b", "c"])
+        self.assertEqual(embed_mod.missing_rows([], existing), [])
+
+
 class TestTextFor(unittest.TestCase):
     def test_only_the_listed_fields(self):
         row = {"dataset": "csac-clean", "abstract": "  An extract.  ", "subject": ["a", "b"],

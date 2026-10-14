@@ -104,6 +104,15 @@ def stale_text(index_rows: Sequence[Dict], existing: Dict[str, Dict],
     return stale
 
 
+def missing_rows(index_rows: Sequence[Dict], existing: Dict[str, Dict]) -> List[str]:
+    """Identifiers in the index with no row at all in `existing`: a
+    dataset promoted while the platform could not be used, or a file
+    not yet written. A row without a vector is not missing (its
+    sensitivity is not sent), so it is not counted."""
+    return [r["identifier"] for r in index_rows
+            if r.get("identifier") and r["identifier"] not in existing]
+
+
 def embeddings_key(prefix: str) -> str:
     return prefix.strip("/") + "/" + EMBEDDINGS_NAME
 

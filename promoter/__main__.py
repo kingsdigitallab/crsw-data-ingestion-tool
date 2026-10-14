@@ -175,7 +175,8 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int,
     except Exception as e:
         log.write("embeddings_failed", error=str(e))
         return None
-    log.write("embeddings_written", **summary)
+    if summary:
+        log.write("embeddings_written", **summary)
     return summary
 
 
@@ -286,21 +287,35 @@ def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False,
     platform = Platform.from_settings(cfg)
     try:
         model = platform.embed_fingerprint()
+        if "|" not in model:
+            # GET /models failed or named no backend for the alias, so
+            # the fingerprint is the alias alone. Vectors keyed to it
+            # would be replaced wholesale by the next run that resolves,
+            # so nothing is written now; the datasets left without a row
+            # are embedded then (embed_rows_missing).
+            emit("embed_model_unresolved", step="embeddings", alias=cfg.llm_embed_model,
+                 model=model,
+                 hint="GET /models failed or lists no backend for the alias; check "
+                      "PROMOTER_LLM_BASE_URL, the key and the route to the platform")
+            return None
         existing = embed_mod.read_existing(client, cfg.s3_bucket,
                                            embed_mod.embeddings_key(cfg.index_prefix))
         previous = embed_mod.models_in(existing)
         changed = bool(previous) and previous != [model]
-        stale = []
+        stale, missing = [], []
         if only_if_model_changed and not changed:
             rows_ = rows_() if callable(rows_) else rows_
             stale = embed_mod.stale_text(rows_, existing, vocab_doc)
-            if not stale:
+            missing = embed_mod.missing_rows(rows_, existing)
+            if not stale and not missing:
                 return None              # the quiet run has nothing to say
         emit("embed_model_resolved", step="embeddings", alias=cfg.llm_embed_model, model=model)
         if changed:
             emit("embed_model_changed", previous=previous, model=model)
         if stale:
             emit("embed_text_changed", datasets=len(stale))
+        if missing:
+            emit("embed_rows_missing", datasets=len(missing))
         if callable(rows_):
             rows_ = rows_()
         summary = embed_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, rows_,
@@ -455,6 +470,8 @@ def cmd_index(args) -> int:
         _print_line("vocabulary", source=source,
                     version=vocab_dict.get("vocabulary_version"))
         summary = _refresh_embeddings(cfg, client, rows_, _print_line, vocab_doc=vocab_dict)
+        if summary is None:              # embed_model_unresolved was printed
+            return 1
         _print_line("embeddings_written", **summary)
         if summary["key"] is None:
             print("pyarrow is not installed: embeddings were not written", file=sys.stderr)
