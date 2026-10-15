@@ -26,6 +26,11 @@
 > whole vocabulary tree, not the in-use terms plus parents, and the count
 > line names only narrower terms the results carry (see
 > `finding-and-reuse.md` §5, 14 October).
+>
+> 15 October: "ranking by meaning is off" was not the code: the promoter's
+> timer had never been installed on the internal VM. Installed; the first
+> run embedded all six datasets and rebuilt every passages file. The
+> runbook (§3, §4) now says how to read the promoter's logs afterwards.
 
 Written 9 October 2026 from a design conversation with Neil. Repos: `crsw-data-ingestion-tool` and the public `kingsdigitallab/crsw-vocabulary`. Two related proposals for the Claude Code session, in the order they should land. Stop at the checkpoints and wait for review, as `docs/web-deposit/plan.md` requires. Nothing here touches `crsw_deposit/`'s stdlib-only rule or writes to the vocabulary repo from the tool.
 
