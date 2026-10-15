@@ -144,7 +144,7 @@ In the vocabulary repo: the "Add a term" issue form gains "Scope note" (required
 
 ## First content for the stewards (not for Claude Code to decide)
 
-From the 9 Oct classification exercise, to be proposed through the vocabulary repo's issue forms once Parts 1 and 2 are in:
+From the 9 Oct classification exercise. Proposed as vocabulary repo PR #6 on 15 October 2026 (`mass-atrocity`, `slave-trade` with spellings `slave-trading` and `slaving`, and the two scope notes; the `human-trafficking` note is provisional wording and says so); the alias was PR #5.
 
 - `mass-atrocity` (contexts, top level): slavery practices committed in genocide, crimes against humanity, ethnic cleansing or other widespread or systematic attacks on a civilian population, whether or not an armed conflict is under way.
 - `slave-trade` (practices, top level): capture, acquisition, transport or sale of persons for enslavement; needed for the pre-twentieth-century material and the SlaveVoyages data already in the corpus.
