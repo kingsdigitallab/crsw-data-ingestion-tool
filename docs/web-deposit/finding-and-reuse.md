@@ -328,6 +328,17 @@ lists will govern file contents when section 7 is built.
 
 ## 7. Searching inside documents
 
+*15 October 2026, how this grows:* the four seconds a live search takes
+are the two platform calls (embed the question, rerank twenty passages),
+which do not grow with the corpus; the scan that scores every passage is
+linear and microseconds today. The first thing to grow is memory on the
+web VM, where each of the two workers holds the whole passages table,
+about 4 KB a passage. The runbook (§7, "How passage search grows") has
+the ceilings, what to watch and the ladder: shorter vectors (both
+`*_EMBED_DIMS` settings together, with a quality check first), then an
+in-process HNSW index, then a vector store. Nothing to do until the
+table nears 100,000 passages, which is thousands of datasets away.
+
 **Question.** Sections 1 to 5 find datasets by their descriptions. The store
 will hold journal articles, legal transcripts and survivor narratives. Can a
 researcher search what those documents say, not just what the record says

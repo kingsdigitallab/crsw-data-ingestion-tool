@@ -419,6 +419,38 @@ search still works in both. If a page is slow for a researcher and
 `curl -s -o /dev/null -w '%{time_total}' http://127.0.0.1:8080/datasets`
 on the VM is quick, the time is in the KCL proxy.
 
+**How passage search grows.** A search on the live corpus takes about
+four seconds (15 October 2026, six datasets, about a hundred passages),
+and nearly all of it is the two platform calls: embedding the question
+and reranking the top `SEARCH_TOP` (20) passages. Neither grows with the
+corpus. What grows is the DuckDB scan that scores every passage
+(`array_cosine_similarity` over `FLOAT[1024]`) and the word checks: linear
+in the number of passages, microseconds today, tens of milliseconds at
+10,000 passages (about 200 datasets at 50 each), a few hundred
+milliseconds at 100,000, several seconds at a million. Memory grows first
+and it grows **on the web VM**, in the `deposit-web` container: each of
+the two uvicorn workers holds the passages table (about 4 KB per passage
+for the vector plus the text; one worker in the DuckDB file on the
+`passages` volume, the other in memory) and the dataset embeddings (one
+vector per dataset, negligible). Reckon 0.5 GB per worker, 1 GB for the
+container, at 100,000 passages; the internal VM holds nothing between
+runs, and the promoter only streams the files it writes. Watch it with
+`docker stats --no-stream` on the web VM and the passages count on the
+search page; resize the VM (section 1 gives the minimum) when the
+container passes half the RAM, and move to the next rung when the scan
+alone, not the platform calls, passes half a second or the table passes
+about 100,000 rows. The rungs, cheapest first: cut `PROMOTER_LLM_EMBED_DIMS`
+and `CRSW_LLM_EMBED_DIMS` together (1024 today, from a model that is
+already truncated: 512 halves memory and scan time, the next promoter
+run re-embeds everything because the length changed, and the loss of
+ranking quality should be small but has not been measured here, so try
+it on a laptop against a few known questions first); an approximate
+nearest-neighbour index (HNSW) beside the table, rebuilt at each sync,
+through a small in-process library rather than DuckDB's vector-search
+extension, since the service deliberately loads no DuckDB extensions; a
+dedicated vector store, which is a bigger operational step than this
+corpus should ever need.
+
 The subject dropdown on the find page lists the whole vocabulary of the
 moment, grouped by facet and indented under broader terms, a term no
 dataset carries yet included; the count line names only the narrower
