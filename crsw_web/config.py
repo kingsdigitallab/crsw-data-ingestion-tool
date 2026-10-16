@@ -40,7 +40,8 @@ class Settings:
     dev_user: str = "k1078591"   # placeholder-mode identity
     max_body_bytes: int = 5 * 1024 ** 3
     # proxy mode
-    proxy_user_header: str = ""            # discovered on first deploy
+    proxy_user_header: str = ""            # x-webauth-user since Oct 2026 (/auth/headers)
+    proxy_name_header: str = ""            # optional display name; blank = k-number only
     proxy_groups_header: str = ""          # optional
     proxy_required_group: str = "er_prj_kdl_slavery"
     proxy_username_pattern: str = ""       # optional regex, group 1 = username
@@ -194,6 +195,7 @@ class Settings:
             dev_user=get("DEV_USER", "k1078591"),
             max_body_bytes=opt_int("MAX_BODY_BYTES", cls.max_body_bytes),
             proxy_user_header=user_header,
+            proxy_name_header=get("PROXY_NAME_HEADER"),
             proxy_groups_header=get("PROXY_GROUPS_HEADER"),
             proxy_required_group=get("PROXY_REQUIRED_GROUP", cls.proxy_required_group),
             proxy_username_pattern=pattern,

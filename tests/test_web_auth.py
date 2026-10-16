@@ -17,46 +17,72 @@ except ImportError:
 
 BASE = dict(s3_endpoint="https://rgw.example", s3_access_key="t", s3_secret_key="t",
             s3_bucket="crsw", staging_prefix="staging/_test")
-PROXY = dict(BASE, auth_mode="proxy", proxy_user_header="X-Remote-User")
+PROXY = dict(BASE, auth_mode="proxy", proxy_user_header="x-webauth-user")
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestUserFromHeaders(unittest.TestCase):
     def test_plain_username(self):
         s = Settings(**PROXY)
-        self.assertEqual(user_from_headers({"X-Remote-User": "K1078591"}, s).username,
+        self.assertEqual(user_from_headers({"x-webauth-user": "K1078591"}, s).username,
                          "k1078591")
 
     def test_missing_header(self):
         with self.assertRaises(NotAuthenticated):
             user_from_headers({}, Settings(**PROXY))
         with self.assertRaises(NotAuthenticated):
-            user_from_headers({"X-Remote-User": "  "}, Settings(**PROXY))
+            user_from_headers({"x-webauth-user": "  "}, Settings(**PROXY))
 
     def test_pattern_extracts_knumber(self):
         s = Settings(**dict(PROXY, proxy_username_pattern=r"^([a-z]\d+)@kcl\.ac\.uk$"))
-        self.assertEqual(user_from_headers({"X-Remote-User": "k1078591@kcl.ac.uk"}, s).username,
+        self.assertEqual(user_from_headers({"x-webauth-user": "k1078591@kcl.ac.uk"}, s).username,
                          "k1078591")
         with self.assertRaises(NotAuthorised):
-            user_from_headers({"X-Remote-User": "someone@example.org"}, s)
+            user_from_headers({"x-webauth-user": "someone@example.org"}, s)
 
     def test_groups_header_enforced_only_when_configured(self):
         s = Settings(**PROXY)   # no groups header: proxy's Allowed groups gates access
-        user_from_headers({"X-Remote-User": "k1"}, s)
+        user_from_headers({"x-webauth-user": "k1"}, s)
         s = Settings(**dict(PROXY, proxy_groups_header="X-Remote-Groups"))
         with self.assertRaises(NotAuthorised):
-            user_from_headers({"X-Remote-User": "k1", "X-Remote-Groups": "staff,other"}, s)
-        ok = user_from_headers({"X-Remote-User": "k1",
+            user_from_headers({"x-webauth-user": "k1", "X-Remote-Groups": "staff,other"}, s)
+        ok = user_from_headers({"x-webauth-user": "k1",
                                 "X-Remote-Groups": "staff; er_prj_kdl_slavery"}, s)
         self.assertEqual(ok.username, "k1")
 
 
     def test_groups_travel_with_the_user(self):
         s = Settings(**dict(PROXY, proxy_groups_header="X-Remote-Groups"))
-        u = user_from_headers({"X-Remote-User": "k1",
+        u = user_from_headers({"x-webauth-user": "k1",
                                "X-Remote-Groups": "er_prj_kdl_slavery, er_prj_kdl_slavery_rs2"}, s)
         self.assertEqual(u.groups, ("er_prj_kdl_slavery", "er_prj_kdl_slavery_rs2"))
-        self.assertEqual(user_from_headers({"X-Remote-User": "k1"}, Settings(**PROXY)).groups, ())
+        self.assertEqual(user_from_headers({"x-webauth-user": "k1"}, Settings(**PROXY)).groups, ())
+
+    def test_username_must_be_a_safe_key_segment(self):
+        # The value goes straight into staging/<user>/ keys, labels and the
+        # PROMOTER_AUTHORISED lookup: anything that is not a plain segment
+        # is refused, whatever the proxy's group gate let through.
+        s = Settings(**PROXY)
+        for bad in ("../k1", "k1/x", "a b", "k1078591@kcl.ac.uk", "-k1", ".k1", "k" * 65):
+            with self.assertRaises(NotAuthorised, msg=bad):
+                user_from_headers({"x-webauth-user": bad}, s)
+        self.assertEqual(user_from_headers({"x-webauth-user": "K1078591"}, s).username,
+                         "k1078591")
+        self.assertEqual(user_from_headers({"x-webauth-user": "guest.user-1"}, s).username,
+                         "guest.user-1")
+        self.assertEqual(user_from_headers({"x-webauth-user": "k" * 64}, s).username, "k" * 64)
+
+    def test_display_name_only_when_configured(self):
+        s = Settings(**dict(PROXY, proxy_name_header="x-webauth-name"))
+        u = user_from_headers({"x-webauth-user": "k1078591",
+                               "x-webauth-name": "  Neil \t  Jakeman "}, s)
+        self.assertEqual((u.username, u.display_name), ("k1078591", "Neil Jakeman"))
+        self.assertEqual(user_from_headers({"x-webauth-user": "k1078591"}, s).display_name, "")
+        off = user_from_headers({"x-webauth-user": "k1078591",
+                                 "x-webauth-name": "Neil Jakeman"}, Settings(**PROXY))
+        self.assertEqual(off.display_name, "")
+        long = user_from_headers({"x-webauth-user": "k1", "x-webauth-name": "n" * 200}, s)
+        self.assertEqual(len(long.display_name), 120)
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
@@ -113,8 +139,26 @@ class TestProxyMode(unittest.TestCase):
 
     def test_header_gives_identity(self):
         c = TestClient(self.app())
-        r = c.get("/whoami", headers={"X-Remote-User": "k1078591"})
-        self.assertEqual(r.json(), {"username": "k1078591", "auth_mode": "proxy"})
+        r = c.get("/whoami", headers={"x-webauth-user": "k1078591"})
+        self.assertEqual(r.json(), {"username": "k1078591", "name": "", "auth_mode": "proxy"})
+        # header names are case-insensitive on the wire; the proxy's own
+        # spelling is X-WEBAUTH-USER, the diagnostic shows it lower-cased
+        r = c.get("/whoami", headers={"X-WEBAUTH-USER": "k1078591"})
+        self.assertEqual(r.json()["username"], "k1078591")
+
+    def test_display_name_shown_on_pages_but_never_in_the_depositor(self):
+        c = TestClient(self.app(proxy_name_header="x-webauth-name"))
+        h = {"x-webauth-user": "k1078591", "x-webauth-name": "Neil Jakeman"}
+        self.assertEqual(c.get("/whoami", headers=h).json()["name"], "Neil Jakeman")
+        page = c.get("/", headers=h).text
+        self.assertIn("Depositing as <strong>Neil Jakeman</strong> (k1078591)", page)
+        self.assertIn("<dt>Depositor</dt>\n    <dd>k1078591</dd>", page)   # the record's value
+        esc = c.get("/", headers=dict(h, **{"x-webauth-name": "Ann <b>Lee</b>"})).text
+        self.assertIn("Ann &lt;b&gt;Lee&lt;/b&gt;", esc)
+        self.assertNotIn("<b>Lee</b>", esc)
+        plain = TestClient(self.app()).get("/", headers=h).text   # name header not configured
+        self.assertIn("Depositing as <strong>k1078591</strong></span>", plain)
+        self.assertNotIn("Neil Jakeman", plain)
 
     def test_missing_header_is_401_on_api_and_page(self):
         c = TestClient(self.app())
@@ -126,9 +170,9 @@ class TestProxyMode(unittest.TestCase):
     def test_untrusted_peer_is_403_even_with_header(self):
         app = self.app(trusted_proxy_cidrs=("10.0.0.0/8",))
         good = TestClient(app, client=("10.211.118.41", 1234))
-        self.assertEqual(good.get("/whoami", headers={"X-Remote-User": "k1"}).status_code, 200)
+        self.assertEqual(good.get("/whoami", headers={"x-webauth-user": "k1"}).status_code, 200)
         bad = TestClient(app, client=("203.0.113.9", 1234))
-        r = bad.get("/whoami", headers={"X-Remote-User": "k1"})
+        r = bad.get("/whoami", headers={"x-webauth-user": "k1"})
         self.assertEqual(r.status_code, 403)
         self.assertIn("KCL proxy", r.json()["detail"])
 
@@ -138,17 +182,17 @@ class TestProxyMode(unittest.TestCase):
         app = self.app(trusted_proxy_cidrs=("10.202.65.116/32",))
         c = TestClient(app, client=("10.202.65.81", 1234))       # the browser
         self.assertEqual(c.get("/whoami", headers={
-            "X-Remote-User": "k1",
+            "x-webauth-user": "k1",
             "X-Sidecar-Peer": "10.202.65.116"}).status_code, 200)
         self.assertEqual(c.get("/whoami", headers={
-            "X-Remote-User": "k1",
+            "x-webauth-user": "k1",
             "X-Sidecar-Peer": "10.202.65.81"}).status_code, 403)
         self.assertEqual(c.get("/whoami", headers={
-            "X-Remote-User": "k1"}).status_code, 403)
+            "x-webauth-user": "k1"}).status_code, 403)
 
     def test_group_refusal_is_403_with_reason(self):
         c = TestClient(self.app(proxy_groups_header="X-Remote-Groups"))
-        r = c.get("/whoami", headers={"X-Remote-User": "k1", "X-Remote-Groups": "staff"})
+        r = c.get("/whoami", headers={"x-webauth-user": "k1", "X-Remote-Groups": "staff"})
         self.assertEqual(r.status_code, 403)
         self.assertIn("er_prj_kdl_slavery", r.json()["detail"])
 
@@ -156,9 +200,9 @@ class TestProxyMode(unittest.TestCase):
         c = TestClient(self.app())
         self.assertEqual(c.get("/auth/headers").status_code, 404)
         c = TestClient(self.app(debug_headers=True))
-        r = c.get("/auth/headers", headers={"X-Remote-User": "k1", "Cookie": "s=1"})
+        r = c.get("/auth/headers", headers={"x-webauth-user": "k1", "Cookie": "s=1"})
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["headers"]["x-remote-user"], "k1")
+        self.assertEqual(r.json()["headers"]["x-webauth-user"], "k1")
         self.assertNotIn("cookie", r.json()["headers"])
 
     def test_placeholder_mode_unchanged(self):
@@ -177,7 +221,7 @@ class TestProxyConfig(unittest.TestCase):
             Settings.from_env(dict(self.ENV, CRSW_AUTH_MODE="proxy"))
         self.assertIn("CRSW_PROXY_USER_HEADER", str(cm.exception))
         s = Settings.from_env(dict(self.ENV, CRSW_AUTH_MODE="proxy",
-                                   CRSW_PROXY_USER_HEADER="X-Remote-User",
+                                   CRSW_PROXY_USER_HEADER="x-webauth-user",
                                    CRSW_TRUSTED_PROXY_CIDRS="10.0.0.0/8, 192.0.2.0/24",
                                    CRSW_USER_QUOTA_BYTES="100", CRSW_DEBUG_HEADERS="1"))
         self.assertEqual(s.trusted_proxy_cidrs, ("10.0.0.0/8", "192.0.2.0/24"))

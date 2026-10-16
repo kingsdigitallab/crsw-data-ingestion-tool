@@ -29,6 +29,8 @@ class User:
                     # depositor field holds, so CLI and web deposits agree
     groups: Tuple[str, ...] = ()   # as the proxy reports them; the read
                                    # role's amber rule reads these
+    display_name: str = ""         # for pages only ("Signed in as ..."); never
+                                   # on a record, label, key or audit line
 
 
 class NotAuthenticated(Exception):
@@ -37,6 +39,14 @@ class NotAuthenticated(Exception):
 
 class NotAuthorised(Exception):
     pass
+
+
+# The username goes straight into staging/<user>/... keys, object labels
+# and the promoter's PROMOTER_AUTHORISED lookup, so it must be a plain
+# segment. Not a k-number pattern on purpose: who may sign in is the
+# proxy's group gate; this only keeps the value safe to use.
+USERNAME_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+DISPLAY_NAME_MAX = 120
 
 
 def _split_groups(raw: str) -> List[str]:
@@ -57,13 +67,19 @@ def user_from_headers(headers: Mapping[str, str], settings: Settings) -> User:
             raise NotAuthorised("identity %r does not match the expected form" % raw)
         username = m.group(1)
     username = username.strip().lower()
+    if not USERNAME_SEGMENT.match(username):
+        raise NotAuthorised("identity %r is not a usable username" % raw)
     groups: List[str] = []
     if settings.proxy_groups_header:
         groups = _split_groups(headers.get(settings.proxy_groups_header) or "")
         if settings.proxy_required_group and settings.proxy_required_group not in groups:
             raise NotAuthorised(
                 "%s is not a member of %s" % (username, settings.proxy_required_group))
-    return User(username=username, groups=tuple(groups))
+    display_name = ""
+    if settings.proxy_name_header:
+        display_name = " ".join((headers.get(settings.proxy_name_header) or "").split())
+        display_name = display_name[:DISPLAY_NAME_MAX]
+    return User(username=username, groups=tuple(groups), display_name=display_name)
 
 
 PEER_HEADER = "x-sidecar-peer"

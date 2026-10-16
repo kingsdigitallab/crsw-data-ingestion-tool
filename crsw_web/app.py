@@ -652,7 +652,8 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/whoami")
     def whoami(user: User = Depends(current_user)):
-        return {"username": user.username, "auth_mode": settings.auth_mode}
+        return {"username": user.username, "name": user.display_name,
+                "auth_mode": settings.auth_mode}
 
     @app.get("/auth/headers")
     def auth_headers(request: Request):

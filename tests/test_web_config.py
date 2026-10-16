@@ -24,6 +24,13 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(s.staging_prefix, "staging/_test")  # slash stripped
         self.assertEqual(s.auth_mode, "placeholder")
         self.assertEqual(s.dev_user, "k1078591")
+        self.assertEqual(s.proxy_name_header, "")    # blank = the k-number only
+
+    def test_proxy_name_header(self):
+        s = Settings.from_env(dict(GOOD, CRSW_AUTH_MODE="proxy",
+                                   CRSW_PROXY_USER_HEADER="x-webauth-user",
+                                   CRSW_PROXY_NAME_HEADER=" x-webauth-name "))
+        self.assertEqual(s.proxy_name_header, "x-webauth-name")
 
     def test_missing_names_every_variable(self):
         env = dict(GOOD)

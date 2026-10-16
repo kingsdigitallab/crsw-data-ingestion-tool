@@ -54,7 +54,7 @@ class TestSkeleton(unittest.TestCase):
 
     def test_whoami_is_placeholder_user(self):
         self.assertEqual(self.client.get("/whoami").json(),
-                         {"username": "k1078591", "auth_mode": "placeholder"})
+                         {"username": "k1078591", "name": "", "auth_mode": "placeholder"})
 
     def test_connectivity_empty_prefix_is_a_pass(self):
         r = self.client.get("/connectivity")
