@@ -403,7 +403,11 @@ off on its own without breaking the page:
 | meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embed`) | blank the name | the question, prefixed with `CRSW_LLM_QUERY_INSTRUCTION` (blank = no prefix); needs `index/embeddings.parquet` |
 | rerank | `CRSW_LLM_RERANK_MODEL` (`arc:rerankvl`) | blank the name | the question and the title plus abstract of up to twenty candidates |
 
-Only abstracts of the sensitivities in `CRSW_LLM_SENSITIVITIES` (green by
+The reranker is off on the web VM since 16 October 2026 (`CRSW_LLM_RERANK_MODEL=`,
+an explicit blank: an absent line means the built-in default, which is on). The
+only reranker alias, `arc:rerankvl`, is a vision-language model that buried the
+right passage below spec files on the test queries (docs/web-deposit/query-instruction-handoff.md);
+put the name back if a text-only reranker appears. Only abstracts of the sensitivities in `CRSW_LLM_SENSITIVITIES` (green by
 default) are sent to the reranker; `CRSW_LLM_EMBED_DIMS` must match the
 promoter's. To change it, set both, restart the web service (its passages
 copy empties itself and refills at the new size) and run `$P passages` and

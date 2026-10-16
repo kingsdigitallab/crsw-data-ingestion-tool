@@ -92,3 +92,10 @@ backend names and prices); the two embedding aliases are arc:embed
   embedding sibling did; in meaning order the Convention would be about 7th.
   No text-only reranker alias on the platform. Next: trial with the reranker
   off (blank CRSW_LLM_RERANK_MODEL, restart deposit-web), then passage length.
+
+  paraphrase, default order with the reranker OFF (CRSW_LLM_RERANK_MODEL blank
+  on the web VM, same day): Nepal p13 0.307, scgb p17 (widows required to
+  remarry) 0.291, scgb p18 0.285, policy p65 0.284, scgb p8 0.281, scgb p17
+  pos37 0.275, Convention p1 0.270 (#7), scgb p10 (widowed women pressured
+  into marrying another man) 0.269 (#8); first spec file #10, folded as weak.
+  Decision: reranker left off on the web VM. Passage length is the next lever.

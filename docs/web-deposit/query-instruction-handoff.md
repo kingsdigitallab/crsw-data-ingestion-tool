@@ -94,3 +94,10 @@ Convention passage 18th of 20 and four spec files above it, and its top three
 are all passages the embedding scored weak, so the page folds them. The
 reranker does not rescue the paraphrase; it hurts it. Two follow-ups: a trial
 with `CRSW_LLM_RERANK_MODEL` blank (env only), and the passage-length handoff.
+
+Reranker off (same day, `CRSW_LLM_RERANK_MODEL=` on the web VM): the
+Convention passage moved from 18th to 7th, the spec files left the top, and
+two passages about widows and remarriage sit in the top eight. Left off: on
+every query seen it did nothing useful or did harm, and it was the slower
+platform call. One line in `.env` turns it back on. Next lever: passage
+length, a re-embed, own handoff.
