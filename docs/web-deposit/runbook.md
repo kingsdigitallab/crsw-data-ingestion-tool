@@ -400,7 +400,7 @@ off on its own without breaking the page:
 | Step | Model | Switch | What is sent |
 |---|---|---|---|
 | filter | `CRSW_LLM_CHAT_MODEL` (`arc:lite`) | blank the name | the question, the vocabulary lists |
-| meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embedvl`) | blank the name | the question; needs `index/embeddings.parquet` |
+| meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embed`) | blank the name | the question, prefixed with `CRSW_LLM_QUERY_INSTRUCTION` (blank = no prefix); needs `index/embeddings.parquet` |
 | rerank | `CRSW_LLM_RERANK_MODEL` (`arc:rerankvl`) | blank the name | the question and the title plus abstract of up to twenty candidates |
 
 Only abstracts of the sensitivities in `CRSW_LLM_SENSITIVITIES` (green by
@@ -437,7 +437,11 @@ on the VM is quick, the time is in the KCL proxy.
 four seconds (15 October 2026, six datasets, about a hundred passages),
 and nearly all of it is the two platform calls: embedding the question
 and reranking the top `SEARCH_TOP` (20) passages. Neither grows with the
-corpus. What grows is the DuckDB scan that scores every passage
+corpus. The question is embedded with `CRSW_LLM_QUERY_INSTRUCTION` in
+front of it and the passages were embedded without one (the asymmetry
+Qwen3-Embedding is trained on; it lowers the wrong answers more than the
+right one), so turning the instruction on, off or rewording it is a
+restart of `deposit-web`, never a re-embed. What grows is the DuckDB scan that scores every passage
 (`array_cosine_similarity` over `FLOAT[1024]`) and the word checks: linear
 in the number of passages, microseconds today, tens of milliseconds at
 10,000 passages (about 200 datasets at 50 each), a few hundred

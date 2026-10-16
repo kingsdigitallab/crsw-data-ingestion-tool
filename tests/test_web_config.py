@@ -82,6 +82,14 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(s.amber_group_template, "er_prj_kdl_slavery_{strand}")
 
 
+    def test_query_instruction_defaults_on_and_blank_is_off(self):
+        from crsw_web.llm import QUERY_INSTRUCTION
+        self.assertEqual(Settings.from_env(GOOD).llm_query_instruction, QUERY_INSTRUCTION)
+        self.assertEqual(Settings.from_env(dict(GOOD, CRSW_LLM_QUERY_INSTRUCTION="")).llm_query_instruction, "")
+        s = Settings.from_env(dict(GOOD, CRSW_LLM_QUERY_INSTRUCTION=" Find the passage. "))
+        self.assertEqual(s.llm_query_instruction, "Find the passage.")
+
+
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestDotenv(unittest.TestCase):
     def test_reads_without_overriding(self):

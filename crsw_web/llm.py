@@ -29,6 +29,12 @@ DEFAULT_RERANK_MODEL = "arc:rerankvl"
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_EMBED_DIMS = 1024   # keep the first N numbers of each vector (see embed)
 EMBED_BATCH = 32
+# Qwen3-Embedding is trained asymmetrically: a query carries an
+# instruction, a document does not. This is the model's general-purpose
+# retrieval instruction, put on the question only (never on anything
+# stored), in the documented "Instruct: ...\nQuery: ..." form. The web
+# Settings carry it as `llm_query_instruction`; blank switches it off.
+QUERY_INSTRUCTION = "Given a web search query, retrieve relevant passages that answer the query"
 # How long a resolved embed fingerprint is trusted before GET /models is
 # asked again (the web passes its index cycle; the promoter asks once).
 DEFAULT_FINGERPRINT_SECONDS = 300.0
@@ -156,15 +162,23 @@ class Platform:
 
     # --- embeddings ---------------------------------------------------------
 
-    def embed(self, texts: Sequence[str], batch: int = EMBED_BATCH) -> List[List[float]]:
+    def embed(self, texts: Sequence[str], batch: int = EMBED_BATCH,
+              instruction: Optional[str] = None) -> List[List[float]]:
         """One vector per text, in order. Sent in batches so a full
         rebuild of a large index is a few dozen requests, not thousands.
         With `embed_dims` set, each vector is cut to its first N numbers
         and scaled back to unit length: the Qwen embedding models are
         trained so a truncated vector still ranks well, and half the
-        numbers is half the storage on the VM and in the bucket."""
+        numbers is half the storage on the VM and in the bucket.
+        With `instruction` set, each text is sent as a *query* in the
+        model's instructed form (see QUERY_INSTRUCTION); documents, the
+        texts a query is matched against, are sent bare, which is the
+        asymmetry the model is trained on. None or blank sends texts as
+        they are."""
         out: List[List[float]] = []
         texts = list(texts)
+        if instruction:
+            texts = ["Instruct: %s\nQuery: %s" % (instruction, t) for t in texts]
         for start in range(0, len(texts), batch):
             chunk = texts[start:start + batch]
             body = self._post("/embeddings", {"model": self.embed_model, "input": chunk})

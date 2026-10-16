@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Mapping, Optional, Tuple
 
+from crsw_web.llm import QUERY_INSTRUCTION
+
 ENV_PREFIX = "CRSW_"
 
 REQUIRED = ("S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET",
@@ -76,6 +78,10 @@ class Settings:
     llm_embed_model: str = "arc:embedvl"
     llm_rerank_model: str = "arc:rerankvl"
     llm_embed_dims: int = 1024             # must match the promoter's
+    # Prefixed to a question before it is embedded (the model is trained
+    # with an instruction on the query, none on the documents); blank =
+    # off. Stored vectors never carry it, so changing it is a restart.
+    llm_query_instruction: str = QUERY_INSTRUCTION
     llm_timeout_seconds: int = 20
     llm_sensitivities: Tuple[str, ...] = ("green",)
     # Searching inside documents (finding-and-reuse.md §7): the VM's copy
@@ -217,6 +223,7 @@ class Settings:
             llm_embed_model=get_set("LLM_EMBED_MODEL", cls.llm_embed_model),
             llm_rerank_model=get_set("LLM_RERANK_MODEL", cls.llm_rerank_model),
             llm_embed_dims=llm_dims,
+            llm_query_instruction=get_set("LLM_QUERY_INSTRUCTION", cls.llm_query_instruction),
             llm_timeout_seconds=opt_int("LLM_TIMEOUT_SECONDS", cls.llm_timeout_seconds),
             llm_sensitivities=llm_sens,
             passages=get("PASSAGES") == "1",

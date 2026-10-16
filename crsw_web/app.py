@@ -268,7 +268,8 @@ def create_app(settings: Optional[Settings] = None,
         ask = " ".join((ask or "").split())
         if not ask or not ask_enabled:
             return None
-        ans = cat.ask(ask, platform, limit=limit, sensitivities=settings.llm_sensitivities)
+        ans = cat.ask(ask, platform, limit=limit, sensitivities=settings.llm_sensitivities,
+                      query_instruction=settings.llm_query_instruction)
         # The question itself is not logged: it may say what someone is
         # working on. Its length and the steps that ran are enough.
         log.info("ask user=%s chars=%d steps=%s results=%d notice=%s",
@@ -368,7 +369,9 @@ def create_app(settings: Optional[Settings] = None,
                              "search inside documents is off until the promoter rewrites them.")
             return out
         try:
-            vec = platform.embed([q])[0]
+            # The question is a query: it carries the model's instruction.
+            # The passages it is scored against were embedded bare.
+            vec = platform.embed([q], instruction=settings.llm_query_instruction)[0]
         except PlatformError as e:
             out["notice"] = "Search inside documents is unavailable (%s)." % e
             return out

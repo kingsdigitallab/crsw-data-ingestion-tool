@@ -418,7 +418,8 @@ class Catalogue:
         return out
 
     def ask(self, question: str, platform, limit: Optional[int] = None,
-            sensitivities: Sequence[str] = ("green",)) -> Answer:
+            sensitivities: Sequence[str] = ("green",),
+            query_instruction: Optional[str] = None) -> Answer:
         """A question in plain words to rows in order. Filter first (the
         model picks from the vocabulary; anything else is dropped), then
         rank by meaning where vectors exist, rows without a vector by the
@@ -467,7 +468,9 @@ class Catalogue:
                                "for the current embedding model.")
             else:
                 try:
-                    vec = platform.embed([question])[0]
+                    # A query, so it carries the instruction; the dataset
+                    # vectors it is ranked against were embedded bare.
+                    vec = platform.embed([question], instruction=query_instruction)[0]
                     by_id = {r["identifier"]: r for r in candidates}
                     ranked = [by_id[i] for i, _ in self.rank(vec, set(by_id), model=model)]
                     ans.steps.append("meaning")

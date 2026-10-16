@@ -65,6 +65,25 @@ class TestEmbed(unittest.TestCase):
                          transport=httpx.MockTransport(handler))
         self.assertEqual(p.embed(["x"]), [[3.0, 4.0, 9.0, 9.0]])    # shorter: untouched
 
+    def test_instruction_prefixes_the_query_only(self):
+        """Qwen3-Embedding is asymmetric: a query carries an instruction,
+        a document does not. The instruction goes on the wire in the
+        model's documented form; without one (None or blank) the text
+        goes as it is. The vectors come back the same either way."""
+        sent = []
+
+        def handler(request):
+            sent.append(json.loads(request.content)["input"])
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+        p = fake_platform(handler)
+        self.assertEqual(p.embed(["x"], instruction="do y"), [[1.0, 0.0]])
+        self.assertEqual(p.embed(["x"]), [[1.0, 0.0]])
+        self.assertEqual(p.embed(["x"], instruction=""), [[1.0, 0.0]])
+        self.assertEqual(sent, [["Instruct: do y\nQuery: x"], ["x"], ["x"]])
+        self.assertEqual(llm.QUERY_INSTRUCTION,
+                         "Given a web search query, retrieve relevant passages that answer the query")
+
     def test_blank_model_names_are_kept_blank(self):
         p = llm.Platform("https://ai.example", "k", chat_model="", rerank_model=None)
         self.assertEqual((p.chat_model, p.rerank_model, p.embed_model), ("", "", "arc:embedvl"))

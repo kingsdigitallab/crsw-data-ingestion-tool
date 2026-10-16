@@ -14,6 +14,7 @@ if HAVE_WEB:
     from crsw_web.app import create_app
     from crsw_web.catalogue import Catalogue, describe_filter, words_match, years_overlap
     from crsw_web.config import ConfigError, Settings
+    from crsw_web import llm as llm_mod
     from crsw_web.llm import PlatformError
     from promoter import embed as embed_mod
     from promoter import index as index_mod
@@ -47,6 +48,7 @@ class FakePlatform:
         if fingerprint is not None:         # the alias repointed to another backend
             self.fingerprint = fingerprint
         self.filter_calls, self.embed_calls, self.rerank_calls = [], [], []
+        self.embed_instructions = []        # one per embed call: the instruction, or None
 
     def embed_fingerprint(self):
         return self.fingerprint
@@ -58,8 +60,9 @@ class FakePlatform:
             raise PlatformError("platform returned HTTP 503 for /chat/completions")
         return dict(self.filter_reply)
 
-    def embed(self, texts, batch=32):
+    def embed(self, texts, batch=32, instruction=None):
         self.embed_calls.append(list(texts))
+        self.embed_instructions.append(instruction)
         if "embed" in self.fail:
             raise PlatformError("platform unreachable: ConnectError")
         return [bag(t) for t in texts]
@@ -179,6 +182,8 @@ class TestAsk(AskBase):
         self.assertEqual(p.filter_calls[0][1], ("forced-labour", "armed-conflict"))
         self.assertEqual(p.filter_calls[0][2], ("csac",))
         self.assertEqual(p.embed_calls, [["anything on conflict deaths since 1990"]])
+        # The question is a query: it carries the model's instruction.
+        self.assertEqual(p.embed_instructions, [llm_mod.QUERY_INSTRUCTION])
         self.assertEqual(p.rerank_calls, [])
         body = c.get("/datasets.json", params={"ask": "conflict deaths since 1990"}).json()
         self.assertEqual([d["identifier"] for d in body["datasets"]], [CLEAN])

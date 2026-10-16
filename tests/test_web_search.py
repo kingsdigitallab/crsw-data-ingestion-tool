@@ -13,6 +13,7 @@ from tests.test_web_catalogue import HAVE_WEB, VOCAB, READ
 if HAVE_WEB:
     import duckdb
     from fastapi.testclient import TestClient
+    from crsw_web import llm as llm_mod
     from crsw_web import s3 as s3mod
     from crsw_web.app import create_app
     from crsw_web.config import Settings
@@ -255,8 +256,8 @@ class TestCopy(SearchBase):
         self.assertEqual(ix.search([1.0] * DIM), [])
 
         class Cut(FakePlatform):
-            def embed(self, texts, batch=32):
-                return [v[:small] for v in super().embed(texts, batch)]
+            def embed(self, texts, batch=32, instruction=None):
+                return [v[:small] for v in super().embed(texts, batch, instruction)]
         for ident in (CLEAN, GREEN):
             import json
             key = ident + "/dataset.%s.json" % ident.rsplit("/", 1)[-1]
@@ -479,6 +480,9 @@ class TestSearchPage(SearchBase):
         self.assertEqual(len(p.embed_calls), 2)               # question, then sentences
         self.assertNotIn(sentences[0]["text"], p.embed_calls[-1])
         self.assertIn("Dates were checked against the archive.", p.embed_calls[-1])
+        # The question is a query and carries the model's instruction; the
+        # sentences are documents, compared against it, and carry none.
+        self.assertEqual(p.embed_instructions, [llm_mod.QUERY_INSTRUCTION, None])
         self.assertEqual(body["passages"][0]["dataset"], "csac-clean")
         self.assertIn("Conflict deaths", body["passages"][0]["text"])
         self.assertEqual(body["stats"]["passages"], 5)        # held, but amber never queried
@@ -502,6 +506,18 @@ class TestSearchPage(SearchBase):
         c = self.app(platform=FakePlatform(), amber_access="groups",
                      dev_groups=("er_prj_kdl_slavery_rs1",))
         self.assertIn(AMBER, [h["identifier"] for h in self.hits(c, "survivor")["passages"]])
+
+    def test_query_instruction_can_be_switched_off(self):
+        """A blank CRSW_LLM_QUERY_INSTRUCTION sends the question bare, as
+        before, with nothing stored touched."""
+        self.write_passages((CLEAN, GREEN))
+        p = FakePlatform()
+        body = self.hits(self.app(platform=p, llm_query_instruction=""), "conflict deaths per year")
+        self.assertEqual(body["steps"], ["meaning", "rerank", "highlight"])
+        # The blank reaches Platform.embed as it is, which sends the text
+        # bare for None and blank alike (test_llm); nothing is instructed.
+        self.assertEqual(len(p.embed_instructions), 2)
+        self.assertFalse(any(p.embed_instructions))
 
     def test_passages_from_another_model_are_refused_with_a_notice(self):
         """The alias now resolves to another backend than the one that
@@ -571,11 +587,11 @@ class TestSearchPage(SearchBase):
         self.assertNotIn("Nothing close enough", html)
         # Only the highlighting call down: passages unmarked, a notice.
         class FlakyPlatform(FakePlatform):
-            def embed(self, texts, batch=32):
+            def embed(self, texts, batch=32, instruction=None):
                 if self.embed_calls:
                     self.embed_calls.append(list(texts))
                     raise PlatformError("platform returned HTTP 503 for /embeddings")
-                return super().embed(texts, batch)
+                return super().embed(texts, batch, instruction)
         from crsw_web.llm import PlatformError
         body = self.hits(self.app(platform=FlakyPlatform()), "conflict deaths per year")
         self.assertEqual(body["steps"], ["meaning", "rerank"])

@@ -330,6 +330,24 @@ lists will govern file contents when section 7 is built.
 
 ## 7. Searching inside documents
 
+*16 October 2026, the embedding model and the question's instruction:*
+search inside content could not find a passage from one of its own
+sentences. The probe (`scripts/embed_probe_2026-10-16.txt`) showed why:
+`arc:embedvl` scores every pair of texts in one narrow band, 0.28 to
+0.47, so nothing separates. Both VMs moved to `arc:embed`
+(Qwen3-Embedding-0.6B, text only, 1024 native) by `.env` the same day and
+the promoter re-embedded everything on its own; the verbatim sentence
+rose to second. Qwen3-Embedding is trained asymmetrically, an instruction
+on the query and none on the documents, and the probe shows the
+instruction lowers the wrong answers far more than the right one (control
+0.23 to 0.12, wrong passage 0.19 to 0.08, right passage 0.42 to 0.36). So
+the question now goes to the platform as `Instruct: … Query: …`
+(`CRSW_LLM_QUERY_INSTRUCTION`, blank = off) and nothing stored changes;
+the sentences compared against it for highlighting go bare, which is the
+intended asymmetry (`docs/web-deposit/query-instruction-handoff.md`). If a
+paraphrase still misses, the next lever is passage length, 350 words to
+about 150 with overlap, which is a re-embed and a handoff of its own.
+
 *15 October 2026, how this grows:* the four seconds a live search takes
 are the two platform calls (embed the question, rerank twenty passages),
 which do not grow with the corpus; the scan that scores every passage is

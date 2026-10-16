@@ -1,0 +1,61 @@
+models on the platform: listing omitted from the committed copy (ARC's
+backend names and prices); the two embedding aliases are arc:embed
+(qwen/qwen3-embedding-0.6b, FP16) and arc:embedvl (Qwen/Qwen3-VL-Embedding-2B, FP16).
+
+==== arc:embed
+  native dimension: 1024  (promoter stores the first 1024)
+  prefix       query                             right right@1024    wrong wrong@1024
+  bare         own text (first 450 chars)        0.872    0.872    0.323    0.323
+  bare         verbatim sentence                 0.415    0.415    0.188    0.188
+  bare         paraphrase, no shared words       0.285    0.285    0.194    0.194
+  bare         control, matches nothing          0.227    0.227    0.241    0.241
+
+  qwen3        own text (first 450 chars)        0.856    0.856    0.288    0.288
+  qwen3        verbatim sentence                 0.355    0.355    0.075    0.075
+  qwen3        paraphrase, no shared words       0.267    0.267    0.103    0.103
+  qwen3        control, matches nothing          0.120    0.120    0.128    0.128
+
+  e5/nomic     own text (first 450 chars)        0.886    0.886    0.323    0.323
+  e5/nomic     verbatim sentence                 0.454    0.454    0.192    0.192
+  e5/nomic     paraphrase, no shared words       0.351    0.351    0.232    0.232
+  e5/nomic     control, matches nothing          0.286    0.286    0.256    0.256
+
+  bge          own text (first 450 chars)        0.846    0.846    0.326    0.326
+  bge          verbatim sentence                 0.420    0.420    0.216    0.216
+  bge          paraphrase, no shared words       0.331    0.331    0.234    0.234
+  bge          control, matches nothing          0.229    0.229    0.265    0.265
+
+  jina         own text (first 450 chars)        0.871    0.871    0.286    0.286
+  jina         verbatim sentence                 0.447    0.447    0.146    0.146
+  jina         paraphrase, no shared words       0.319    0.319    0.167    0.167
+  jina         control, matches nothing          0.255    0.255    0.231    0.231
+
+
+==== arc:embedvl
+  native dimension: 2048  (promoter stores the first 1024)
+  prefix       query                             right right@1024    wrong wrong@1024
+  bare         own text (first 450 chars)        0.922    0.923    0.570    0.567
+  bare         verbatim sentence                 0.454    0.444    0.322    0.308
+  bare         paraphrase, no shared words       0.445    0.401    0.334    0.300
+  bare         control, matches nothing          0.282    0.289    0.307    0.314
+
+  qwen3        own text (first 450 chars)        0.907    0.909    0.526    0.532
+  qwen3        verbatim sentence                 0.471    0.457    0.312    0.294
+  qwen3        paraphrase, no shared words       0.444    0.400    0.325    0.296
+  qwen3        control, matches nothing          0.298    0.312    0.302    0.313
+
+  e5/nomic     own text (first 450 chars)        0.911    0.909    0.545    0.543
+  e5/nomic     verbatim sentence                 0.466    0.448    0.331    0.302
+  e5/nomic     paraphrase, no shared words       0.469    0.420    0.378    0.342
+  e5/nomic     control, matches nothing          0.319    0.325    0.344    0.349
+
+  bge          own text (first 450 chars)        0.903    0.903    0.537    0.540
+  bge          verbatim sentence                 0.468    0.448    0.318    0.294
+  bge          paraphrase, no shared words       0.445    0.382    0.350    0.308
+  bge          control, matches nothing          0.313    0.310    0.328    0.330
+
+  jina         own text (first 450 chars)        0.915    0.915    0.531    0.529
+  jina         verbatim sentence                 0.465    0.450    0.320    0.296
+  jina         paraphrase, no shared words       0.455    0.410    0.347    0.313
+  jina         control, matches nothing          0.317    0.329    0.317    0.321
+
