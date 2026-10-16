@@ -41,8 +41,9 @@ The bucket is versioned. Neither key needs to delete object versions; everything
 
 Sign-in is the KCL proxy's job ("Require authentication", "Allowed groups"). The service does not implement OIDC. In `CRSW_AUTH_MODE=proxy` it:
 
-- reads the user from the header the proxy sets (`CRSW_PROXY_USER_HEADER`; name discovered on first deploy with the one-time `/auth/headers` diagnostic, then the flag is unset);
-- optionally normalises it with a regex so the record's `depositor` field is the KCL username, matching CLI deposits;
+- reads the user from the header the proxy sets (`CRSW_PROXY_USER_HEADER`; name discovered on first deploy with the one-time `/auth/headers` diagnostic, then the flag is unset; `x-webauth-user` since 16 October 2026, carrying the bare k-number);
+- optionally normalises it with a regex so the record's `depositor` field is the KCL username, matching CLI deposits; in every case lower-cases it and refuses (403) anything that is not a plain key segment (`^[a-z0-9][a-z0-9._-]{0,63}$`), since the value becomes `staging/<user>/`;
+- optionally reads a display name (`CRSW_PROXY_NAME_HEADER`, `x-webauth-name`) for the "Signed in as" line only; it is never written to a record, label, key or audit line, and `x-webauth-mail` is not read;
 - optionally re-checks group membership if the proxy forwards groups (`CRSW_PROXY_GROUPS_HEADER`), although the proxy's allowed-groups setting is the primary gate;
 - **only believes the header when the connection comes from the proxy**: nginx `allow`/`deny` on `CRSW_TRUSTED_PROXY_CIDRS`, and the app checks the peer again using `X-Sidecar-Peer`, a header the sidecar always overwrites with the address that connected to it (the app port is reachable only from the sidecar). `X-Forwarded-For` is not used for this: the KCL proxy extends it and its leftmost entry is the browser. A request from anywhere else is refused before the header is read (403), and a request from the proxy without the header is 401.
 
@@ -61,7 +62,7 @@ Every mutating request is logged with the username and deposit id; bodies are ne
 | Deposit promoted while still uploading | Promoter only sees deposits whose control object says complete, which finalise writes last after verifying every object; after that, further PUTs are refused | app, promoter |
 | Two promoter runs overlap | `flock -n` in the systemd unit | host |
 | Object swapped at the same size after finalise | Promoter re-hashes every object and compares to the manifest | promoter |
-| Deposit to a strand the user may not use | `PROMOTER_AUTHORISED` map (currently `*`); to be driven by group claims once the header shape is known | promoter |
+| Deposit to a strand the user may not use | `PROMOTER_AUTHORISED` map (currently `*`, the proxy's allowed group being the gate); depositors are real k-numbers since 16 October 2026, so a per-user strand map is a configuration change | promoter |
 | Existing dataset at the destination | Merged by the same rules as a CLI re-deposit (UUID and `created` kept, manifest unioned, depositor appended), with a warning in the log; a foreign or unparsable record blocks promotion | promoter |
 | Abandoned half-finished deposits filling staging | Ignored by the promoter; cleared by the staging lifecycle rule (ask 2); quota limits the damage per user | Ceph lifecycle |
 | Secrets in images or the repository | Keys only via env files at run time; `.dockerignore`; `scripts/check-no-secrets.sh` on every commit | build, CI |
@@ -77,7 +78,8 @@ Every mutating request is logged with the username and deposit id; bodies are ne
    ```
    RequestHeader set X-Remote-User "%{REMOTE_USER}s"
    ```
-   plus the group attribute under a second header if Keycloak releases one; please tell us which attribute carries groups. The service is configured with `CRSW_PROXY_USER_HEADER=X-Remote-User` on that assumption. Without it the service cannot record who deposited.
+   plus the group attribute under a second header if Keycloak releases one; please tell us which attribute carries groups. Without it the service cannot record who deposited.
+   *Answered in part, 16 October 2026:* the proxy now sends `x-webauth-user` (k-number), `x-webauth-name` and `x-webauth-mail`; the service runs in proxy mode with `CRSW_PROXY_USER_HEADER=x-webauth-user`. No groups header is sent, so the groups half of the ask stays open and amber-by-groups is not available.
 5. **Promoter key**: confirm it need not delete object versions (delete markers are enough), or grant it if the lifecycle approach is not acceptable.
 6. **Docker or Podman** on eResearch OpenStack images; the compose file is engine-agnostic.
 7. **Exposure beyond KCL** for the UoN pilot is a proxy setting ("Restrict to KCL network" off); we ask for your view before it is changed.
@@ -99,7 +101,7 @@ sh scripts/check-no-secrets.sh
 # proxy mode locally: 401 without header, 200 with, 403 from an untrusted peer
 CRSW_TRUSTED_PROXY_CIDRS=172.16.0.0/12 docker compose -f deploy/compose.yaml up -d --build
 curl -i localhost:8080/whoami
-curl -i -H 'X-Remote-User: k1078591' localhost:8080/whoami
+curl -i -H 'x-webauth-user: k1078591' localhost:8080/whoami
 
 # rate limit: after the burst, 429s
 for i in $(seq 20); do curl -s -o /dev/null -w '%{http_code} ' -X POST -d '{}' -H 'Content-Type: application/json' localhost:8080/deposits; done

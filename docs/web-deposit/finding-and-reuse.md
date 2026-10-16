@@ -311,7 +311,9 @@ lists will govern file contents when section 7 is built.
    promoter and CLI work.
 2. **One ask to eResearch.** A read-only key for the web VM covering the audit
    prefix, the index prefix and the four strand prefixes, excluding staging;
-   confirmation of the groups header the proxy sends; and whether the proxy
+   confirmation of the groups header the proxy sends (*16 October 2026:*
+   identity arrived as `x-webauth-user`/`-name`/`-mail` with no groups
+   header, so `CRSW_AMBER_ACCESS=groups` still cannot be used); and whether the proxy
    buffers or time-limits large responses. This one ask unblocks the
    administrator page, browse, download and the picker. In parallel, ask the
    Centre for the amber download rule and the amber-metadata answer.

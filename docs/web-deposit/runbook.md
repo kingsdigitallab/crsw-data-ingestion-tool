@@ -20,7 +20,7 @@ In the proxy's management interface, Proxy mode, target the web VM by name and t
 - Restrict to KCL network: on for the KCL-only phase; off for the UoN pilot after the eResearch review.
 - Capture (hide) errors: on.
 - Require authentication: on. Allowed groups: `er_prj_kdl_slavery`.
-- The proxy must forward the authenticated username (and groups, if it can) in a request header. As observed on 21 September 2026 it forwards none by default, and `er_prj_kdl_slavery` was refused by its group check while `er_kdl_bastion_users` passed. Both are open asks to eResearch; until they are answered, see "Interim: proxy gate without identity" in section 2.
+- The proxy must forward the authenticated username in a request header. It forwarded none by default (observed 21 September 2026); since 16 October 2026 it sends `x-webauth-user` (the k-number), `x-webauth-name` and `x-webauth-mail`, and the service runs in proxy mode on them (section 2). No groups header is sent, so `CRSW_AMBER_ACCESS=groups` is still not available. The group check (`er_prj_kdl_slavery` refused while `er_kdl_bastion_users` passed) remains an open ask.
 
 The proxy is a webfarm: front nginx (TLS, HTTP/2) → Apache with mod_auth_mellon (SAML) → Keycloak at `kc.sso.er.kcl.ac.uk`. Apache's access log already records the signed-in k-number, so forwarding it is a config change on their side (security review, ask 4). Group membership is read from the SAML assertion at sign-in and propagates with a delay: after adding someone to the group, they must sign out of KCL SSO completely and back in, and may need to wait for the next sync. A 403 from the proxy for a newly added member is usually this, not a fault.
 
@@ -65,18 +65,32 @@ The same goes for the LLM platform key: `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KE
 
 `/health` is the only path nginx serves to a source outside `CRSW_TRUSTED_PROXY_CIDRS`; every other path answers 403 from the VM itself, which is the allow-list working. The same CIDR value must be in `.env` (the app's peer check) and exported in the shell (the nginx sidecar), and the export is needed again for every later `docker compose` command.
 
-First deploy only, to learn the identity header:
+First deploy only, or after a change on the proxy's side, to learn the identity header:
 
 1. In `.env` set `CRSW_DEBUG_HEADERS=1` and, temporarily, `CRSW_AUTH_MODE=placeholder`; restart.
-2. Through the proxy, signed in, open `https://<proxy-name>/auth/headers`. Note the header carrying your username (and any groups header). `peer` must be one of the proxy addresses; it is the address that connected to the sidecar, not the leftmost `x-forwarded-for` entry, which is the browser. If no header names you, the proxy is not forwarding identity: stop here and use the interim below.
-3. Set `CRSW_PROXY_USER_HEADER` (and `CRSW_PROXY_GROUPS_HEADER`, `CRSW_PROXY_USERNAME_PATTERN` if the value is `k1234567@kcl.ac.uk`-shaped), set `CRSW_AUTH_MODE=proxy`, set `CRSW_DEBUG_HEADERS=0`; restart.
+2. Through the proxy, signed in, open `https://<proxy-name>/auth/headers`. Note the header carrying your username (and any groups header). `peer` must be one of the proxy addresses; it is the address that connected to the sidecar, not the leftmost `x-forwarded-for` entry, which is the browser. If no header names you, the proxy is not forwarding identity: stop here, the app cannot know who signed in, and placeholder mode on the VM attributes every deposit to `CRSW_DEV_USER` (acceptable for the administrator's own test only, never for the pilot).
+3. Set `CRSW_PROXY_USER_HEADER` (and `CRSW_PROXY_NAME_HEADER` for the display name; `CRSW_PROXY_GROUPS_HEADER`, `CRSW_PROXY_USERNAME_PATTERN` only if the proxy sends groups or a `k1234567@kcl.ac.uk`-shaped value), set `CRSW_AUTH_MODE=proxy`, set `CRSW_DEBUG_HEADERS=0`; restart.
 4. `https://<proxy-name>/whoami` must show your k-number.
 
-### Interim: proxy gate without identity
+*Result, 16 October 2026:* the diagnostic showed `x-webauth-user: k1078591`, `x-webauth-name`, `x-webauth-mail`, no groups header, `peer` `10.202.65.118` (inside `CRSW_TRUSTED_PROXY_CIDRS`, which lists the proxy's three addresses `10.202.65.116`, `.117`, `.118`). Header names are case-insensitive. The switch from the interim placeholder mode was:
 
-While the proxy forwards no identity header, the proxy can still gate access (authentication on, with a group its directory evaluates) but the app cannot know who signed in. For the administrator's own end-to-end test only, run the app in `CRSW_AUTH_MODE=placeholder` with `CRSW_DEV_USER=<your k-number>` so test deposits carry the right depositor. This is never acceptable for the pilot: every deposit would be attributed to that one user.
+```
+cd /opt/crsw-deposit-web
+grep -n '^CRSW_\(AUTH_MODE\|PROXY_USER_HEADER\|PROXY_NAME_HEADER\|TRUSTED_PROXY_CIDRS\|DEBUG_HEADERS\)=' .env .env.local 2>/dev/null
+# in .env (or .env.local, loaded after .env): CRSW_AUTH_MODE=proxy,
+# CRSW_PROXY_USER_HEADER=x-webauth-user, CRSW_PROXY_NAME_HEADER=x-webauth-name
+# (v0.12.0 or later), CRSW_PROXY_USERNAME_PATTERN= (blank), CRSW_DEBUG_HEADERS=0
+export CRSW_HTTP_PORT=8080 CRSW_TRUSTED_PROXY_CIDRS=$(grep '^CRSW_TRUSTED_PROXY_CIDRS=' .env | cut -d= -f2-)
+docker compose -f deploy/compose.yaml up -d      # recreates deposit-web with the new env
+curl -s localhost:8080/health                     # "auth_mode": "proxy"
+curl -si localhost:8080/whoami | head -1          # 403 from the VM itself: not the proxy, as designed
+```
 
-Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per create, upload, removal and finalise with the username and deposit id. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second): that is the proxy's web application firewall probing the backend, not an attack. In the webfarm's own logs every request appears twice, once from the front nginx and once from Apache; duplicate lines there are normal.
+Through the proxy, `/whoami` shows your k-number (and `name` once the name header is set), `/auth/headers` is 404 again, and the form says "Depositing as *Your Name* (k1234567)". The proof that identity is real is a colleague opening `/whoami` and seeing their own k-number; their test deposit lands under `staging/<their k-number>/` and, promoted, carries it as depositor (`python -m promoter datasets` or `promoter audit --since <date>` on the internal VM). With real depositors `PROMOTER_AUTHORISED` can become a per-user strand map whenever the Centre wants one (`.env.promoter`, section 3); `*` stays right while the proxy's allowed group is the gate and every member may deposit to every strand.
+
+The username is lower-cased and must be a plain key segment (letters, digits, `.`, `_`, `-`, up to 64 characters), since it becomes `staging/<user>/`; anything else is refused with 403 "not a usable username". The display name is shown on pages only and never written anywhere; `x-webauth-mail` is not read.
+
+Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per create, upload, removal and finalise with the username and deposit id. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second, or 401 in proxy mode since they carry no identity header): that is the proxy's web application firewall probing the backend, not an attack. In the webfarm's own logs every request appears twice, once from the front nginx and once from Apache; duplicate lines there are normal.
 
 ## 3. Internal VM
 
