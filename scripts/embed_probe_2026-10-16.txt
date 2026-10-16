@@ -59,3 +59,24 @@ backend names and prices); the two embedding aliases are arc:embed
   jina         paraphrase, no shared words       0.455    0.410    0.347    0.313
   jina         control, matches nothing          0.317    0.329    0.317    0.321
 
+
+==== after deploy, v0.12.1 on the web VM, 16 October 2026
+  /search.json?sort=meaning&limit=5 through the proxy; 304 passages, 5 datasets,
+  22 files, all current. Meaning order skips the reranker by design, so these
+  are the embedding alone, question instructed, passages bare.
+
+  query                                   want                        got
+  verbatim sentence (Convention (c)(iii)) Convention p1 first         #2, 0.355 (why: phrase, so pinned first in the default order);
+                                                                      #1 G1915573 p13 (Nepal CCPR opinion, marriage), 0.454 (was 0.464)
+  paraphrase "widows passed on ..."       Convention p1 + ICC p29     neither in top 5; top G1915573 p13 0.307, scgb p17 0.291,
+                                          in top 3                    scgb p18 0.285, policy p65 0.284, scgb p8 0.281; spec files gone
+  control "satellite imagery of cropland" real queries clearly above  best 0.282 (was 0.456): spec files r2/r3, DEPOSIT_TOOL_SPEC p3
+
+  Reading: noise fell as the probe predicted (control 0.456 -> 0.282, spec
+  files out of the paraphrase's top 5), the right passage fell too (0.415 ->
+  0.355) and its competitor hardly moved (0.464 -> 0.454). The competitor is
+  a ~120-word document tail entirely about a woman, a husband and a
+  marriage; the Convention passage is 350 words over five practices, so one
+  clause of five cannot outscore it. Evidence for the passage-length lever.
+  Next check: the paraphrase in the default order, where the reranker reads
+  the top 20; if it lifts the Convention passage, length can wait.

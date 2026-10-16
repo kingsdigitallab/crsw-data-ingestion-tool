@@ -78,3 +78,13 @@ handoff.
 The find page's question-to-filter step inventing a strand (rs2, rs3 on
 two questions that named none) is a different defect in `Catalogue.ask`'s
 filter prompt or parsing; own handoff.
+
+## Result, 16 October 2026 (v0.12.1 live)
+
+Recorded beside the probe output. Noise fell as predicted (control 0.456 →
+0.282, spec files out of the paraphrase's top 5); the verbatim sentence is
+still #2 by meaning (0.355) behind a short marriage passage (0.454), and the
+paraphrase still misses the top 5. The right passage is one clause of five
+in 350 words; its competitor is a 120-word tail about one thing. That is
+the passage-length lever. Pending: the paraphrase in the default order, to
+see whether the reranker lifts it before a re-embed is decided.
