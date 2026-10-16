@@ -235,7 +235,8 @@ def _write_passages(cfg, client, log, prefixes) -> None:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, prefix, rec,
                                          platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
-                                         cfg.passages_max_per_dataset)
+                                         cfg.passages_max_per_dataset,
+                                         words=cfg.passage_words, overlap=cfg.passage_overlap)
             except Exception as e:
                 log.write("passages_failed", prefix=prefix, error=str(e))
                 continue
@@ -585,7 +586,8 @@ def cmd_passages(args) -> int:
                 s = passages_mod.refresh(client, cfg.s3_bucket, cfg.index_prefix, ref.prefix,
                                          rec, platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
-                                         cfg.passages_max_per_dataset)
+                                         cfg.passages_max_per_dataset,
+                                         words=cfg.passage_words, overlap=cfg.passage_overlap)
             except Exception as e:
                 failed += 1
                 print(json.dumps({"action": "passages_failed", "prefix": ref.prefix,

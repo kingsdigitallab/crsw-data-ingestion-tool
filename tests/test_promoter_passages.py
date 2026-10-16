@@ -16,7 +16,7 @@ if HAVE_WEB:
     from crsw_web import llm
     from promoter import __main__ as cli
     from promoter import passages as pmod
-    from promoter.config import PromoterConfig
+    from promoter.config import ConfigError, PromoterConfig
 
 LLM_ENV = {"PROMOTER_LLM_BASE_URL": "https://ai.example/api/v1",
            "PROMOTER_LLM_API_KEY": "sk-test", "PROMOTER_PASSAGES": "1"}
@@ -85,6 +85,12 @@ class TestExtractAndChunk(unittest.TestCase):
         self.assertEqual(pieces[0][2].split()[:2], ["w0", "w1"])
         self.assertEqual(pieces[1][2].split()[0], "w300")           # 350 - 50 overlap
         self.assertEqual(pieces[-1][2].split()[-1], "w999")
+        # The defaults: 150 words, each starting 30 before the last ended
+        # (chosen by the probe, docs/web-deposit/passage-length-handoff.md).
+        self.assertEqual((pmod.PASSAGE_WORDS, pmod.OVERLAP_WORDS), (150, 30))
+        pieces = pmod.chunk(pages)
+        self.assertEqual(len(pieces[0][2].split()), 150)
+        self.assertEqual(pieces[1][2].split()[0], "w120")
         self.assertEqual(pmod.chunk([(None, "   ")]), [])
         self.assertEqual(pmod.chunk([(None, "a  b\n c")]), [(None, 0, "a b c")])
 
@@ -121,8 +127,51 @@ class TestCap(unittest.TestCase):
         def fetch(member):
             self.fetched.append(member)
             return data[member]
+        # The cap arithmetic in this class was written for 350-word passages
+        # with a 50-word overlap (1000 words = four passages); the size is
+        # not what these tests are about, so they say so explicitly.
         return pmod.build("rs1/p/green/0_raw/d", rec, fetch, existing, self.platform,
-                          "toy", None, 10 ** 9, cap)
+                          "toy", None, 10 ** 9, cap, words=350, overlap=50)
+
+    def build_default(self, files, existing):
+        """`build` at the default passage size."""
+        import hashlib
+        rec = {"dataset_uuid": "u", "sensitivity": "green",
+               "files": [{"path": m, "checksum_sha256": hashlib.sha256(d).hexdigest(),
+                          "bytes": len(d)} for m, d in files]}
+        data = dict(files)
+        self.platform = self.Platform()
+        return pmod.build("rs1/p/green/0_raw/d", rec, lambda m: data[m], existing,
+                          self.platform, "toy", None, 10 ** 9, 100)
+
+    def test_rows_say_how_they_were_split(self):
+        a, one = self.words(1000, "a"), self.words(20, "o")
+        rows, s = self.build_default([("a.txt", a), ("one.txt", one)], [])
+        self.assertEqual(s.split, "150/30")
+        self.assertEqual({r["split"] for r in rows}, {"150/30"})
+        self.assertEqual([len(r["text"].split()) for r in rows][:2], [150, 150])
+        self.assertEqual(rows[1]["text"].split()[0], "a120")
+        self.assertEqual(s.passages, 10)                        # nine of a, one of one
+        back = pq.read_table(io.BytesIO(pmod.parquet_bytes(rows))).to_pylist()
+        self.assertEqual({r["split"] for r in back}, {"150/30"})
+        # Unchanged files under the same layout are kept as before.
+        rows, s = self.build_default([("a.txt", a), ("one.txt", one)], rows)
+        self.assertEqual((s.files_kept, s.embedded, s.kept), (2, 0, 10))
+        # Files cut under another layout are read and split again although
+        # checksum, model and cut all match. A passage whose text is the
+        # same under both layouts keeps its vector: one.txt is one passage
+        # either way, so only its split changes.
+        old, _ = self.build([("a.txt", a), ("one.txt", one)], [], 100)      # 350/50
+        self.assertEqual({r["split"] for r in old}, {"350/50"})
+        rows, s = self.build_default([("a.txt", a), ("one.txt", one)], old)
+        self.assertEqual((s.files_read, s.files_kept, s.embedded, s.kept), (2, 0, 9, 1))
+        self.assertEqual({r["split"] for r in rows}, {"150/30"})
+        # Rows written before the column existed (every file in the bucket
+        # on 16 October 2026) count as another layout too.
+        before = [{k: v for k, v in r.items() if k != "split"} for r in rows]
+        rows, s = self.build_default([("a.txt", a), ("one.txt", one)], before)
+        self.assertEqual((s.files_read, s.files_kept, s.embedded, s.kept), (2, 0, 0, 10))
+        self.assertEqual({r["split"] for r in rows}, {"150/30"})
 
     def members(self, rows):
         return [r["member"] for r in rows if r["position"] != pmod.NO_TEXT]
@@ -179,7 +228,8 @@ class TestCap(unittest.TestCase):
                           "bytes": len(d)} for m, d in files]}
         data = dict(files)
         _, s = pmod.build("rs1/p/green/0_raw/d", rec, lambda m: data[m], existing,
-                          self.Platform(), "toy", None, max_file_bytes, cap)
+                          self.Platform(), "toy", None, max_file_bytes, cap,
+                          words=350, overlap=50)
         return s
 
     def test_a_reused_passage_takes_the_record_as_it_is_now(self):
@@ -191,7 +241,7 @@ class TestCap(unittest.TestCase):
                "files": [{"path": "a.txt", "checksum_sha256": hashlib.sha256(longer).hexdigest(),
                           "bytes": len(longer)}]}
         rows, s = pmod.build("rs1/p/amber/0_raw/d", rec, lambda m: longer, rows,
-                             self.Platform(), "toy", None, 10 ** 9, 100)
+                             self.Platform(), "toy", None, 10 ** 9, 100, words=350, overlap=50)
         self.assertEqual(s.kept, 3)
         self.assertEqual({(r["identifier"], r["dataset_uuid"], r["sensitivity"]) for r in rows},
                          {("rs1/p/amber/0_raw/d", "new-uuid", "amber")})
@@ -318,8 +368,10 @@ class TestPassages(PassagesBase):
         self.assertIn("Beta page text", by["paper.pdf"]["text"])
         self.assertEqual(by["memo.docx"]["text"], "Memo paragraph one. Memo paragraph two.")
         self.assertEqual((by["notes.txt"]["words"], by["notes.txt"]["model"],
-                          by["notes.txt"]["cut"], by["notes.txt"]["sensitivity"]),
-                         (3, FP, 1024, "green"))
+                          by["notes.txt"]["cut"], by["notes.txt"]["sensitivity"],
+                          by["notes.txt"]["split"]),
+                         (3, FP, 1024, "green", "150/30"))
+        self.assertEqual(s["split"], "150/30")
         self.assertEqual(len(by["notes.txt"]["checksum"]), 64)
         self.assertAlmostEqual(by["notes.txt"]["embedding"][1], 0.5, places=3)
         # What went to the platform: the dataset's own text (embeddings.parquet)
@@ -427,9 +479,10 @@ class TestPassages(PassagesBase):
         self.assertEqual(self.written(out, "passages_finished")[0]["datasets"], 0)
 
     def test_a_file_cut_by_the_cap_is_finished_when_the_cap_is_raised(self):
-        long_text = " ".join("word%d" % i for i in range(1000)).encode()   # four passages
+        long_text = " ".join("word%d" % i for i in range(1000)).encode()   # four passages at 350/50
+        sized = dict(LLM_ENV, PROMOTER_PASSAGE_WORDS="350", PROMOTER_PASSAGE_OVERLAP="50")
         self.stage(files=[("long.txt", long_text), ("notes.txt", b"plain words here\n")])
-        capped = dict(LLM_ENV, PROMOTER_PASSAGES_MAX_PER_DATASET="2")
+        capped = dict(sized, PROMOTER_PASSAGES_MAX_PER_DATASET="2")
         self.cli(["run"], env=capped)
         self.assertEqual([r["member"] for r in self.rows()], ["long.txt", "long.txt"])
         # The same cap again: the cut file is kept as it is, not re-embedded.
@@ -439,15 +492,36 @@ class TestPassages(PassagesBase):
         self.assertEqual((s["embedded"], s["kept"], s["capped"]), (0, 2, True))
         self.assertEqual(self.sent, [])
         # The cap raised: the rest of the cut file is read, and the next file.
-        code, out = self.cli(["passages"], env=LLM_ENV)
+        code, out = self.cli(["passages"], env=sized)
         s = self.written(out)[0]
         self.assertEqual((s["passages"], s["capped"]), (5, False))
         self.assertEqual([r["member"] for r in self.rows()], ["long.txt"] * 4 + ["notes.txt"])
         # And once whole, it is kept like any other file.
         self.sent.clear()
-        code, out = self.cli(["passages"], env=LLM_ENV)
+        code, out = self.cli(["passages"], env=sized)
         self.assertEqual(self.written(out)[0]["files_kept"], 2)
         self.assertEqual(self.sent, [])
+
+    def test_the_passage_size_is_a_setting(self):
+        cfg = PromoterConfig.from_env(dict(self.ENV, **LLM_ENV))
+        self.assertEqual((cfg.passage_words, cfg.passage_overlap), (150, 30))
+        sized = dict(LLM_ENV, PROMOTER_PASSAGE_WORDS="40", PROMOTER_PASSAGE_OVERLAP="10")
+        cfg = PromoterConfig.from_env(dict(self.ENV, **sized))
+        self.assertEqual((cfg.passage_words, cfg.passage_overlap), (40, 10))
+        for bad in ({"PROMOTER_PASSAGE_OVERLAP": "150"}, {"PROMOTER_PASSAGE_OVERLAP": "-1"},
+                    {"PROMOTER_PASSAGE_WORDS": "5"}):
+            with self.assertRaises(ConfigError) as cm:
+                PromoterConfig.from_env(dict(self.ENV, **LLM_ENV, **bad))
+            self.assertIn(list(bad)[0], str(cm.exception))
+        # The run splits at the configured size and the rows say so.
+        text = " ".join("word%d" % i for i in range(100)).encode()
+        self.stage(files=[("long.txt", text)])
+        code, out = self.cli(["run"], env=sized)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.written(out)[0]["split"], "40/10")
+        rows = self.rows()
+        self.assertEqual([(r["words"], r["split"]) for r in rows], [(40, "40/10")] * 3)
+        self.assertEqual(rows[1]["text"].split()[0], "word30")
 
     def test_passages_no_longer_permitted_are_removed(self):
         self.stage(files=self.files)

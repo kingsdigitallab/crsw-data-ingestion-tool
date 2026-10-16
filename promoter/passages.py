@@ -32,13 +32,23 @@ except ImportError:                      # pragma: no cover
 
 log = logging.getLogger("promoter.passages")
 
-PASSAGE_WORDS = 350      # about a page of a transcript
-OVERLAP_WORDS = 50       # so a sentence cut at a boundary is whole in one of them
+# A passage is about a paragraph: one clause of a treaty, one answer in
+# a transcript. 350 words (until 16 October 2026) mixed five practices
+# into one vector and a question about one of them could not win; the
+# probe in docs/web-deposit/passage-length-handoff.md chose 150. Each
+# passage starts OVERLAP_WORDS before the last ended, so a sentence cut
+# at a boundary is whole in one of them. PROMOTER_PASSAGE_WORDS and
+# PROMOTER_PASSAGE_OVERLAP override; every row records the layout it was
+# cut under (`split`, "150/30"), and a file whose rows say another is
+# read and split again on the next run.
+PASSAGE_WORDS = 150
+OVERLAP_WORDS = 30
 TEXT_TYPES = (".txt", ".md", ".markdown", ".text", ".rst")
 PDF_TYPE = ".pdf"
 WORD_TYPE = ".docx"
 COLUMNS = ("identifier", "dataset_uuid", "sensitivity", "member", "checksum", "page",
-           "position", "words", "text", "model", "cut", "dimension", "partial", "embedding")
+           "position", "words", "text", "model", "cut", "dimension", "partial", "split",
+           "embedding")
 
 Page = Tuple[Optional[int], str]      # (page number from 1, or None; its text)
 # A file that was read and had no text (an image-only PDF) leaves one row
@@ -155,6 +165,7 @@ class Summary:
     dropped: int = 0             # passages of members no longer in the record
     capped: bool = False         # the per-dataset passage cap stopped the walk
     dimension: Optional[int] = None
+    split: Optional[str] = None  # the layout the rows were cut under, "words/overlap"
     key: Optional[str] = None
 
     def as_dict(self) -> Dict:
@@ -163,12 +174,15 @@ class Summary:
 
 def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
           existing: Sequence[Dict], platform, model: str, dims: Optional[int],
-          max_file_bytes: int, max_passages: int) -> Tuple[List[Dict], Summary]:
+          max_file_bytes: int, max_passages: int, words: int = PASSAGE_WORDS,
+          overlap: int = OVERLAP_WORDS) -> Tuple[List[Dict], Summary]:
     """Rows for the dataset's passages file and a summary. `fetch(member)`
     returns a member's bytes; it is called only for files that changed
     (or whose vectors were made by another `model`: the resolved
-    fingerprint of the embed alias, as in embed.py)."""
-    s = Summary(identifier=identifier)
+    fingerprint of the embed alias, as in embed.py; or whose rows were
+    cut under another `words`/`overlap` layout)."""
+    split = "%d/%d" % (words, overlap)
+    s = Summary(identifier=identifier, split=split)
     by_member: Dict[str, List[Dict]] = {}
     for r in existing:
         by_member.setdefault(r.get("member") or "", []).append(r)
@@ -180,7 +194,8 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
     carried: Set[str] = set()   # members whose rows are in the new file
     n = 0                     # passages so far, against the cap
     base = {"identifier": identifier, "dataset_uuid": rec.get("dataset_uuid"),
-            "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0}
+            "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0,
+            "split": split}
     for entry in entries:
         member, checksum = entry["path"], entry.get("checksum_sha256")
         reached.add(member)
@@ -198,7 +213,8 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             break
         old = by_member.get(member) or []
         same = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
-                                 and (o.get("cut") or 0) == (dims or 0) for o in old)
+                                 and (o.get("cut") or 0) == (dims or 0)
+                                 and o.get("split") == split for o in old)
         old_text = sorted((o for o in old if o.get("position") != NO_TEXT),
                           key=lambda o: o.get("position") or 0)
         complete = same and all(o.get("embedding") for o in old_text)
@@ -221,7 +237,9 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
                 break
             continue
         # A passage whose text was embedded before, with this model and
-        # cut, keeps its vector: a file that grew re-embeds only what is new.
+        # cut, keeps its vector: a file that grew re-embeds only what is
+        # new, and a layout change re-embeds only passages that differ
+        # (the layout does not enter the vector, the text does).
         reuse = {o["text"]: o for o in old_text
                  if o.get("embedding") and o.get("text") and o.get("model") == model
                  and (o.get("cut") or 0) == (dims or 0)}
@@ -231,7 +249,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
             continue
         s.files_read += 1
         carried.add(member)
-        pieces = chunk(pages)
+        pieces = chunk(pages, words, overlap)
         if not pieces:
             rows.append(dict(base, member=member, checksum=checksum, page=None,
                              position=NO_TEXT, words=0, text=None, dimension=None,
@@ -306,7 +324,7 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
         pa.field("position", pa.int64()), pa.field("words", pa.int64()),
         pa.field("text", pa.string()), pa.field("model", pa.string()),
         pa.field("cut", pa.int64()), pa.field("dimension", pa.int64()),
-        pa.field("partial", pa.bool_()),
+        pa.field("partial", pa.bool_()), pa.field("split", pa.string()),
     ])
     table = pa.Table.from_pylist([{c: r.get(c) for c in COLUMNS if c != "embedding"}
                                   for r in rows], schema=schema)
@@ -321,7 +339,8 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
 
 def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platform,
             model: str, dims: Optional[int], max_file_bytes: int,
-            max_passages: int) -> Summary:
+            max_passages: int, words: int = PASSAGE_WORDS,
+            overlap: int = OVERLAP_WORDS) -> Summary:
     """Read the previous file, re-read and embed what changed, write the
     new file (or remove it when the dataset has no text). Members are
     fetched from the store with the promoter's own client."""
@@ -335,7 +354,7 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
 
     existing = read_existing(client, bucket, key)
     rows, s = build(identifier, rec, fetch, existing, platform, model, dims,
-                    max_file_bytes, max_passages)
+                    max_file_bytes, max_passages, words, overlap)
     if rows:
         client.put_object(Bucket=bucket, Key=key, Body=parquet_bytes(rows),
                           ContentType="application/vnd.apache.parquet")

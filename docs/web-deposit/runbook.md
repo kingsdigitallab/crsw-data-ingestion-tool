@@ -290,8 +290,12 @@ the same line and exits 1.
 `PROMOTER_PASSAGES=1` as well, a promotion also reads each promoted
 dataset's text-bearing files (plain text, Markdown, the text layer of
 PDFs, Word; never tables or images), splits them into passages of about
-350 words, embeds those and writes `index/passages/<identifier>.parquet`
-(one row per passage: file, page, position, the text, the vector). Only
+150 words, each starting 30 words before the last ended
+(`PROMOTER_PASSAGE_WORDS`, `PROMOTER_PASSAGE_OVERLAP`; 350 until 16
+October 2026), embeds those and writes `index/passages/<identifier>.parquet`
+(one row per passage: file, page, position, the text, the layout it was
+cut under, the vector; a changed layout re-splits and re-embeds the file
+on the next run). Only
 datasets of the sensitivities in `PROMOTER_LLM_SENSITIVITIES` are read,
 never one under `PROMOTER_PASSAGES_EXCLUDE`, a file over
 `PROMOTER_PASSAGES_MAX_FILE_BYTES` is skipped and the walk stops at

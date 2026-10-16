@@ -11,6 +11,11 @@ the promoter stores vectors. Stdlib only. Diagnostic, not part of the tool:
 
     python scripts/embed_probe.py              # every embedding alias found
     python scripts/embed_probe.py arc:embedvl  # just one
+    python scripts/embed_probe.py arc:embed --split 150/30   # also split the passage
+                                               # into pieces of 150 words, each starting
+                                               # 30 before the last ended, and score the
+                                               # queries against every piece (the
+                                               # passage-length question, 16 Oct 2026)
 """
 import json, math, sys, urllib.request, urllib.error
 from pathlib import Path
@@ -107,18 +112,58 @@ def cos(a, b):
     return num / na / nb
 
 
+def split_words(text, words, overlap):
+    """The promoter's rule (promoter/passages.py chunk): pieces of `words`
+    words, each starting `overlap` words before the previous one ended."""
+    ws = text.split()
+    step = max(1, words - overlap)
+    out, start = [], 0
+    while start < len(ws):
+        out.append(" ".join(ws[start:start + words]))
+        if start + words >= len(ws):
+            break
+        start += step
+    return out
+
+
+def split_table(base, key, alias, words, overlap):
+    """Score every query against each piece of PASSAGE, bare and in the
+    live (qwen3) form, so the right size can be chosen before a re-embed."""
+    pieces = split_words(PASSAGE, words, overlap)
+    print("  split %d/%d: %d pieces" % (words, overlap, len(pieces)))
+    for i, piece in enumerate(pieces):
+        print("    piece %d (%d words): %s ..." % (i, len(piece.split()), " ".join(piece.split()[:9])))
+    for name, qf, pf in PREFIXES[:2]:
+        vecs = embed(base, key, alias, [pf.format(p=p) for p in pieces]
+                     + [qf.format(q=q) for _, q in QUERIES])
+        pv, qs = vecs[:len(pieces)], vecs[len(pieces):]
+        print("  %-12s %-30s %s" % (name, "query", " ".join("piece%d" % i for i in range(len(pieces)))))
+        for (label, _), qv in zip(QUERIES, qs):
+            print("  %-12s %-30s %s" % (name, label,
+                                        " ".join("%6.3f" % cos(qv[:CUT], p[:CUT]) for p in pv)))
+        print()
+
+
 def main():
     env = env_file(ROOT / ".env.promoter")
     base, key = env.get("PROMOTER_LLM_BASE_URL"), env.get("PROMOTER_LLM_API_KEY")
     if not base or not key:
         sys.exit("PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY not found in .env.promoter")
 
+    args = sys.argv[1:]
+    split = None
+    if "--split" in args:
+        i = args.index("--split")
+        w, o = args[i + 1].split("/")
+        split = (int(w), int(o))
+        del args[i:i + 2]
+
     models = call(base, key, "/models").get("data", [])
     print("models on the platform:")
     for m in models:
         extra = {k: m[k] for k in m if k not in ("id", "object", "created", "owned_by")}
         print("  %-20s %s" % (m.get("id"), json.dumps(extra) if extra else ""))
-    wanted = sys.argv[1:] or [m["id"] for m in models if "embed" in str(m.get("id", "")).lower()]
+    wanted = args or [m["id"] for m in models if "embed" in str(m.get("id", "")).lower()]
     if not wanted:
         sys.exit("no embedding alias found; pass one on the command line")
 
@@ -145,6 +190,8 @@ def main():
                     name, label, cos(qv, right), cos(qv[:CUT], right[:CUT]),
                     cos(qv, wrong), cos(qv[:CUT], wrong[:CUT])))
             print()
+        if split:
+            split_table(base, key, alias, *split)
 
 
 if __name__ == "__main__":

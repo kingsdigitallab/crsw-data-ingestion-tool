@@ -330,6 +330,23 @@ lists will govern file contents when section 7 is built.
 
 ## 7. Searching inside documents
 
+*16 October 2026, later, passage length:* with the instruction on, the
+Convention clause still trailed a short marriage passage, second on its
+own sentence (0.355 against 0.454) and seventh on the paraphrase (0.270
+against 0.307), because it was one practice of five in a 350-word
+passage. The probe's split mode scored the same queries against pieces of
+that passage before any re-embed: at 150 words with a 30-word overlap the
+right piece scores 0.542 and 0.401, above the competitor, which is short
+already and will hardly move; 100 words barely helps and triples the
+rows, 200 is not enough. So passages are now 150 words, each starting 30
+before the last ended (`PROMOTER_PASSAGE_WORDS`, `PROMOTER_PASSAGE_OVERLAP`),
+every row records the layout it was cut under, and a file whose rows say
+another is read and split again on the next run, so the change is one
+`promoter passages` sweep that re-embeds nearly everything (identical
+short texts keep their vector). The web is untouched; it reads whatever
+the files hold (`docs/web-deposit/passage-length-handoff.md`, result
+recorded there once measured).
+
 *16 October 2026, the embedding model and the question's instruction:*
 search inside content could not find a passage from one of its own
 sentences. The probe (`scripts/embed_probe_2026-10-16.txt`) showed why:
@@ -372,7 +389,8 @@ can be switched off.
 
 - A. Passages embedded at ingest, searched on the VM. After promotion the
   promoter reads each text-bearing file (plain text, Markdown, PDF, Word),
-  splits the text into passages of about 350 words, embeds them, and writes
+  splits the text into passages of about 150 words (350 until 16 October
+  2026), embeds them, and writes
   `passages.parquet` beside the dataset's record: file path, position, a
   short excerpt and the vector. Incremental by file checksum, which the record
   already holds, so a re-deposit only touches changed files. The web service
@@ -422,8 +440,9 @@ VM, is a cache like the dataset index: rebuildable from the files with one
 promoter command, never the truth.
 
 *For the builder (built 26 September, both sides):* `promoter/passages.py` reads plain text, Markdown, PDF
-(text layer, `pypdf`) and Word (`python-docx`), splits into passages of 350
-words with a 50-word overlap and the page each starts on, embeds them and
+(text layer, `pypdf`) and Word (`python-docx`), splits into passages of 150
+words with a 30-word overlap (350/50 until 16 October 2026; each row says
+which, in `split`) and the page each starts on, embeds them and
 writes `index/passages/<identifier>.parquet`. One departure from the choice
 above: the file sits under the index prefix, not beside the record, so a
 dataset prefix holds only what its depositor put there and the web VM's

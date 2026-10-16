@@ -54,6 +54,12 @@ class PromoterConfig:
     passages_max_file_bytes: int = 50 * 1024 * 1024
     passages_max_per_dataset: int = 20000
     passages_exclude: Tuple[str, ...] = ()
+    # How a file is cut: passages of this many words, each starting this
+    # many before the last ended (promoter/passages.py says why 150/30).
+    # Changing either re-splits and re-embeds every file on the next
+    # `promoter passages`, since each row records the layout it was cut under.
+    passage_words: int = 150
+    passage_overlap: int = 30
 
     @property
     def llm_enabled(self) -> bool:
@@ -115,6 +121,16 @@ class PromoterConfig:
         dims = opt_int("LLM_EMBED_DIMS")
         max_file = opt_int("PASSAGES_MAX_FILE_BYTES")
         max_passages = opt_int("PASSAGES_MAX_PER_DATASET")
+        words = opt_int("PASSAGE_WORDS")
+        words = cls.passage_words if words is None else words
+        overlap = opt_int("PASSAGE_OVERLAP")
+        overlap = cls.passage_overlap if overlap is None else overlap
+        if words < 20:
+            raise ConfigError("%sPASSAGE_WORDS must be at least 20 (got %d)"
+                              % (ENV_PREFIX, words))
+        if overlap < 0 or overlap >= words:
+            raise ConfigError("%sPASSAGE_OVERLAP must be between 0 and %sPASSAGE_WORDS - 1 "
+                              "(got %d with %d words)" % (ENV_PREFIX, ENV_PREFIX, overlap, words))
         return cls(
             s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
             s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
@@ -139,6 +155,8 @@ class PromoterConfig:
             passages_exclude=tuple(
                 p.strip().strip("/") for p in
                 (env.get(ENV_PREFIX + "PASSAGES_EXCLUDE") or "").split(",") if p.strip()),
+            passage_words=words,
+            passage_overlap=overlap,
         )
 
     def user_may_deposit_to(self, user: str, strand: str) -> bool:

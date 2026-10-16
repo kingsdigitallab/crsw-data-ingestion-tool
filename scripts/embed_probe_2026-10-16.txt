@@ -99,3 +99,60 @@ backend names and prices); the two embedding aliases are arc:embed
   pos37 0.275, Convention p1 0.270 (#7), scgb p10 (widowed women pressured
   into marrying another man) 0.269 (#8); first spec file #10, folded as weak.
   Decision: reranker left off on the web VM. Passage length is the next lever.
+
+==== passage length, 16 October 2026: the same passage split before any re-embed
+  python scripts/embed_probe.py arc:embed --split W/O (pieces of W words, each
+  starting O words before the last ended, the promoter's rule). Scores at 1024.
+  Whole passage (348 words), qwen3 form, from the table above: verbatim 0.355,
+  paraphrase 0.267, control 0.120. The live competitor (Nepal p13, ~120 words)
+  scored 0.454 and 0.307 on the web VM, and being short it will hardly move.
+
+  split 200/40: 2 pieces
+    piece 0 (200 words): institutions and practices, where they still exist and whether ...
+    piece 1 (188 words): practice whereby: (i) A woman, without the right to ...
+  bare         query                          piece0 piece1
+  bare         own text (first 450 chars)      0.930  0.508
+  bare         verbatim sentence               0.380  0.515
+  bare         paraphrase, no shared words     0.268  0.367
+  bare         control, matches nothing        0.241  0.213
+
+  qwen3        query                          piece0 piece1
+  qwen3        own text (first 450 chars)      0.919  0.472
+  qwen3        verbatim sentence               0.322  0.444
+  qwen3        paraphrase, no shared words     0.235  0.354
+  qwen3        control, matches nothing        0.150  0.057
+
+  split 150/30: 3 pieces
+    piece 0 (150 words): institutions and practices, where they still exist and whether ...
+    piece 1 (150 words): or agreement bound to live and labour on land ...
+    piece 2 (108 words): person; (d) Any institution or practice whereby a child ...
+  bare         query                          piece0 piece1 piece2
+  bare         own text (first 450 chars)      0.963  0.517  0.453
+  bare         verbatim sentence               0.344  0.569  0.393
+  bare         paraphrase, no shared words     0.269  0.391  0.305
+  bare         control, matches nothing        0.266  0.214  0.232
+
+  qwen3        query                          piece0 piece1 piece2
+  qwen3        own text (first 450 chars)      0.939  0.496  0.402
+  qwen3        verbatim sentence               0.261  0.542  0.270
+  qwen3        paraphrase, no shared words     0.194  0.401  0.241
+  qwen3        control, matches nothing        0.163  0.079  0.060
+
+  split 100/20: 5 pieces
+    piece 0 (100 words): institutions and practices, where they still exist and whether ...
+    piece 1 (100 words): not applied towards the liquidation of the debt or ...
+    piece 2 (100 words): practice whereby: (i) A woman, without the right to ...
+    piece 3 (100 words): person; (d) Any institution or practice whereby a child ...
+    piece 4 (28 words): Parties undertake to prescribe, where appropriate, suitable minimum ages ...
+  bare         query                          piece0 piece1 piece2 piece3 piece4
+  bare         own text (first 450 chars)      0.996  0.619  0.479  0.454  0.276
+  bare         verbatim sentence               0.353  0.447  0.605  0.378  0.347
+  bare         paraphrase, no shared words     0.277  0.360  0.458  0.288  0.300
+  bare         control, matches nothing        0.264  0.294  0.235  0.218  0.242
+
+  qwen3        query                          piece0 piece1 piece2 piece3 piece4
+  qwen3        own text (first 450 chars)      0.972  0.580  0.438  0.408  0.211
+  qwen3        verbatim sentence               0.259  0.359  0.511  0.266  0.199
+  qwen3        paraphrase, no shared words     0.189  0.299  0.418  0.235  0.201
+  qwen3        control, matches nothing        0.143  0.154  0.047  0.057  0.048
+
