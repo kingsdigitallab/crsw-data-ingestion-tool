@@ -88,3 +88,9 @@ paraphrase still misses the top 5. The right passage is one clause of five
 in 350 words; its competitor is a 120-word tail about one thing. That is
 the passage-length lever. Pending: the paraphrase in the default order, to
 see whether the reranker lifts it before a re-embed is decided.
+
+Reranker check, same day: in the default order the reranker placed the
+Convention passage 18th of 20 and four spec files above it, and its top three
+are all passages the embedding scored weak, so the page folds them. The
+reranker does not rescue the paraphrase; it hurts it. Two follow-ups: a trial
+with `CRSW_LLM_RERANK_MODEL` blank (env only), and the passage-length handoff.

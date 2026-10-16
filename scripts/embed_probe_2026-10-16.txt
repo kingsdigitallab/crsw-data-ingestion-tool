@@ -80,3 +80,15 @@ backend names and prices); the two embedding aliases are arc:embed
   clause of five cannot outscore it. Evidence for the passage-length lever.
   Next check: the paraphrase in the default order, where the reranker reads
   the top 20; if it lifts the Convention passage, length can wait.
+
+  paraphrase, default order (reranker on, 20 results), same day:
+    Convention p1 (embed 0.270) placed 18 of 20 by the reranker; ICC policy p29
+    absent; the embedding's best (Nepal p13, 0.307) placed 13; four deposit-tool
+    spec files (0.227-0.252) placed 9-12 and 17; the reranker's top three are
+    all weak by the embedding, so the page folds them. The two passages a
+    reader would want (scgb p10 "upon being widowed ... pressured into marrying
+    another man", scgb p17 widows required to remarry) placed 8 and 20.
+  Reading: arc:rerankvl (Qwen3-VL-Reranker-2B) ranks text as flatly as its
+  embedding sibling did; in meaning order the Convention would be about 7th.
+  No text-only reranker alias on the platform. Next: trial with the reranker
+  off (blank CRSW_LLM_RERANK_MODEL, restart deposit-web), then passage length.
