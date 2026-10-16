@@ -399,6 +399,7 @@ class TestMissingRows(unittest.TestCase):
         self.assertEqual(embed_mod.missing_rows([], existing), [])
 
 
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestTextFor(unittest.TestCase):
     def test_only_the_listed_fields(self):
         row = {"dataset": "csac-clean", "abstract": "  An extract.  ", "subject": ["a", "b"],
