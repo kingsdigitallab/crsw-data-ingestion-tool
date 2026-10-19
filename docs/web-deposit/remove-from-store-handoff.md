@@ -231,3 +231,12 @@ now); the example env files, CLAUDE.md and the integration test's
 docstring call `staging/_test` the laptop-era prefix. When the grant
 lands, the six-identifier `remove` line is the retry and writes the
 `dataset_removed` lines the trail is missing.
+
+Counts after the rebuild on the internal VM (19 October, afternoon):
+`index_written` datasets 1; `embeddings_written` embedded 0, kept 1,
+dropped 6; `passages_written` for the sample 512 passages (5 files, all
+kept, nothing re-embedded); four `passages_removed` (test-dataset,
+datasettest, testingagain, specifications; the other two never had a
+file); `passages_finished` failed 0. 512 of the 748 passages of the
+morning were the sample's; the 236 that went were this repo's spec
+files and the other test content. `datasets` lists one row.

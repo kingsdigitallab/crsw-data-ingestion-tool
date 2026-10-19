@@ -511,8 +511,9 @@ on the VM is quick, the time is in the KCL proxy.
 
 **How passage search grows.** A search on the live corpus takes about
 four seconds (15 October 2026, six datasets, about a hundred passages;
-748 passages since the 150-word split of 19 October 2026, the scan still
-far below a millisecond),
+748 passages since the 150-word split of 19 October 2026, 512 once the
+six test datasets left the same day, the scan still far below a
+millisecond),
 and nearly all of it is the two platform calls: embedding the question
 and reranking the top `SEARCH_TOP` (20) passages. Neither grows with the
 corpus. The question is embedded with `CRSW_LLM_QUERY_INSTRUCTION` in
