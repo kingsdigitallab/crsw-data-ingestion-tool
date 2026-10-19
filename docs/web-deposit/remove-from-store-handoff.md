@@ -240,3 +240,6 @@ datasettest, testingagain, specifications; the other two never had a
 file); `passages_finished` failed 0. 512 of the 748 passages of the
 morning were the sample's; the 236 that went were this repo's spec
 files and the other test content. `datasets` lists one row.
+
+The web VM, on the staging prefix and the v0.13.0 image, agrees:
+`/search.json?q=` stats passages 512, datasets 1, files 5, current 512.
