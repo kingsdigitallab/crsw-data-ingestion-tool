@@ -572,20 +572,26 @@ shown only on a words match, since a vector cannot tell "test data"
 from anything. The question's own words are bold wherever they appear.
 An "Order" switch has two settings: "Exact matching text" (the default,
 the order above) and "By close meaning", which puts everything in order
-of similarity with no reranker; the two coincide whenever no passage
-contains the words typed. A "Why this?"
+of similarity with no reranker and changes the fold rule below; the two
+orders coincide whenever no passage contains the words typed. A "Why this?"
 link on each result asks the chat model, on the click and not before,
 for one sentence on what connects the passage to the question; the page
 calls it "the model's reading", since a vector match has no reasoning
 to show, and it is offered only for passages of the sensitivities in
 `CRSW_LLM_SENSITIVITIES`. Results found by meaning alone are folded under
-"N more passages, close in meaning only" whenever a words match exists, or
-when they fall more than `CRSW_SEARCH_WEAK_BAND` (0.10) below the best of
-them, or below `CRSW_SEARCH_WEAK_FLOOR` (0.35) at all: the band keeps a
-good best's neighbours, the floor stops a question the corpus has nothing
-for from showing noise as strong (chosen 19 October 2026 on the grown
-sample, `docs/web-deposit/weak-band-handoff.md`; both numbers belong to
-the embedding model in use). Nothing is dropped. With no strong result at
+"N more passages, close in meaning only". Under "Exact matching text"
+that is whenever a words match exists, or when they fall more than
+`CRSW_SEARCH_WEAK_BAND` (0.10) below the best of them, or below
+`CRSW_SEARCH_WEAK_FLOOR` (0.35) at all: the band keeps a good best's
+neighbours, the floor stops a question the corpus has nothing for from
+showing noise as strong (chosen 19 October 2026 on the grown sample,
+`docs/web-deposit/weak-band-handoff.md`; both numbers belong to the
+embedding model in use). Under "By close meaning" the list is one list,
+so the band and floor alone decide, measured from its top whatever found
+it, and a words match is never folded (since v0.15.2: a passage that
+contains the words nearly verbatim is also the closest in meaning, and
+the words rule had been folding its neighbours under the order chosen to
+show them). Nothing is dropped. With no strong result at
 all the page says "Nothing contains your words, and nothing is close in
 meaning" and folds everything under "N passages, the closest in meaning"
 (since v0.15.1; the list was shown open before). The fold cannot grow

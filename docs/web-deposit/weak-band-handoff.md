@@ -61,6 +61,15 @@ page now folds too, under "N passages, the closest in meaning", with the
 notice "Nothing contains your words, and nothing is close in meaning."
 The order radios read "Exact matching text" and "By close meaning".
 
+Later the same evening (v0.15.2): under "By close meaning" with
+`Intelligence Report, UGA-OTP-0017-0108`, the citation passages that
+contain the words led on similarity (0.798, 0.776) and the first
+meaning-only passages (0.56, 0.552) were folded by the words rule, under
+the very order chosen to show them. Under "By close meaning" the fold is
+now the band and floor alone, measured from the top of the one list
+(those two still fold, 0.24 below), and a words match is never weak.
+"Exact matching text" keeps every rule above.
+
 Why 0.10 rather than a proportion of the best: at 0.494 the two give
 the same cut (80% = 0.395), and a fixed width is easier to say and to
 set. Why 0.35: above both controls seen (0.325 on 16 October against

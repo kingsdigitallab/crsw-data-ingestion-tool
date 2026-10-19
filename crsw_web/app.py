@@ -450,14 +450,19 @@ def create_app(settings: Optional[Settings] = None,
                     i += n
                 out["steps"].append("highlight")
         # A meaning-only result is strong when it is within the band of
-        # the best meaning score and at least the floor (both settings;
+        # the best and at least the floor (both settings;
         # weak-band-handoff.md): the band keeps a good best's neighbours,
         # the floor stops a poor best, as on a query the corpus has
         # nothing for, from showing noise as strong. Weak results are
-        # folded on the page, never dropped. With word matches present,
-        # every meaning-only result is weak by comparison.
-        has_words = any(h["why"] != "meaning" for h in results)
-        best = max((float(h["score"]) for h in results if h["why"] == "meaning"), default=0.0)
+        # folded on the page, never dropped. Words first: the best is the
+        # best meaning score, and with word matches present every
+        # meaning-only result is weak by comparison. By meaning: one list
+        # by similarity, so the best is its top whatever found it, the
+        # band and floor alone decide, and a word match is never weak.
+        by_meaning = sort == "meaning"
+        has_words = not by_meaning and any(h["why"] != "meaning" for h in results)
+        best = max((float(h["score"]) for h in results
+                    if by_meaning or h["why"] == "meaning"), default=0.0)
         cut = max(best - settings.search_weak_band, settings.search_weak_floor)
         for h in results:
             h["weak"] = h["why"] == "meaning" and (has_words or float(h["score"]) < cut)

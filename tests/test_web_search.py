@@ -681,8 +681,24 @@ class TestSearchPage(SearchBase):
         body = self.hits(narrow, "zzzz")
         self.assertEqual([h["weak"] for h in body["passages"]],
                          [s < best for s in scores])
-        # Same rule under sort=meaning.
+        # Under sort=meaning the list is one list by similarity, so the
+        # fold is the band and floor alone, measured from the top of that
+        # list; a word match is never weak and no longer folds the rest.
         body = self.hits(c, "populate automatically where possible", sort="meaning")
+        self.assertIn("phrase", [h["why"] for h in body["passages"]])
+        top = max(h["score"] for h in body["passages"])
+        self.assertEqual([h["weak"] for h in body["passages"]],
+                         [h["why"] == "meaning" and (h["score"] < top - 0.10 or h["score"] < 0.35)
+                          for h in body["passages"]])
+        body = self.hits(wide, "populate automatically where possible", sort="meaning")
+        self.assertIn("phrase", [h["why"] for h in body["passages"]])
+        self.assertFalse(any(h["weak"] for h in body["passages"]))
+        html = wide.get("/search", params={"q": "populate automatically where possible",
+                                           "sort": "meaning"}).text
+        self.assertNotIn("<details", html)
+        self.assertNotIn("Nothing contains your words", html)
+        # Under the default order the words rule stands whatever the band.
+        body = self.hits(wide, "populate automatically where possible")
         self.assertTrue(all(h["weak"] for h in body["passages"] if h["why"] == "meaning"))
 
     def test_sort_by_meaning_alone(self):
