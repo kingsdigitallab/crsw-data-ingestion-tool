@@ -80,9 +80,9 @@ def list_versions(client, bucket: str, prefix: str) -> Listing:
 def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Target:
     """Is this a dataset in place, and what is under it? Refuses at the
     first problem, making no further request: a malformed identifier
-    before any request at all, then no record, a record that does not
-    parse, or one whose identifier disagrees with its location (the
-    typo guard). `index_rows` (promoter/index.py rows) give the count of
+    before any request at all, then no record (current or hidden under
+    a delete marker), a record that does not parse, or one whose
+    identifier disagrees with its location (the typo guard). `index_rows` (promoter/index.py rows) give the count of
     datasets whose derived_from names this one; they are not rewritten."""
     t = Target(prefix=identifier + "/", last_key="")
     if not keys.dataset_prefix_ok(identifier):
@@ -90,11 +90,25 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
                           "(strand/project/sensitivity/state/dataset)")
         return t
     t.last_key = identifier + "/" + keys.record_filename(identifier.rsplit("/", 1)[1])
+    t.listing = list_versions(client, bucket, t.prefix)
     text, err = read_json_object(client, bucket, t.last_key)
+    hidden = False
     if err == "absent":
-        t.problems.append("no record in place at %s" % t.last_key)
-        return t
-    if err:
+        # Deleted by hand on the versioned bucket: a marker on top, the
+        # record's versions beneath. The newest still says what the
+        # prefix is (S3 lists a key's versions newest first).
+        vid = next((v for k, v in t.listing.versions if k == t.last_key), None)
+        if vid is None:
+            t.problems.append("no record in place at %s" % t.last_key)
+            return t
+        try:
+            text = client.get_object(Bucket=bucket, Key=t.last_key, VersionId=vid
+                                     )["Body"].read().decode("utf-8")
+        except Exception as e:
+            t.problems.append("record version %s could not be read: %s" % (vid, e))
+            return t
+        hidden = True
+    elif err:
         t.problems.append("record could not be read: %s" % err)
         return t
     try:
@@ -106,12 +120,11 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
         t.problems.append("record identifier %r does not match its location %r"
                           % (rec.get("identifier"), identifier))
         return t
-    t.listing = list_versions(client, bucket, t.prefix)
     referrers = sum(1 for r in index_rows
                     if identifier in (r.get("derived_from_identifiers") or []))
     t.detail = {"dataset_uuid": rec.get("dataset_uuid"), "created": rec.get("created"),
                 "depositors": list(rec.get("depositors") or []),
-                "referenced_by": referrers}
+                "referenced_by": referrers, "record_hidden": hidden}
     t.detail.update(t.listing.counts())
     return t
 

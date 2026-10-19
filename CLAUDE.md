@@ -82,7 +82,7 @@ python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merg
 - **Ceph specifics everywhere.** Endpoint `rgw.ceph.er.kcl.ac.uk`, path-style addressing on every client.
 - **Containerised from Phase 1.** One compose file: `deposit-web` + nginx sidecar, promoter added in Phase 4. Deploy from the image, not a checkout. Docker by default; Podman if eResearch prefer.
 - **Config by environment.** Same image for KCL-only and pilot phases. See `.env.example`.
-- **Local end-to-end first.** Phase 2 and 3 checkpoints run on the developer's laptop over the VPN against `crsw/staging/_test/`. VM deployment waits for OpenStack access.
+- **Local end-to-end first.** Phase 2 and 3 checkpoints run on the developer's laptop over the VPN against `crsw/staging/` (`staging/_test/` until 19 October 2026; both VMs and the promoter use `staging` since). VM deployment waits for OpenStack access.
 
 ### API shape (Phase 2)
 

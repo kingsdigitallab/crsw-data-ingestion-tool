@@ -244,7 +244,14 @@ each; a `--confirm` that does not match refuses the whole run before
 any request. There is no `--all`, `--strand` or wildcard. A prefix
 with no record, or whose record names another location, is refused
 ("not a dataset record in place"): that is what stops a typo removing
-a real dataset's files. The current `PROMOTER_AUTHORISED` policy
+a real dataset's files. A dataset someone deleted by hand through a
+mount is hidden, not gone (the bucket is versioned: a plain delete
+writes a marker on each key and every version stays); its record's
+newest version still identifies it, so the command takes it, with
+`record_hidden: true` in the plan, and removes the versions too.
+Removing versions needs `s3:DeleteObjectVersion` on the key; without
+it every dataset comes back `remove_failed` with AccessDenied and
+nothing changes (seen 19 October 2026; requested from eResearch). The current `PROMOTER_AUTHORISED` policy
 applies in reverse (`--by`, default your login, must be allowed to
 deposit to that strand).
 

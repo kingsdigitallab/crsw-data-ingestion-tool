@@ -215,3 +215,19 @@ the trail. Asked eResearch for `s3:DeleteObject` and
 `s3:DeleteObjectVersion` on `crsw/rs1/*` … `rs4/*` (and the versioned
 delete on `staging/*`) for the promoter's key; the same line is the
 retry.
+
+The same afternoon, with the grant pending, the six test datasets and
+both `staging/_test` deposits were deleted by hand through the rclone
+mount with the k1078591 key: plain deletes, so a marker on every key
+and every version still in the bucket (38 entries under rs1/, 62 under
+rs2/, 51 under staging/_test/). The store looks clean to every reader
+once the derived layers are rebuilt (`$P index --embed`, `$P passages`
+on the internal VM; counts below). So that the proper purge can follow,
+`inspect` now reads the newest version of a record hidden under a
+delete marker and says `record_hidden: true`; a prefix that never had a
+record is still refused. Both VMs move to `PROMOTER_STAGING_PREFIX` /
+`CRSW_STAGING_PREFIX=staging` the same day (the section above, acted on
+now); the example env files, CLAUDE.md and the integration test's
+docstring call `staging/_test` the laptop-era prefix. When the grant
+lands, the six-identifier `remove` line is the retry and writes the
+`dataset_removed` lines the trail is missing.

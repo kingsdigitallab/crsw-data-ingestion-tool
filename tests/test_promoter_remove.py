@@ -308,6 +308,57 @@ class TestRemove(RemoveBase):
         self.assertEqual((fin["removed"], fin["refused_or_failed"]), (1, 1))
 
 
+class TestHiddenRecord(RemoveBase):
+    """A dataset deleted by hand on a versioned bucket (plain deletes, so
+    a marker on every key) is hidden, not gone. Its record's newest
+    version still says what the prefix is, so remove takes it; a prefix
+    that never had a record is still refused."""
+
+    def hide(self, prefix):
+        for key in sorted({k for k, _ in self.versions(prefix)}):
+            self.s3.delete_object(Bucket="crsw", Key=key)
+
+    def test_a_record_under_a_delete_marker_still_identifies_the_dataset(self):
+        _, body = self.place("promo", UUID_A)
+        self.place("promo-b", UUID_B)
+        self.hide(A)
+        self.assertEqual(self.s3.list_objects_v2(Bucket="crsw", Prefix=A + "/")
+                         .get("KeyCount", 0), 0)
+        code, lines = self.cli(["remove", "--dataset", A])
+        self.assertEqual(code, 0, lines)
+        [plan] = self.only(lines, "would_remove")
+        self.assertTrue(plan["record_hidden"])
+        self.assertEqual((plan["dataset_uuid"], plan["created"], plan["depositors"]),
+                         (UUID_A, CREATED, ["alice"]))
+        # 5 versions of 4 keys as before, now a marker on each of the 4
+        # keys plus gone.txt's original one.
+        self.assertEqual((plan["objects"], plan["versions"], plan["delete_markers"]),
+                         (4, 5, 5))
+        code, lines = self.cli(["remove", "--dataset", A, "--confirm", A, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "dataset_removed")
+        self.assertTrue(done["record_hidden"])
+        self.assertEqual(done["dataset_uuid"], UUID_A)
+        self.assertEqual(self.versions(A), [])
+        self.assertEqual(len(self.versions(B)), 6)
+
+    def test_a_prefix_that_never_had_a_record_is_still_refused(self):
+        c = "rs2/csac/green/0_raw/loose"
+        self.s3.put_object(Bucket="crsw", Key=c + "/one.csv", Body=b"x")
+        self.s3.delete_object(Bucket="crsw", Key=c + "/one.csv")
+        code, lines = self.cli(["remove", "--dataset", c, "--confirm", c])
+        self.assertEqual(code, 1)
+        [refused] = self.only(lines, "remove_refused")
+        self.assertIn("no record in place", refused["problems"][0])
+        self.assertEqual(len(self.versions(c)), 2)
+
+    def test_a_visible_record_is_not_marked_hidden(self):
+        self.place("promo", UUID_A)
+        code, lines = self.cli(["remove", "--dataset", A])
+        [plan] = self.only(lines, "would_remove")
+        self.assertFalse(plan["record_hidden"])
+
+
 class TestDerivedLayers(RemoveBase):
     ENV2 = dict(LLM_ENV, PROMOTER_INDEX_PREFIX="index")
 

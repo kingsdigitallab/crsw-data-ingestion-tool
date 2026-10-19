@@ -1,4 +1,5 @@
-"""End-to-end against the real Ceph cluster, under staging/_test/.
+"""End-to-end against the real Ceph cluster, under the configured staging
+prefix (staging/_test until 19 October 2026, staging since).
 
 Opt-in only: needs CRSW_INTEGRATION=1, a .env with the service key, and
 the KCL VPN. Everything it writes is deleted afterwards. Run with:
