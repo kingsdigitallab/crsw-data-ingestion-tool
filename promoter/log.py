@@ -33,7 +33,9 @@ class Log:
 
     def write(self, action: str, deposit=None, **detail) -> dict:
         entry = {"when": record.utc_now_iso(), "action": action}
-        if deposit is not None:
+        if isinstance(deposit, str):
+            entry["deposit"] = deposit       # an id alone (remove --staging)
+        elif deposit is not None:
             entry.update({"deposit": deposit.id, "user": deposit.user,
                           "prefix": deposit.prefix})
         entry.update(detail)

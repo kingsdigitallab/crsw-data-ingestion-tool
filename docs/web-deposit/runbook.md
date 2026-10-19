@@ -135,7 +135,8 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **"Ranking by meaning is off" stays after an upgrade**: nothing needs kicking off; the timer's quiet runs rewrite the embeddings by themselves, but only when the internal VM has `PROMOTER_LLM_BASE_URL`, `PROMOTER_LLM_API_KEY` and `PROMOTER_LLM_EMBED_MODEL` set *and* can reach the platform, and the notice clears only when the web VM resolves the same backend (both ask `GET /models` with their own key). On the internal VM: `grep -o '^PROMOTER_LLM_[A-Z_]*' .env.promoter` (names only, never the values; `BASE_URL` and `API_KEY` must both be there, `EMBED_MODEL` has a default), `systemctl list-timers --all | grep crsw` (the timer must show a next run), `journalctl -u crsw-promoter.service -n 60 --no-pager`, and `$P audit --action embed_model_resolved`, `--action embed_model_unresolved`, `--action embeddings_failed`. No `embed_*` line at all on a quiet run means the LLM settings are blank there, or the file is already current. `embed_model_unresolved` means `GET /models` failed from that VM (the route to `ai.create.kcl.ac.uk`, the key, or the URL); nothing is written until it resolves, and the datasets left without a row are embedded then (`embed_rows_missing`). `embeddings_failed` names the HTTP error. On the web VM, `grep -o '^CRSW_LLM_[A-Z_]*' .env` (`BASE_URL` and `API_KEY` both needed) and `docker compose -f deploy/compose.yaml logs deposit-web | grep -i "models\|fingerprint"`: the web logs nothing when the model resolves, so an empty grep with both settings present is good; a line naming a bare `arc:embedvl` means the web cannot reach the platform, and the notice stays however current the file is. From a laptop on the VPN, `.venv/Scripts/python -m promoter index --embed` with a key in `.env.promoter` writes the file by hand (section 6). Seen 15 October 2026: both VMs were configured and could reach the platform, but the timer and service units had never been installed on the internal VM (`Unit crsw-promoter.timer could not be found`), so the promoter had only ever run by hand, as dry runs, which never write embeddings; installing the units (section 3) fixed it on the first firing.
 - **Reading the promoter's logs later**: there are two copies and neither is a single text file. The VM's journal is systemd's binary log under `/var/log/journal/`, read only through `journalctl` and trimmed by size over time: `journalctl -u crsw-promoter.service --since "3 hours ago" --no-pager` for everything the timer logged, `journalctl -u crsw-promoter.service --no-pager | grep -v '"action": "start"\|"action": "finish"\|"action": "audit_written"\|systemd\[1\]'` to drop the quiet runs and systemd's own lines, `systemctl list-timers --all --no-pager | grep crsw` to see that the timer is still scheduled. The durable copy is the audit trail in the bucket (section 6), one small file per run under `audit/promoter/YYYY/MM/DD/`, which `$P audit --since 2026-10-15 --env-file /dev/null` (or `--action embeddings_written`, `--dataset`, `--user`) stitches together from any machine holding the promoter key; prefer it when the question is what changed rather than whether the timer ticked. For a plain file to keep or send: `journalctl -u crsw-promoter.service --no-pager > promoter-journal.txt`, or `$P audit --since 2026-10-01 --json --env-file /dev/null > promoter-audit.jsonl`.
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
-- **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions.
+- **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions. One that must go now: `$P remove --staging <deposit-id>` (section 5, "Removing a dataset").
+- **Remove a dataset** (test data, a withdrawn deposit, retirement): `$P remove --dataset <identifier>` shows the plan; the same line with `--confirm <identifier>` does it. Section 5. Never delete under a strand prefix by hand.
 - **Check the service key's scope** after any policy change: `CRSW_INTEGRATION=1 .venv/Scripts/python -m pytest tests/test_integration_cluster.py` from a laptop on the VPN.
 
 ## 5. Categories after deposit (recategorise)
@@ -210,9 +211,69 @@ an unusable change file.
 request into `staging/` for the promoter to pick up (r9 §1.4 B). Not
 built; the change file is the route until a steward asks.
 
+### Removing a dataset (remove)
+
+The store changes only through the promoter (r10,
+`docs/specs/DEPOSIT_TOOL_SPEC_R10.md`), so a dataset leaves it the same
+way it arrived: by a promoter run on the internal VM, on the audit
+trail, with the index, embeddings and passages rebuilt afterwards.
+When: test data, a deposit the researcher withdraws, retirement at the
+end of a project under the governance handbook. Never by deleting
+objects under a strand prefix by hand; the derived layers and the
+trail would not know.
+
+The habit is plan, read, confirm. The plan touches nothing:
+
+```
+$P remove --dataset rs1/test/green/0_raw/datasettest --env-file /dev/null
+```
+
+One `would_remove` line per dataset (its uuid, when and by whom it was
+deposited, how many objects, versions and delete markers, the bytes,
+and how many other datasets name it in `derived_from`), then
+`remaining`, the identifiers that stay. Read both: the second is the
+keep-list. Then the same line with `--confirm` repeating the identifier
+exactly, and `--reason` for the trail:
+
+```
+$P remove --dataset rs1/test/green/0_raw/datasettest --confirm rs1/test/green/0_raw/datasettest --reason "test data from August" --env-file /dev/null
+```
+
+Several datasets go in one run with one `--dataset` and one `--confirm`
+each; a `--confirm` that does not match refuses the whole run before
+any request. There is no `--all`, `--strand` or wildcard. A prefix
+with no record, or whose record names another location, is refused
+("not a dataset record in place"): that is what stops a typo removing
+a real dataset's files. The current `PROMOTER_AUTHORISED` policy
+applies in reverse (`--by`, default your login, must be allowed to
+deposit to that strand).
+
+Every object version under the prefix goes, members first and the
+record last in its own call, so a run that fails halfway leaves a
+prefix the retry still recognises as a dataset (`remove_incomplete` or
+`remove_failed` names what is left; run the same line again). Then
+`index_written` with the remaining count, `embeddings_written`
+(`dropped` counts the rows gone), `passages_removed` per dataset that
+had a file, and `audit_written`. The web VM shows the change within
+`CRSW_INDEX_REFRESH_SECONDS` (60): the find page lists what remains,
+and the search copy drops the missing passages files on its next sync.
+Other datasets that named the removed one in `derived_from` keep the
+reference; the find page shows it as unresolved.
+
+Afterwards the history lives on the trail: `$P audit --dataset
+rs1/test/green/0_raw/datasettest --env-file /dev/null` shows the
+deposit, every rewrite and the `dataset_removed` line with its reason.
+Nothing is pruned.
+
+An abandoned deposit in staging (opened, never finalised; the
+lifecycle rule would expire it in time) goes with `$P remove --staging
+<deposit-id>` and `--confirm <deposit-id>`; the id is in the web
+service's log. One whose record was written is refused ("promote or
+let it expire"): run the promoter instead.
+
 ## 6. Audit: what has happened, and what is in place
 
-Every promoter run (`run` and `recategorise`, dry runs included) ends by
+Every promoter run (`run`, `recategorise` and `remove`, dry runs included) ends by
 writing its log lines as one object in the bucket:
 `audit/promoter/YYYY/MM/DD/<run-id>.jsonl`, the run id being the UTC
 time the run started (so a day's runs are a folder of small files, not

@@ -27,13 +27,24 @@ parent's uuid and version filled in before promotion (r8 §4): logged as
 resolved_reference, or reference_unresolved when the parent is absent
 (a warning; the deposit still promotes with the reference as typed).
 
-Every run and recategorise writes its log lines as one object under
-PROMOTER_AUDIT_PREFIX before it exits (dry runs too, marked as such).
+`python -m promoter remove --dataset ID [--dataset ID ...] [--confirm ID
+...] [--reason TEXT] [--by NAME]` (r10): a dataset leaves the store only
+this way. Every object version under the prefix is deleted, members
+first and the record last, then the index, embeddings and passages
+follow; a dry run (the plan, as would_remove and remaining lines)
+unless --confirm repeats every identifier. `--staging DEPOSIT_ID` does
+the same for an abandoned deposit in staging, control object last and
+nothing derived to rebuild.
 
-Exit codes: 0 everything promoted or rewritten (or nothing to do); 1 at
-least one deposit or dataset was refused or failed; 2 configuration
-error, unusable change file, or (a real run) the audit object could not
-be written."""
+Every run, recategorise and remove writes its log lines as one object
+under PROMOTER_AUDIT_PREFIX before it exits (dry runs too, marked as
+such).
+
+Exit codes: 0 everything promoted, rewritten or removed (or nothing to
+do); 1 at least one deposit or dataset was refused or failed; 2
+configuration error, unusable change file, a --confirm that does not
+repeat every id, or (a real run) the audit object could not be
+written."""
 import argparse
 import getpass
 import json
@@ -51,6 +62,7 @@ from . import embed as embed_mod
 from . import index as index_mod
 from . import passages as passages_mod
 from . import recategorise as recat
+from . import remove as remove_mod
 from .checks import check
 from .config import ConfigError, PromoterConfig
 from .log import Log
@@ -121,6 +133,25 @@ def build_parser() -> argparse.ArgumentParser:
                     help="local env file to load (default .env.promoter)")
     ps.add_argument("--dataset", help="only this dataset identifier")
     ps.add_argument("--strand", help="only this strand (rs1-rs4)")
+
+    rm = sub.add_parser("remove", help="remove a dataset (every object version under its "
+                                       "prefix) or an abandoned staging deposit; the plan "
+                                       "only, unless --confirm repeats every id")
+    what = rm.add_mutually_exclusive_group(required=True)
+    what.add_argument("--dataset", action="append", default=[], metavar="ID",
+                      help="a dataset identifier (strand/project/sensitivity/state/"
+                           "dataset); repeat for several. No wildcards.")
+    what.add_argument("--staging", action="append", default=[], metavar="DEPOSIT_ID",
+                      help="an abandoned deposit in staging (no record written)")
+    rm.add_argument("--confirm", action="append", default=[], metavar="ID",
+                    help="repeat every --dataset or --staging id to do it; without, "
+                         "the plan is printed and nothing is touched")
+    rm.add_argument("--reason", help="why, for the audit line")
+    rm.add_argument("--by", default=None,
+                    help="who is removing it (default: your login)")
+    rm.add_argument("--log", help="JSON-lines log path (default PROMOTER_LOG_PATH)")
+    rm.add_argument("--env-file", default=".env.promoter",
+                    help="local env file to load (default .env.promoter)")
     return p
 
 
@@ -449,6 +480,87 @@ def cmd_recategorise(args) -> int:
     return _write_audit(cfg, client, log, args.dry_run, 1 if refused else 0)
 
 
+def cmd_remove(args) -> int:
+    """r10: a dataset leaves the store only this way. The plan unless
+    --confirm repeats every id; each dataset its own unit of work and its
+    own lines; the derived layers rebuilt once at the end, as after a
+    run that changed a record."""
+    targets = list(dict.fromkeys(args.dataset or args.staging))
+    dry_run = not args.confirm
+    if not dry_run and sorted(set(args.confirm)) != sorted(targets):
+        print("remove: --confirm must repeat every --dataset identifier (or --staging "
+              "id) exactly, one --confirm each; nothing done", file=sys.stderr)
+        return 2
+    cfg, client, log, vocab_dict, _source = _setup(args)
+    args.by = args.by or _whoami()
+    mode = "dataset" if args.dataset else "staging"
+    log.write("start", run_id=log.run_id, command="remove", dry_run=dry_run,
+              bucket=cfg.s3_bucket, by=args.by, reason=args.reason, mode=mode,
+              targets=targets)
+
+    removed, refused, removed_ids = 0, 0, []
+
+    def do(t, name, would, done, **where):
+        """One target: refused, planned, or removed; True when removed."""
+        nonlocal removed, refused
+        if t.problems:
+            log.write("remove_refused", problems=t.problems, **where)
+            refused += 1
+            return False
+        log.write(would, **where, **t.detail)
+        if dry_run:
+            return False
+        try:
+            remove_mod.remove(client, cfg.s3_bucket, t)
+        except remove_mod.RemoveIncomplete as e:
+            log.write("remove_incomplete", left=e.left, **where)
+            refused += 1
+            return False
+        except Exception as e:
+            log.write("remove_failed", error=str(e), **where)
+            refused += 1
+            return False
+        log.write(done, **where, **t.detail, reason=args.reason, by=args.by)
+        removed += 1
+        removed_ids.append(name)
+        return True
+
+    if mode == "dataset":
+        index_rows = index_mod.rows(client, cfg.s3_bucket)
+        for identifier in targets:
+            t = remove_mod.inspect(client, cfg.s3_bucket, identifier, index_rows)
+            strand = identifier.split("/")[0]
+            if not t.problems and not cfg.user_may_deposit_to(args.by, strand):
+                # The same policy as a deposit, in reverse.
+                t.problems.append("PROMOTER_AUTHORISED would not let %s deposit to %s"
+                                  % (args.by, strand))
+            do(t, identifier, "would_remove", "dataset_removed", prefix=identifier)
+        remaining = [r["identifier"] for r in index_rows if r["identifier"] not in targets]
+        log.write("remaining", datasets=remaining, count=len(remaining))
+        if removed:
+            _write_index(cfg, client, log, False, removed, vocab_doc=vocab_dict)
+            for identifier in (removed_ids if cfg.index_prefix else []):
+                # No platform call: the file is simply gone with its dataset.
+                try:
+                    key = passages_mod.remove(client, cfg.s3_bucket, cfg.index_prefix,
+                                              identifier)
+                except Exception as e:
+                    log.write("passages_failed", prefix=identifier, error=str(e))
+                    continue
+                if key:
+                    log.write("passages_removed", prefix=identifier, key=key,
+                              reason="no record in place")
+    else:
+        for deposit_id in targets:
+            t = remove_mod.inspect_staging(client, cfg.s3_bucket, cfg.staging_prefix,
+                                           deposit_id)
+            do(t, deposit_id, "would_remove_staging", "staging_removed", deposit=deposit_id)
+
+    log.write("finish", command="remove", targets=len(targets), removed=removed,
+              refused_or_failed=refused, dry_run=dry_run, nothing_done=dry_run)
+    return _write_audit(cfg, client, log, dry_run, 1 if refused else 0)
+
+
 def cmd_index(args) -> int:
     cfg, client = _connect(args)
     if not cfg.index_prefix:
@@ -614,7 +726,8 @@ def main(argv=None) -> int:
     try:
         return {"run": cmd_run, "recategorise": cmd_recategorise,
                 "audit": cmd_audit, "datasets": cmd_datasets,
-                "index": cmd_index, "passages": cmd_passages}[args.command](args)
+                "index": cmd_index, "passages": cmd_passages,
+                "remove": cmd_remove}[args.command](args)
     except ConfigError as e:
         print("config error: %s" % e, file=sys.stderr)
         return 2
