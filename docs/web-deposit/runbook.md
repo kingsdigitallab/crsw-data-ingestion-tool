@@ -578,9 +578,12 @@ calls it "the model's reading", since a vector match has no reasoning
 to show, and it is offered only for passages of the sensitivities in
 `CRSW_LLM_SENSITIVITIES`. Results found by meaning alone are folded under
 "N more passages, close in meaning only" whenever a words match exists, or
-when they fall more than 0.05 below the best of them: on a corpus of
-similar documents every passage is nearly equally close to any question,
-and the fold keeps those near-ties out of the way without dropping them.
+when they fall more than `CRSW_SEARCH_WEAK_BAND` (0.10) below the best of
+them, or below `CRSW_SEARCH_WEAK_FLOOR` (0.35) at all: the band keeps a
+good best's neighbours, the floor stops a question the corpus has nothing
+for from showing noise as strong (chosen 19 October 2026 on the grown
+sample, `docs/web-deposit/weak-band-handoff.md`; both numbers belong to
+the embedding model in use). Nothing is dropped.
 The copy refreshes on the index cycle, fetching
 only files whose ETag changed; delete the volume (or the file) and it is
 rebuilt from the bucket on the next request. Sizes: about 3 KB per

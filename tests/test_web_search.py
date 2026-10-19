@@ -631,18 +631,35 @@ class TestSearchPage(SearchBase):
         self.assertIn("<summary>2 more passages, close in meaning only</summary>", html)
         self.assertLess(html.index("contains your exact words"), html.index("<details"))
         self.assertNotIn("Nothing contains your words", html)
-        # No word matches: those within the band of the best stay open, the
-        # rest fold; the page says what it is showing.
+        # No word matches: strong needs both conditions, within the band
+        # of the best AND at least the floor (weak-band-handoff.md); the
+        # rest fold, and the page says what it is showing.
         body = self.hits(c, "zzzz")
         scores = [h["score"] for h in body["passages"]]
         best = max(scores)
         self.assertEqual([h["weak"] for h in body["passages"]],
-                         [s < best - 0.05 for s in scores])
+                         [s < best - 0.10 or s < 0.35 for s in scores])
         html = c.get("/search", params={"q": "zzzz"}).text
         if all(h["weak"] for h in body["passages"]):
             self.assertIn("Nothing contains your words.", html)
         else:
             self.assertNotIn("Nothing contains your words.", html)
+        # The floor alone: a best below it is a poor best, everything folds.
+        wide = self.app(platform=FakePlatform(), search_weak_band=1.0, search_weak_floor=0.0)
+        body = self.hits(wide, "zzzz")
+        self.assertTrue(body["passages"])
+        self.assertFalse(any(h["weak"] for h in body["passages"]))
+        floored = self.app(platform=FakePlatform(), search_weak_band=1.0,
+                           search_weak_floor=best + 0.01)
+        body = self.hits(floored, "zzzz")
+        self.assertTrue(all(h["weak"] for h in body["passages"]))
+        self.assertIn("Nothing contains your words.",
+                      floored.get("/search", params={"q": "zzzz"}).text)
+        # The band alone, with the floor off: only the best's neighbours stay.
+        narrow = self.app(platform=FakePlatform(), search_weak_band=0.0, search_weak_floor=0.0)
+        body = self.hits(narrow, "zzzz")
+        self.assertEqual([h["weak"] for h in body["passages"]],
+                         [s < best for s in scores])
         # Same rule under sort=meaning.
         body = self.hits(c, "populate automatically where possible", sort="meaning")
         self.assertTrue(all(h["weak"] for h in body["passages"] if h["why"] == "meaning"))

@@ -348,8 +348,11 @@ the files hold (`docs/web-deposit/passage-length-handoff.md`). Result, 19
 October 2026, both VMs on v0.13.0, 748 passages from 304: the Convention
 clause is first on its own sentence (0.627) and on the paraphrase (0.492),
 with the two widow passages of the scgb report second and third; the
-control stays 0.17 below. The weak band (0.05 below the best) now folds a
-relevant 0.406 result and is the next web-side look. Later that day the
+control stays 0.17 below. The weak band (0.05 below the best) then folded a
+relevant 0.406 result; re-chosen that evening on the sample grown to 4,609
+passages as band 0.10 plus a floor of 0.35, both settings
+(`docs/web-deposit/weak-band-handoff.md`): the paraphrase shows its three
+right answers, the control shows nothing as strong. Later that day the
 six test datasets were taken out of the store (r10, `promoter remove`,
 `docs/web-deposit/remove-from-store-handoff.md`): one dataset, five
 files, 512 passages remain, none of them this repo's own spec files.

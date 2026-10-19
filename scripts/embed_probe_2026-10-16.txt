@@ -185,3 +185,95 @@ backend names and prices); the two embedding aliases are arc:embed
   (pos64/pos65) on the verbatim query, the 20% overlap. ICC policy p29 has
   still never appeared. Decision: passage length done; the weak band is the
   next web-side look.
+
+=== 19 October 2026, evening: v0.14.1, the sample grown to 7 files through the form
+
+    (CR2021_01026.pdf, the Ongwen trial judgment, 1,076 pages, 4,097 of the 4,609 passages;
+
+    McDougall PDF has no text layer). The four queries, /search.json on the web VM,
+
+    one line per hit: rank score why weak member page position text. Read for the weak band.
+    === q1.json  q='A woman on the death of her husband is liable to be inherited by another person' sort=words  stats={'passages': 4609, 'datasets': 1, 'files': 6, 'current': 4609} steps=['meaning', 'highlight'] notice=None
+     1 0.629 phrase        Convention on the Abolition  p2    pos4    of a consideration in money or in kind to her parents, guardian, famil
+     2 0.472 meaning weak  CR2021_01026.pdf             p804  pos3151 and he told me to make his bed and that now I was his wife. I started 
+     3 0.458 meaning weak  CR2021_01026.pdf             p810  pos3172 or death.6137 The Chamber notes that there is a great volume of consis
+     4 0.457 meaning weak  CR2021_01026.pdf             p821  pos3216 than her ‘husband’ was outlawed.6226 He also testified that while ‘wiv
+     5 0.454 meaning weak  G1915573 (4).pdf             p13   pos65   to be held responsible for the author ’s disrupted mar riage, particul
+     6 0.440 meaning weak  CR2021_01026.pdf             p808  pos3168 T No. ICC-02/04-01/15 809/1077 4 February 2021 the decision: Do I want
+     7 0.404 meaning weak  G1915573 (4).pdf             p13   pos64   for her parents ’ support (para. 7 of the opinion above and para 2.10 
+     8 0.396 meaning weak  CR2021_01026.pdf             p973  pos3770 particular as concerns the modes of liability under Articles 25(3) and
+     9 0.395 meaning weak  policy-slavery-web-eng.pdf   p44   pos111  not trust anybody. P-0351, Ongwen Trial Judgment paras. 2256-2257 When
+    10 0.390 meaning weak  CR2021_01026.pdf             p798  pos3130 I would die. He also said that I should not talk to any person except 
+    11 0.389 meaning weak  CR2021_01026.pdf             p804  pos3149 that he stayed’. 6082 She found that already had two so-called ‘wives’
+    12 0.388 meaning weak  CR2021_01026.pdf             p970  pos3758 the necessities of the conflict’. Such a compelling necessity must be 
+    13 0.388 meaning weak  CR2021_01026.pdf             p175  pos638  witness offered graphic and detailed evidence, providing details indic
+    14 0.380 meaning weak  CR2021_01026.pdf             p821  pos3217 had a child, one child. The baby was actually a baby girl. She was cal
+    15 0.377 meaning weak  CR2021_01026.pdf             p810  pos3175 not stay on her own). 6139 D-0119: T-196, p. 17, line 4 – p. 21, line 
+    16 0.376 meaning weak  CR2021_01026.pdf             p808  pos3166 girls were asked whether they choose life or death.6122 Several inside
+    17 0.375 meaning weak  scgb_report_e-report_en-.pdf p18   pos103  Yazidi men and elderly people, Yazidi women and children were separate
+    18 0.372 meaning weak  CR2021_01026.pdf             p706  pos2766 saw my uncle who was a bit fat and asked him for money. They assumed b
+    19 0.370 meaning weak  CR2021_01026.pdf             p809  pos3169 P-0264 testified that in the LRA, there was a rule that ‘a mature woma
+    20 0.367 meaning weak  scgb_report_e-report_en-.pdf p17   pos94   Sunni women and girls, who could not freely decide whether to marry or
+    === q2.json  q='widows passed on to a relative of the deceased' sort=meaning  stats={'passages': 4609, 'datasets': 1, 'files': 6, 'current': 4609} steps=['meaning', 'highlight'] notice=None
+     1 0.494 meaning       Convention on the Abolition  p2    pos4    of a consideration in money or in kind to her parents, guardian, famil
+     2 0.481 meaning       CR2021_01026.pdf             p810  pos3172 or death.6137 The Chamber notes that there is a great volume of consis
+     3 0.406 meaning weak  scgb_report_e-report_en-.pdf p17   pos94   Sunni women and girls, who could not freely decide whether to marry or
+     4 0.397 meaning weak  CR2021_01026.pdf             p728  pos2864 p. 22, lines 19-23. 5343 P-0286: T-132, p. 4, lines 11-14 and p. 16, l
+     5 0.377 meaning weak  CR2021_01026.pdf             p802  pos3142 incidents recounted by the witnesses below prove that such releases we
+     6 0.366 meaning weak  CR2021_01026.pdf             p821  pos3216 than her ‘husband’ was outlawed.6226 He also testified that while ‘wiv
+     7 0.364 meaning weak  CR2021_01026.pdf             p804  pos3149 that he stayed’. 6082 She found that already had two so-called ‘wives’
+     8 0.359 meaning weak  CR2021_01026.pdf             p787  pos3090 were assigned to. It is opportune to note at the outset that for some 
+     9 0.355 meaning weak  CR2021_01026.pdf             p175  pos638  witness offered graphic and detailed evidence, providing details indic
+    10 0.349 meaning weak  CR2021_01026.pdf             p815  pos3192 care of’, and then after some time they would become ‘wives’, sometime
+    11 0.345 meaning weak  CR2021_01026.pdf             p815  pos3191 from the CO, it [could] also come from the brigad e commander’.6177 Du
+    12 0.343 meaning weak  CR2021_01026.pdf             p804  pos3151 and he told me to make his bed and that now I was his wife. I started 
+    13 0.342 meaning weak  CR2021_01026.pdf             p143  pos516  she love d Dominic Ongwen and struggled with conceding any awareness o
+    14 0.341 meaning weak  CR2021_01026.pdf             p809  pos3171 T-87, p. 49, lines 11-19. 6129 P-0264: T-65, p. 10, line 21 – p. 11, l
+    15 0.339 meaning weak  CR2021_01026.pdf             p808  pos3168 T No. ICC-02/04-01/15 809/1077 4 February 2021 the decision: Do I want
+    16 0.338 meaning weak  CR2021_01026.pdf             p749  pos2948 Dominic Ongwen’s so-called ‘wife’ did not cease until they escaped or 
+    17 0.337 meaning weak  scgb_report_e-report_en-.pdf p10   pos41   the situation of the women and girls remained unchanged after marriage
+    18 0.335 meaning weak  CR2021_01026.pdf             p827  pos3237 household of a woman who had a child, and worked as babysitters, and s
+    19 0.332 meaning weak  CR2021_01026.pdf             p706  pos2766 saw my uncle who was a bit fat and asked him for money. They assumed b
+    20 0.330 meaning weak  CR2021_01026.pdf             p573  pos2218 (see para. 1566 above). In the context of Helen Opoka Acan’s testimony
+    === q3.json  q='widows passed on to a relative of the deceased' sort=words  stats={'passages': 4609, 'datasets': 1, 'files': 6, 'current': 4609} steps=['meaning', 'highlight'] notice=None
+     1 0.494 meaning       Convention on the Abolition  p2    pos4    of a consideration in money or in kind to her parents, guardian, famil
+     2 0.481 meaning       CR2021_01026.pdf             p810  pos3172 or death.6137 The Chamber notes that there is a great volume of consis
+     3 0.406 meaning weak  scgb_report_e-report_en-.pdf p17   pos94   Sunni women and girls, who could not freely decide whether to marry or
+     4 0.397 meaning weak  CR2021_01026.pdf             p728  pos2864 p. 22, lines 19-23. 5343 P-0286: T-132, p. 4, lines 11-14 and p. 16, l
+     5 0.377 meaning weak  CR2021_01026.pdf             p802  pos3142 incidents recounted by the witnesses below prove that such releases we
+     6 0.366 meaning weak  CR2021_01026.pdf             p821  pos3216 than her ‘husband’ was outlawed.6226 He also testified that while ‘wiv
+     7 0.364 meaning weak  CR2021_01026.pdf             p804  pos3149 that he stayed’. 6082 She found that already had two so-called ‘wives’
+     8 0.359 meaning weak  CR2021_01026.pdf             p787  pos3090 were assigned to. It is opportune to note at the outset that for some 
+     9 0.355 meaning weak  CR2021_01026.pdf             p175  pos638  witness offered graphic and detailed evidence, providing details indic
+    10 0.349 meaning weak  CR2021_01026.pdf             p815  pos3192 care of’, and then after some time they would become ‘wives’, sometime
+    11 0.345 meaning weak  CR2021_01026.pdf             p815  pos3191 from the CO, it [could] also come from the brigad e commander’.6177 Du
+    12 0.343 meaning weak  CR2021_01026.pdf             p804  pos3151 and he told me to make his bed and that now I was his wife. I started 
+    13 0.342 meaning weak  CR2021_01026.pdf             p143  pos516  she love d Dominic Ongwen and struggled with conceding any awareness o
+    14 0.341 meaning weak  CR2021_01026.pdf             p809  pos3171 T-87, p. 49, lines 11-19. 6129 P-0264: T-65, p. 10, line 21 – p. 11, l
+    15 0.339 meaning weak  CR2021_01026.pdf             p808  pos3168 T No. ICC-02/04-01/15 809/1077 4 February 2021 the decision: Do I want
+    16 0.338 meaning weak  CR2021_01026.pdf             p749  pos2948 Dominic Ongwen’s so-called ‘wife’ did not cease until they escaped or 
+    17 0.337 meaning weak  scgb_report_e-report_en-.pdf p10   pos41   the situation of the women and girls remained unchanged after marriage
+    18 0.335 meaning weak  CR2021_01026.pdf             p827  pos3237 household of a woman who had a child, and worked as babysitters, and s
+    19 0.332 meaning weak  CR2021_01026.pdf             p706  pos2766 saw my uncle who was a bit fat and asked him for money. They assumed b
+    20 0.330 meaning weak  CR2021_01026.pdf             p573  pos2218 (see para. 1566 above). In the context of Helen Opoka Acan’s testimony
+    === q4.json  q='satellite imagery of cropland' sort=words  stats={'passages': 4609, 'datasets': 1, 'files': 6, 'current': 4609} steps=['meaning', 'highlight'] notice=None
+     1 0.308 meaning       CR2021_01026.pdf             p296  pos1105 0515; 1 July 2004 Intelligence Report, UGA-OTP-0016-0371, at 0371 (a p
+     2 0.296 meaning       CR2021_01026.pdf             p298  pos1118 at 0366 (for Otti); 28 July 2004 Intelligence Report, UGA -OTP-0016-03
+     3 0.294 meaning       CR2021_01026.pdf             p644  pos2512 UGA-OTP- 0023-0387 to UGA -OTP-0023-0407; P -0017 Statement, UGA -OTP-
+     4 0.284 meaning       CR2021_01026.pdf             p299  pos1122 at 0462 (for Bunia) (a duplicate of this report is at UGA -OTP- 0017-0
+     5 0.284 meaning       CR2021_01026.pdf             p644  pos2514 facing the camera, indicating a shoulder injury. UGA-OTP-0023-0393 is 
+     6 0.282 meaning       CR2021_01026.pdf             p272  pos1012 UGA-OTP-0248-0462-R01, at 0501; Compare P-0059: T-37, p. 21, line 22 –
+     7 0.282 meaning       CR2021_01026.pdf             p644  pos2513 Chamber is of the view that the photographs have probative value as co
+     8 0.282 meaning       CR2021_01026.pdf             p295  pos1100 0119; 4 May 2004 Intelligence Report, UGA-OTP-0016-0573, at 0573; 25 M
+     9 0.280 meaning       CR2021_01026.pdf             p289  pos1075 career, and therefore does not consider this small discrepancy to cast
+    10 0.279 meaning       CR2021_01026.pdf             p290  pos1079 P-0337 First Statement, UGA-OTP-0256-0201-R01, at para. 45. 1519 P-033
+    11 0.277 meaning       CR2021_01026.pdf             p691  pos2711 5022 P-0340: T-102, p. 40, lines 18-20. 5023 P-0330: T-52-CONF, p. 33,
+    12 0.275 meaning       CR2021_01026.pdf             p647  pos2527 at para. 31. 4647 P-0026 Statement, UGA-OTP-0069-0018-R01, at para. 31
+    13 0.275 meaning       CR2021_01026.pdf             p296  pos1106 UGA-OTP-0017-0423, at 0423. ICC-02/04-01/15-1762-Red 04-02-2021 296/10
+    14 0.274 meaning       CR2021_01026.pdf             p270  pos1003 (recording played until 15:29), with P-0059: T-38, p. 5, line 17 – p. 
+    15 0.273 meaning       CR2021_01026.pdf             p614  pos2385 para. 20. 4332 P-0026 Statement, UGA-OTP-0069-0018-R01, at para. 21. 4
+    16 0.271 meaning       CR2021_01026.pdf             p625  pos2428 54. 4418 P-0301 Statement, UGA-OTP-0249-0423-R01, at para. 54. 4419 P-
+    17 0.268 meaning       CR2021_01026.pdf             p297  pos1112 specific distances from a trading centre and other landmarks seem to b
+    18 0.265 meaning       CR2021_01026.pdf             p313  pos1177 at 0103. See also generally the logbooks listed at paras 659-660 above
+    19 0.264 meaning       CR2021_01026.pdf             p151  pos552  See also P-0396: T-126, p. 61, line 13 – p. 63, line 4. 707 Photograph
+    20 0.263 meaning       CR2021_01026.pdf             p297  pos1107 time. This is of note also insofar as some intelligence reports provid

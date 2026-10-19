@@ -19,6 +19,17 @@ GOOD = {
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestSettings(unittest.TestCase):
+    def test_the_weak_band_and_floor_are_settings(self):
+        s = Settings.from_env(GOOD)
+        self.assertEqual((s.search_weak_band, s.search_weak_floor), (0.10, 0.35))
+        s = Settings.from_env(dict(GOOD, CRSW_SEARCH_WEAK_BAND="0.2", CRSW_SEARCH_WEAK_FLOOR="0"))
+        self.assertEqual((s.search_weak_band, s.search_weak_floor), (0.2, 0.0))
+        with self.assertRaises(ConfigError) as cm:
+            Settings.from_env(dict(GOOD, CRSW_SEARCH_WEAK_FLOOR="high"))
+        self.assertIn("CRSW_SEARCH_WEAK_FLOOR", str(cm.exception))
+        with self.assertRaises(ConfigError):
+            Settings.from_env(dict(GOOD, CRSW_SEARCH_WEAK_BAND="-0.1"))
+
     def test_good_env(self):
         s = Settings.from_env(GOOD)
         self.assertEqual(s.staging_prefix, "staging/_test")  # slash stripped

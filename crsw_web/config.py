@@ -90,6 +90,13 @@ class Settings:
     # without it the copy lives in memory and is rebuilt at each start.
     passages: bool = False
     passages_path: str = "/data/passages.duckdb"
+    # The weak band (weak-band-handoff.md): a passage found by meaning
+    # alone shows as strong only when it is within `band` of the best
+    # meaning score AND scores at least `floor`; the rest fold on the
+    # page. Both are properties of the embedding model in use (chosen
+    # for arc:embed at 1024 on 19 October 2026); floor 0 = no floor.
+    search_weak_band: float = 0.10
+    search_weak_floor: float = 0.35
 
     @property
     def read_enabled(self) -> bool:
@@ -127,6 +134,18 @@ class Settings:
                 return int(raw)
             except ValueError:
                 raise ConfigError("%s%s must be an integer, got %r" % (ENV_PREFIX, name, raw))
+
+        def opt_float(name, default):
+            raw = get(name)
+            if not raw:
+                return default
+            try:
+                value = float(raw)
+            except ValueError:
+                raise ConfigError("%s%s must be a number, got %r" % (ENV_PREFIX, name, raw))
+            if value < 0:
+                raise ConfigError("%s%s must not be negative, got %r" % (ENV_PREFIX, name, raw))
+            return value
 
         missing = [ENV_PREFIX + k for k in REQUIRED if not get(k)]
         if missing:
@@ -228,6 +247,8 @@ class Settings:
             llm_sensitivities=llm_sens,
             passages=get("PASSAGES") == "1",
             passages_path=get("PASSAGES_PATH", cls.passages_path),
+            search_weak_band=opt_float("SEARCH_WEAK_BAND", cls.search_weak_band),
+            search_weak_floor=opt_float("SEARCH_WEAK_FLOOR", cls.search_weak_floor),
         )
 
 
