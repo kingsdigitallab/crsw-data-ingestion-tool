@@ -195,3 +195,23 @@ removed dataset.
   wait for it.
 - One line in `promoter/log.py`: `Log.write` accepts a bare deposit id
   string, for the staging lines.
+
+## First use, 19 October 2026 (v0.14.0 on the internal VM)
+
+Dry run clean: six `would_remove` (test-dataset 3 objects/4 versions,
+datasettest 10/10 with 1 marker, test 2/2, testingagain 3/3 with 1
+marker, web-poc 3/3, specifications 11/12 with 3 markers; none
+referenced), `remaining` exactly
+`rs1/legal-sources/green/0_raw/international-instruments-sample`.
+
+The confirmed run (11:27 UTC, run 20261019T112749894986Z-1cdb) failed
+on every dataset at the first `delete_objects` call: `AccessDenied` on
+each member version. The promoter key's grant, like the personal key's
+in July 2026, covers read and write but not delete under the strand
+prefixes (it deletes plain markers under `staging/`, which is how
+promotion clears staging). Behaviour as designed: `remove_failed` per
+dataset, every record untouched, no index rewrite, exit 1, the run on
+the trail. Asked eResearch for `s3:DeleteObject` and
+`s3:DeleteObjectVersion` on `crsw/rs1/*` … `rs4/*` (and the versioned
+delete on `staging/*`) for the promoter's key; the same line is the
+retry.
