@@ -344,8 +344,12 @@ every row records the layout it was cut under, and a file whose rows say
 another is read and split again on the next run, so the change is one
 `promoter passages` sweep that re-embeds nearly everything (identical
 short texts keep their vector). The web is untouched; it reads whatever
-the files hold (`docs/web-deposit/passage-length-handoff.md`, result
-recorded there once measured).
+the files hold (`docs/web-deposit/passage-length-handoff.md`). Result, 19
+October 2026, both VMs on v0.13.0, 748 passages from 304: the Convention
+clause is first on its own sentence (0.627) and on the paraphrase (0.492),
+with the two widow passages of the scgb report second and third; the
+control stays 0.17 below. The weak band (0.05 below the best) now folds a
+relevant 0.406 result and is the next web-side look.
 
 *16 October 2026, the embedding model and the question's instruction:*
 search inside content could not find a passage from one of its own

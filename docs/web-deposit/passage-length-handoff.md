@@ -180,3 +180,32 @@ The reranker (off on the web VM since 16 October; `arc:rerankvl` ranks
 text as flatly as its embedding sibling), the weak band, and folding
 neighbouring passages of one file: web-side, after the numbers. The
 find page's question-to-filter step inventing a strand: own handoff.
+
+## Result, 19 October 2026 (v0.13.0 live on both VMs)
+
+The sweep on the internal VM walked 7 datasets and wrote 748 passages (was
+304), 743 embedded and 5 kept (short texts identical under both layouts),
+every row `150/30`, nothing failed. The web copy had them a minute later
+(748 passages, 5 datasets, 22 files, all current). The image build on the
+internal VM hit a stale build-cache snapshot on export; `docker system
+prune -f` cleared it and the sweep ran on the new code.
+
+| query | recorded (350 words) | got (150 words) |
+|---|---|---|
+| verbatim sentence | Convention #2, 0.355, behind Nepal p13 0.454 | **Convention p2 first, 0.627** (phrase match); Nepal p13 0.453 |
+| paraphrase, meaning order | Convention #7, 0.270; best Nepal 0.307 | **Convention p2 first, 0.492**; scgb p17 (widows required to remarry) 0.406; scgb p10 (widowed women pressured to remarry) 0.337 |
+| paraphrase, default order (reranker off) | Convention #7, first spec file #10 | the same list; no spec file in the top 10 |
+| control | best 0.282, spec files | best 0.325, spec files; 0.17 below the paraphrase (was 0.03) |
+
+The probe's prediction held with margin (0.542 predicted, 0.627 seen;
+0.401 predicted, 0.492 seen). Full lists in `scripts/embed_probe_2026-10-16.txt`.
+
+Two things seen on the way, both web-side and neither urgent. `WEAK_BAND`
+(0.05) now folds the second result on the paraphrase, scgb p17 at 0.406,
+as weak behind the Convention's 0.492: a passage a reader would want is
+hidden. The band was set when every score sat within a few hundredths of
+the best; with scores spread out, a fixed 0.05 below the best is too tight.
+And on the verbatim query the Nepal passage appears twice as neighbours
+(positions 64 and 65), the 20% overlap showing. Both are the next web-side
+look, after `remove-from-store-handoff.md` if that goes first, since
+removing the test datasets changes the corpus the band is judged on.

@@ -156,3 +156,32 @@ backend names and prices); the two embedding aliases are arc:embed
   qwen3        paraphrase, no shared words     0.189  0.299  0.418  0.235  0.201
   qwen3        control, matches nothing        0.143  0.154  0.047  0.057  0.048
 
+
+==== after deploy, v0.13.0 on both VMs, 19 October 2026: passages of 150 words, 30 overlap
+  Promoter sweep on the internal VM: 7 datasets walked, 748 passages (was
+  304), 743 embedded, 5 kept (identical short texts), every row split
+  150/30, failed 0. The web copy a minute later: 748 passages, 5 datasets,
+  22 files, all current. Meaning order, limit 5, through the proxy.
+
+  query                                   recorded (350 words)            got (150 words)
+  verbatim sentence (Convention (c)(iii)) #2, 0.355, behind Nepal 0.454    #1 Convention p2 pos4 0.627 (why: phrase); Nepal p13 0.453 and 0.403
+                                                                           (two neighbouring passages); policy p44 0.393; scgb p18 0.373
+  paraphrase "widows passed on ..."       #7, 0.270; best Nepal p13 0.307  #1 Convention p2 pos4 0.492; scgb p17 (widows required to remarry)
+                                                                           0.406; scgb p10 (widowed women pressured to remarry) 0.337;
+                                                                           scgb p18 0.325; Nepal p13 0.305
+  same, default order (reranker off)      Convention #7, spec file #10     the same list to #5, then scgb p8, policy p44, scgb p13, scgb p15,
+                                                                           Nepal p13 pos64; no spec file in the top 10; nothing pinned
+  control "satellite imagery of cropland" best 0.282, spec files          best 0.325, DEPOSIT_TOOL_SPEC.md pos16 in its three copies, then R6
+
+  Reading: the probe's prediction held and then some (0.542 predicted on
+  the verbatim sentence, 0.627 seen; 0.401 predicted on the paraphrase,
+  0.492 seen). The three passages a reader would want are the paraphrase's
+  top three. The control rose with everything else (0.282 -> 0.325) and
+  stays far below the real queries (gap 0.17 on the paraphrase, was 0.03).
+  Two web-side observations, neither urgent: WEAK_BAND (0.05) now folds
+  scgb p17 at 0.406 as weak behind the Convention's 0.492, a relevant
+  passage hidden, because the band was set when every score sat within a
+  few hundredths; and the Nepal passage appears twice as neighbours
+  (pos64/pos65) on the verbatim query, the 20% overlap. ICC policy p29 has
+  still never appeared. Decision: passage length done; the weak band is the
+  next web-side look.
