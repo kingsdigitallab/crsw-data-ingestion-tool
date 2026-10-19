@@ -30,8 +30,8 @@
       <div class="actions">
         <button class="primary" type="submit">Search</button>
         <span class="sort">Order:
-          <label><input type="radio" name="sort" value="words"{% if sort != "meaning" %} checked{% endif %}> your words first</label>
-          <label><input type="radio" name="sort" value="meaning"{% if sort == "meaning" %} checked{% endif %}> by meaning alone</label>
+          <label><input type="radio" name="sort" value="words"{% if sort != "meaning" %} checked{% endif %}> Exact matching text</label>
+          <label><input type="radio" name="sort" value="meaning"{% if sort == "meaning" %} checked{% endif %}> By close meaning</label>
         </span>
       </div>
     </form>
@@ -60,10 +60,13 @@
     </details>
     {% endif %}
     {% elif weak %}
-    <p class="notice">Nothing contains your words. These are the passages closest in meaning, which may not be close at all.</p>
-    <ol class="hits">
-      {% for h in weak %}{{ hit(h) }}{% endfor %}
-    </ol>
+    <p class="notice">Nothing contains your words, and nothing is close in meaning.</p>
+    <details class="weak">
+      <summary>{{ weak|length }} passage{% if weak|length != 1 %}s{% endif %}, the closest in meaning</summary>
+      <ol class="hits">
+        {% for h in weak %}{{ hit(h) }}{% endfor %}
+      </ol>
+    </details>
     {% else %}
     <p class="empty">Nothing close enough.</p>
     {% endif %}

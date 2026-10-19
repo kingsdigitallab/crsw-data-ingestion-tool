@@ -55,6 +55,12 @@ Weak is folded, never dropped, as before. On today's lists:
 | paraphrase | 0.494, 0.481, 0.406, 0.397: three right, one footnote. 0.377 and the rest fold. |
 | control | nothing: the page says "Nothing contains your words. These are the passages closest in meaning, which may not be close at all." and lists them folded open, which is the honest reading of a 0.308 best. |
 
+Follow-up, the same evening (v0.15.1): seen live, the open list on the
+control read as twenty results rather than as nothing, so the all-weak
+page now folds too, under "N passages, the closest in meaning", with the
+notice "Nothing contains your words, and nothing is close in meaning."
+The order radios read "Exact matching text" and "By close meaning".
+
 Why 0.10 rather than a proportion of the best: at 0.494 the two give
 the same cut (80% = 0.395), and a fixed width is easier to say and to
 set. Why 0.35: above both controls seen (0.325 on 16 October against

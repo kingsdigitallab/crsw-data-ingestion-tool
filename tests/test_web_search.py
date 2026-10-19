@@ -620,6 +620,27 @@ class TestSearchPage(SearchBase):
         self.assertGreater(len(straight), 1)
         self.assertEqual(reversed_, straight[::-1])
 
+    def assert_all_folded(self, html, n):
+        """No strong result: the page says so and folds everything, so a
+        question the corpus has nothing for looks like one (the all-weak
+        list was shown open until v0.15.1)."""
+        self.assertIn("Nothing contains your words, and nothing is close in meaning.", html)
+        self.assertIn("<summary>%d passage%s, the closest in meaning</summary>"
+                      % (n, "" if n == 1 else "s"), html)
+        self.assertLess(html.index("<details"), html.index('<ol class="hits">'))
+
+    def test_the_order_switch_is_labelled_in_plain_words(self):
+        self.write_passages((CLEAN, GREEN))
+        c = self.app(platform=FakePlatform())
+        html = c.get("/search").text
+        self.assertIn('value="words" checked> Exact matching text</label>', html)
+        self.assertIn('value="meaning"> By close meaning</label>', html)
+        self.assertNotIn("your words first", html)
+        self.assertNotIn("by meaning alone", html)
+        html = c.get("/search", params={"q": "zzzz", "sort": "meaning"}).text
+        self.assertIn('value="meaning" checked> By close meaning</label>', html)
+        self.assertIn('value="words"> Exact matching text</label>', html)
+
     def test_weak_meaning_only_results_are_folded(self):
         self.write_passages((CLEAN, GREEN))
         c = self.app(platform=FakePlatform())
@@ -641,9 +662,9 @@ class TestSearchPage(SearchBase):
                          [s < best - 0.10 or s < 0.35 for s in scores])
         html = c.get("/search", params={"q": "zzzz"}).text
         if all(h["weak"] for h in body["passages"]):
-            self.assertIn("Nothing contains your words.", html)
+            self.assert_all_folded(html, len(body["passages"]))
         else:
-            self.assertNotIn("Nothing contains your words.", html)
+            self.assertNotIn("Nothing contains your words", html)
         # The floor alone: a best below it is a poor best, everything folds.
         wide = self.app(platform=FakePlatform(), search_weak_band=1.0, search_weak_floor=0.0)
         body = self.hits(wide, "zzzz")
@@ -653,8 +674,8 @@ class TestSearchPage(SearchBase):
                            search_weak_floor=best + 0.01)
         body = self.hits(floored, "zzzz")
         self.assertTrue(all(h["weak"] for h in body["passages"]))
-        self.assertIn("Nothing contains your words.",
-                      floored.get("/search", params={"q": "zzzz"}).text)
+        self.assert_all_folded(floored.get("/search", params={"q": "zzzz"}).text,
+                               len(body["passages"]))
         # The band alone, with the floor off: only the best's neighbours stay.
         narrow = self.app(platform=FakePlatform(), search_weak_band=0.0, search_weak_floor=0.0)
         body = self.hits(narrow, "zzzz")
