@@ -23,3 +23,22 @@ The form offers existing project and dataset names, says under the dataset name 
 ## Still out of scope
 
 Member removal or a true replace; the promoter skipping identical members when it merges (it re-copies them; harmless); reading the destination with the staging key, ever.
+
+## First live re-deposit, 19 October 2026
+
+The KCL proxy's upload cap went from 4 MB to 100 MB that day, so the two
+files of `rs1/legal-sources/green/0_raw/international-instruments-sample`
+that were too big for the form on 15 October (CR2021_01026.pdf, 13.7 MB;
+ContemporaryformsofSlavery_McDougall_03.pdf, 4.9 MB) were added through
+it, as deposit a00eed9feb15, the first under the `staging` prefix. The
+form found the dataset, prefilled from its record and asked to confirm.
+The promoter's check said what it would do ("destination already has
+dataset ... merging: dataset_uuid 66bed065 kept, 2 member(s) added, 0
+updated"), copied the two files, wrote the record with 7 members and
+`merged_with_existing: true`, kept the uuid and `created`, rewrote the
+index and the dataset's embedding. The passages step then failed on the
+platform's HTTP 429 (a 13.7 MB PDF is 128 embedding batches); v0.14.1
+makes the client wait and ask again, and the re-run wrote 4,609 passages
+(512 kept, 4,097 new; CR2021_01026.pdf alone is 1,076 pages). The second
+file has no text layer and sits in the file as a `NO_TEXT` row: the OCR
+question, still open.
