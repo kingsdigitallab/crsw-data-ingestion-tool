@@ -35,6 +35,16 @@ EMBED_BATCH = 32
 # stored), in the documented "Instruct: ...\nQuery: ..." form. The web
 # Settings carry it as `llm_query_instruction`; blank switches it off.
 QUERY_INSTRUCTION = "Given a web search query, retrieve relevant passages that answer the query"
+# A 429 is the platform asking for a pause, not a failure: wait what
+# Retry-After says, else these seconds, and ask again; after the last
+# pause the next refusal is the PlatformError. A passages rebuild of a
+# long PDF is hundreds of batches and met the limit on 19 October 2026;
+# a query on the web page is one request and rarely does. A 503 (the
+# platform down) is not retried: a page must not stall for fifteen
+# seconds, and the callers already degrade.
+RETRY_SLEEPS = (1.0, 2.0, 4.0, 8.0)
+RETRY_STATUSES = (429,)
+MAX_RETRY_AFTER = 60.0
 # How long a resolved embed fingerprint is trusted before GET /models is
 # asked again (the web passes its index cycle; the promoter asks once).
 DEFAULT_FINGERPRINT_SECONDS = 300.0
@@ -136,18 +146,29 @@ class Platform:
     # --- one request --------------------------------------------------------
 
     def _post(self, path: str, payload: Dict) -> Dict:
-        try:
-            r = self._client.post(path, json=payload)
-        except httpx.HTTPError as e:
-            raise PlatformError("platform unreachable: %s" % e.__class__.__name__)
-        return self._body(r, path)
+        return self._send(lambda: self._client.post(path, json=payload), path)
 
     def _get(self, path: str) -> Dict:
-        try:
-            r = self._client.get(path)
-        except httpx.HTTPError as e:
-            raise PlatformError("platform unreachable: %s" % e.__class__.__name__)
-        return self._body(r, path)
+        return self._send(lambda: self._client.get(path), path)
+
+    def _send(self, call, path: str) -> Dict:
+        """One request, repeated after a pause when the platform says
+        it is busy (RETRY_STATUSES); any other failure is immediate."""
+        for pause in RETRY_SLEEPS + (None,):
+            try:
+                r = call()
+            except httpx.HTTPError as e:
+                raise PlatformError("platform unreachable: %s" % e.__class__.__name__)
+            if r.status_code not in RETRY_STATUSES or pause is None:
+                return self._body(r, path)
+            asked = r.headers.get("Retry-After")
+            try:
+                wait = min(float(asked), MAX_RETRY_AFTER) if asked else pause
+            except ValueError:
+                wait = pause
+            log.info("platform %d for %s; waiting %.0fs", r.status_code, path, wait)
+            time.sleep(wait)
+        raise PlatformError("unreachable")        # the loop returns or raises
 
     def _body(self, r, path: str) -> Dict:
         if r.status_code != 200:

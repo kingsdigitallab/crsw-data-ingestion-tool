@@ -2,6 +2,7 @@
 every failure a PlatformError. No network: httpx.MockTransport."""
 import json
 import unittest
+from unittest import mock
 
 try:
     import httpx
@@ -54,6 +55,34 @@ class TestEmbed(unittest.TestCase):
         with self.assertRaises(llm.PlatformError) as cm:
             fake_platform(boom).embed(["x"])
         self.assertIn("unreachable", str(cm.exception))
+
+    def test_rate_limited_requests_are_retried_after_the_pause_asked_for(self):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            if len(calls) < 3:
+                return httpx.Response(429, headers={"Retry-After": "7"}, text="slow down")
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+        slept = []
+        with mock.patch.object(llm.time, "sleep", slept.append):
+            self.assertEqual(fake_platform(handler).embed(["x"]), [[1.0, 0.0]])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(slept, [7.0, 7.0])
+
+    def test_a_rate_limit_that_never_lifts_is_a_platform_error(self):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(429, text="slow down")        # no Retry-After
+        slept = []
+        with mock.patch.object(llm.time, "sleep", slept.append):
+            with self.assertRaises(llm.PlatformError) as cm:
+                fake_platform(handler).embed(["x"])
+        self.assertIn("HTTP 429", str(cm.exception))
+        self.assertEqual(len(calls), len(llm.RETRY_SLEEPS) + 1)
+        self.assertEqual(slept, list(llm.RETRY_SLEEPS))
 
     def test_dims_cut_and_rescaled(self):
         def handler(request):
