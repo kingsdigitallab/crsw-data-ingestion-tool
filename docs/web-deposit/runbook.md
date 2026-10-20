@@ -373,9 +373,17 @@ vectors it already had; a file cut short by an earlier version is not
 marked, so delete its dataset's passages file and run `$P passages
 --dataset` to finish it); the log line per dataset
 (`passages_written`) counts each of those, and `files_no_text` is the
-number of PDFs with no text layer, which is the size of any future OCR
-job. Incremental by each file's checksum, so a re-deposit re-reads only
-what changed. `passages_failed` is logged without changing the exit
+number of PDFs with no text layer that were not transcribed. From
+v0.16.0 a scan's first pages can be read through the platform's
+vision-capable chat alias: set `PROMOTER_LLM_OCR_MODEL=arc:lite` (blank
+is off) and `PROMOTER_OCR_PAGES` (2 by default); the line then counts
+`files_ocr` (scans read) and `pages_ocr` (page images sent), one chat
+call a page of about 2,000 prompt tokens, paid once per file version.
+Raising the page count re-reads the scans on the next `$P passages`;
+switching it off leaves what was read. A call that fails is a warning
+in the container log, the file keeps its marker and is tried again next
+run (`docs/web-deposit/ocr-handoff.md`). Incremental by each file's
+checksum, so a re-deposit re-reads only what changed. `passages_failed` is logged without changing the exit
 code. A dataset that is excluded, or whose sensitivity is taken off the
 list, after its passages were built has its passages file deleted the
 next time it is promoted or `$P passages` runs (`passages_removed`), so

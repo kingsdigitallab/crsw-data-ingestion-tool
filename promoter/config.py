@@ -44,6 +44,13 @@ class PromoterConfig:
     # Which sensitivities' metadata (and, later, contents) may be sent to
     # the platform. Green only until the Centre allows amber.
     llm_sensitivities: Tuple[str, ...] = ("green",)
+    # A PDF with no text layer: its first pages are rendered and read
+    # through this vision-capable chat alias, one chat call a page, so a
+    # scan is findable by its title, author and opening. Blank = off.
+    # Raising the page count re-reads the scans on the next `promoter
+    # passages` (docs/web-deposit/ocr-handoff.md).
+    llm_ocr_model: str = ""
+    ocr_pages: int = 2
 
     # Searching inside documents (finding-and-reuse.md §7): off unless
     # PROMOTER_PASSAGES=1, and then only for datasets of the allowed
@@ -131,6 +138,10 @@ class PromoterConfig:
         if overlap < 0 or overlap >= words:
             raise ConfigError("%sPASSAGE_OVERLAP must be between 0 and %sPASSAGE_WORDS - 1 "
                               "(got %d with %d words)" % (ENV_PREFIX, ENV_PREFIX, overlap, words))
+        ocr_pages = opt_int("OCR_PAGES")
+        ocr_pages = cls.ocr_pages if ocr_pages is None else ocr_pages
+        if ocr_pages < 1:
+            raise ConfigError("%sOCR_PAGES must be at least 1 (got %d)" % (ENV_PREFIX, ocr_pages))
         return cls(
             s3_endpoint=env[ENV_PREFIX + "S3_ENDPOINT"].strip(),
             s3_access_key=env[ENV_PREFIX + "S3_ACCESS_KEY"].strip(),
@@ -148,6 +159,8 @@ class PromoterConfig:
             llm_embed_model=env.get(ENV_PREFIX + "LLM_EMBED_MODEL", "arc:embedvl").strip(),
             llm_embed_dims=1024 if dims is None else dims,
             llm_sensitivities=sens,
+            llm_ocr_model=(env.get(ENV_PREFIX + "LLM_OCR_MODEL") or "").strip(),
+            ocr_pages=ocr_pages,
             passages=(env.get(ENV_PREFIX + "PASSAGES") or "").strip() == "1",
             passages_max_file_bytes=cls.passages_max_file_bytes if max_file is None else max_file,
             passages_max_per_dataset=(cls.passages_max_per_dataset if max_passages is None

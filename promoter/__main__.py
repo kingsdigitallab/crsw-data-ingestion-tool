@@ -236,6 +236,12 @@ def _embed_if_model_changed(cfg, client, log, vocab_doc: Optional[dict] = None
     return summary
 
 
+def _ocr(platform):
+    """The platform's page reader when PROMOTER_LLM_OCR_MODEL names an
+    alias, else None: a PDF with no text layer then keeps its marker."""
+    return platform.transcribe if platform is not None and platform.ocr_model else None
+
+
 def _write_passages(cfg, client, log, prefixes) -> None:
     """After a real run: passages for the datasets it promoted. Each
     dataset is its own unit of work and its own log line; a failure is
@@ -267,7 +273,8 @@ def _write_passages(cfg, client, log, prefixes) -> None:
                                          platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
                                          cfg.passages_max_per_dataset,
-                                         words=cfg.passage_words, overlap=cfg.passage_overlap)
+                                         words=cfg.passage_words, overlap=cfg.passage_overlap,
+                                         ocr=_ocr(platform), ocr_pages=cfg.ocr_pages)
             except Exception as e:
                 log.write("passages_failed", prefix=prefix, error=str(e))
                 continue
@@ -639,7 +646,8 @@ def cmd_passages(args) -> int:
         return 2
     failed = 0
     totals = {"datasets": 0, "skipped": 0, "removed": 0, "passages": 0, "embedded": 0, "kept": 0,
-              "files_no_text": 0, "files_other": 0, "files_too_big": 0}
+              "files_no_text": 0, "files_ocr": 0, "pages_ocr": 0, "files_other": 0,
+              "files_too_big": 0}
     # One listing of the passages files in scope up front: a dataset no
     # longer permitted is checked against it, and a file whose dataset is
     # gone is removed after the walk.
@@ -699,15 +707,16 @@ def cmd_passages(args) -> int:
                                          rec, platform, model, cfg.llm_embed_dims or None,
                                          cfg.passages_max_file_bytes,
                                          cfg.passages_max_per_dataset,
-                                         words=cfg.passage_words, overlap=cfg.passage_overlap)
+                                         words=cfg.passage_words, overlap=cfg.passage_overlap,
+                                         ocr=_ocr(platform), ocr_pages=cfg.ocr_pages)
             except Exception as e:
                 failed += 1
                 print(json.dumps({"action": "passages_failed", "prefix": ref.prefix,
                                   "error": str(e)}, ensure_ascii=False))
                 continue
             totals["datasets"] += 1
-            for k in ("passages", "embedded", "kept", "files_no_text", "files_other",
-                      "files_too_big"):
+            for k in ("passages", "embedded", "kept", "files_no_text", "files_ocr", "pages_ocr",
+                      "files_other", "files_too_big"):
                 totals[k] += getattr(s, k)
             print(json.dumps({"action": "passages_written", **s.as_dict()}, ensure_ascii=False))
         for identifier, key in sorted(existing.items()):

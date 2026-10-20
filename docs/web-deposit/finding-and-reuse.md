@@ -431,6 +431,13 @@ slower and a decision of its own. The first build skips image-only files,
 counts them and reports them in the promoter's log so the size of that
 problem is known before it is taken on.
 
+*20 October 2026 (v0.16.0):* taken on in the smallest form. With
+`PROMOTER_LLM_OCR_MODEL` set, a scan's first `PROMOTER_OCR_PAGES` pages
+(two by default) are rendered and read through the platform's
+vision-capable chat alias, one call a page, so the file is findable by
+its title, author and opening; the rest of the document is not read. No
+OCR engine on the VM (`docs/web-deposit/ocr-handoff.md`).
+
 What a researcher sees is a passage of a file, which is content, not a
 description, so a passage is shown only to someone the amber rule would let
 download the file: the same `may_download` check as the download route,
@@ -460,7 +467,8 @@ read-scoped key over `index/` covers it without a wider grant. Incremental by
 the record's checksum per file and the resolved embedding model (as for
 section 5; a run that finds a new backend sweeps every passages file); a file
 read and found to have no text leaves one marker row so it is not fetched
-again. Switches: `PROMOTER_PASSAGES` (off
+again (or, with `PROMOTER_LLM_OCR_MODEL` set, has its first pages read
+as images). Switches: `PROMOTER_PASSAGES` (off
 by default), `PROMOTER_LLM_SENSITIVITIES`, `PROMOTER_PASSAGES_EXCLUDE`, and
 caps `PROMOTER_PASSAGES_MAX_FILE_BYTES` / `_MAX_PER_DATASET`. A promotion
 runs it for the datasets it promoted; `promoter passages [--dataset ID |

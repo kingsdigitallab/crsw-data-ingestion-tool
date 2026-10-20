@@ -1,0 +1,117 @@
+OCR probe, 20 October 2026, from the laptop with scripts/ocr_probe.py (arc:lite, 2 pages, 150 dpi).
+File: ContemporaryformsofSlavery_McDougall_03.pdf (scanned, no text layer; the one files_no_text file in the sample dataset).
+Outcome: both pages read in full, in reading order, with the running header, the UN document number, title, author and the contents list; no words invented.
+Decision: the promoter reads the first pages of a no-text PDF through the chat alias (PROMOTER_OCR_MODEL); no OCR engine on the VM.
+Note: the * marks below are the probe's loose guess from the model listing and are not reliable; the test is the call itself.
+
+models on the platform (those that say they take images marked *):
+  * arc:apex_pro
+  * arc:apex
+  * arc:nexus
+  * arc:lite
+  * arc:nano
+  * arc:embed
+  * arc:embedvl
+  * arc:rerankvl
+  * arc:chat
+
+rendering the first 2 page(s) of ContemporaryformsofSlavery_McDougall_03.pdf at 150 dpi
+  page 1: 1275x1651 px, 210995 bytes JPEG
+  page 2: 1275x1651 px, 369518 bytes JPEG
+
+==== arc:lite
+
+-- page 1: HTTP 200 in 1.7s; usage {"prompt_tokens": 2147, "total_tokens": 2511, "completion_tokens": 364, "prompt_tokens_details": null, "completion_tokens_details": {"reasoning_tokens": 0}}; 1013 chars, 148 words
+Report of the Special Rapporteur on systematic rape,
+Page 1 of 45
+
+UNITED
+NATIONS
+E
+
+Economic and Social
+Council
+
+Distr.
+GENERAL
+
+E/CN.4/Sub.2/1998/13
+22 June 1998
+
+Original: ENGLISH
+
+COMMISSION ON HUMAN RIGHTS
+Sub-Commission on Prevention of
+Discrimination and Protection
+of Minorities
+Fiftieth session
+Item 6 of the provisional agenda
+
+CONTEMPORARY FORMS OF SLAVERY
+Systematic rape, sexual slavery and slavery-like practices
+during armed conflict
+
+Final report submitted by Ms. Gay J. McDougall, Special Rapporteur
+
+CONTENTS
+
+Introduction 1 - 6
+
+I. PURPOSE AND CONTENT OF THE REPORT 7 - 19
+
+A. Purpose 9 - 12
+
+B. Context 13 - 19
+
+II. DEFINITIONS OF CRIMES 20 - 33
+
+A. Sexual violence, including rape 21 - 26
+
+B. Slavery, including sexual slavery 27 - 33
+
+III. THE LEGAL FRAMEWORK FOR PROSECUTING SEXUAL SLAVERY AND SEXUAL
+VIOLENCE, INCLUDING RAPE, UNDER INTERNATIONAL LAW 34 - 73
+
+A. Crimes against humanity 38 - 45
+
+http://www.unhchr.ch/huridocda/huridoca.nsf/0/3d25270b5fa3ea998025665f0032f220?Ope... 4/5/2011
+
+-- page 2: HTTP 200 in 2.3s; usage {"prompt_tokens": 2147, "total_tokens": 2820, "completion_tokens": 673, "prompt_tokens_details": null, "completion_tokens_details": {"reasoning_tokens": 0}}; 2496 chars, 365 words
+Report of the Special Rapporteur on systematic rape,
+Page 2 of 45
+
+B. Slavery 46 - 47
+
+C. Genocide 48 - 52
+
+D. Torture 53 - 55
+
+E. War crimes 56 - 73
+
+IV. HOLDING INDIVIDUALS RESPONSIBLE 74 - 84
+
+V. OBLIGATIONS TO SEARCH FOR AND PROSECUTE WAR CRIMINALS 85 - 87
+
+VI. THE RIGHT TO AN EFFECTIVE REMEDY AND THE DUTY TO COMPENSATE 88 - 90
+
+VII. PROSECUTIONS AT THE NATIONAL LEVEL 91 - 100
+
+A. Significance of national prosecutions 91 - 94
+
+B. Common failings of municipal law and procedure 95 - 100
+
+VIII. RECOMMENDATIONS 101 - 109
+
+IX. CONCLUSIONS 110 - 115
+
+Appendix: An analysis of the legal liability of the Government of Japan for "comfort women stations" established during the Second World War
+
+Introduction
+
+1. At its forty-fifth session, the Sub-Commission on Prevention of Discrimination and Protection of Minorities, noting the information transmitted to the Sub-Commission by its Working Group on Contemporary Forms of Slavery concerning the sexual exploitation of women, as well as other forms of forced labour, during wartime, decided to entrust Ms. Linda Chavez, as Special Rapporteur, with the task of undertaking an in-depth study on the situation of systematic rape, sexual slavery and slavery-like practices during wartime, including internal armed conflict. The Sub-Commission requested the Special Rapporteur to submit her preliminary report at the forty-sixth session and her final report at the forty-seventh session.
+
+2. At its forty-sixth session the Sub-Commission, considering Commission on Human Rights resolution 1994/103 in which it requested the Sub-Commission to reconsider its decisions to recommend a number of studies, decided to request Ms. Chavez to submit, without financial implications, a working paper on the situation of systematic rape, sexual slavery and slavery-like practices during wartime at its forty-seventh session.
+
+3. Ms. Chavez duly presented her working paper (E/CN.4/Sub.2/1995/38) and the Sub-Commission, in resolution 1995/14, welcomed the paper. The Special Rapporteur submitted her preliminary report at the forty-eighth session (E/CN.4/Sub.2/1996/26), summarizing the purpose and scope of the study, the history of systematic rape as an instrument of policy, relevant international norms, issues of responsibility and liability, forms with jurisdiction to try perpetrators, possible sanctions against violators and possible forms of reparation.
+
+http://www.unhchr.ch/huridocda/huridoca.nsf/0/3d25270b5fa3ea998025665f0032f220?Ope... 4/5/2011

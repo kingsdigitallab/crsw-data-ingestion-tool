@@ -8,8 +8,11 @@ read-scoped key over `index/` covers it. Like the rest of the index it
 is a cache: rebuildable from the files with `promoter passages`, never
 the truth.
 
-What is read: plain text, Markdown, PDF (text layer only; a page with no
-text is counted, not OCRed) and Word. Tables (CSV, spreadsheets) and
+What is read: plain text, Markdown, PDF and Word. A PDF with no text
+layer is counted; with `ocr` set (the platform's vision-capable chat
+alias, PROMOTER_LLM_OCR_MODEL) its first `ocr_pages` pages are rendered
+and read as images, enough for a scan to be found by its title, author
+and opening (docs/web-deposit/ocr-handoff.md). Tables (CSV, spreadsheets) and
 everything else are left alone. Incremental by the file's checksum from
 the record, so a re-deposit only re-embeds files that changed. Only
 datasets of the sensitivities the configuration allows are touched at
@@ -22,6 +25,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from botocore.exceptions import ClientError
+
+from crsw_web.llm import PlatformError
 
 try:                                    # optional, as in index.py
     import numpy as np
@@ -43,12 +48,21 @@ log = logging.getLogger("promoter.passages")
 # read and split again on the next run.
 PASSAGE_WORDS = 150
 OVERLAP_WORDS = 30
+# A scan's first pages, rendered at a size a vision model reads body text
+# at (A4 at 150 dpi is 1,240 by 1,754 pixels; about 2,000 image tokens a
+# page) and sent as JPEG. Each page is one chat call, paid once per file
+# version. Every row records the page count it was read under (`ocr`; 0
+# for a text layer), so raising PROMOTER_OCR_PAGES re-reads the scans
+# and nothing else.
+OCR_PAGES = 2
+OCR_DPI = 150
+OCR_JPEG_QUALITY = 85
 TEXT_TYPES = (".txt", ".md", ".markdown", ".text", ".rst")
 PDF_TYPE = ".pdf"
 WORD_TYPE = ".docx"
 COLUMNS = ("identifier", "dataset_uuid", "sensitivity", "member", "checksum", "page",
            "position", "words", "text", "model", "cut", "dimension", "partial", "split",
-           "embedding")
+           "ocr", "embedding")
 
 Page = Tuple[Optional[int], str]      # (page number from 1, or None; its text)
 # A file that was read and had no text (an image-only PDF) leaves one row
@@ -118,6 +132,60 @@ def _docx_pages(data: bytes) -> List[Page]:
     return [(None, text)] if text.strip() else []
 
 
+# --- pages as images, for a scan ----------------------------------------------------
+
+def page_images(data: bytes, n: int, dpi: int = OCR_DPI) -> List[bytes]:
+    """The first `n` pages of a PDF as JPEG bytes at `dpi`, for the
+    vision model to read; [] when the file cannot be opened."""
+    import pypdfium2 as pdfium
+    try:
+        doc = pdfium.PdfDocument(data)
+    except Exception as e:                          # not a PDF this can open
+        log.warning("PDF could not be rendered: %s", e)
+        return []
+    out: List[bytes] = []
+    try:
+        for i in range(min(n, len(doc))):
+            image = doc[i].render(scale=dpi / 72.0).to_pil().convert("RGB")
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=OCR_JPEG_QUALITY)
+            out.append(buf.getvalue())
+    finally:
+        doc.close()
+    return out
+
+
+def _transcribe(data: bytes, ocr: Callable[[bytes], str], n: int) -> Tuple[List[Page], int, bool]:
+    """The first `n` pages read by the vision model: the pages that had
+    text, how many images were sent, and whether a call failed. After a
+    failure nothing is kept, so the file is tried again on the next run
+    rather than remembered as half read."""
+    pages: List[Page] = []
+    sent = 0
+    for i, image in enumerate(page_images(data, n), start=1):
+        sent += 1
+        try:
+            text = ocr(image)
+        except PlatformError as e:
+            log.warning("page %d not transcribed: %s", i, e)
+            return [], sent, True
+        if text.strip():
+            pages.append((i, text))
+    return pages, sent, False
+
+
+def _ocr_same(row: Dict, want: int) -> bool:
+    """Was this row read under the page count wanted now? A text-layer
+    row (ocr 0, text present) is never affected; with OCR off (want 0)
+    whatever was read stays."""
+    had = row.get("ocr") or 0
+    if want == 0:
+        return True
+    if had or row.get("position") == NO_TEXT:
+        return had == want
+    return True
+
+
 # --- passages ---------------------------------------------------------------------
 
 _WS = re.compile(r"\s+")
@@ -158,7 +226,9 @@ class Summary:
     files_kept: int = 0          # unchanged since last time, not re-read
     files_other: int = 0         # types this does not read
     files_too_big: int = 0       # over the size cap
-    files_no_text: int = 0       # supported type, nothing to extract (image-only PDF)
+    files_no_text: int = 0       # supported type, nothing to extract and not transcribed
+    files_ocr: int = 0           # PDFs with no text layer read through the vision model
+    pages_ocr: int = 0           # page images sent to it
     passages: int = 0
     embedded: int = 0
     kept: int = 0
@@ -175,13 +245,17 @@ class Summary:
 def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
           existing: Sequence[Dict], platform, model: str, dims: Optional[int],
           max_file_bytes: int, max_passages: int, words: int = PASSAGE_WORDS,
-          overlap: int = OVERLAP_WORDS) -> Tuple[List[Dict], Summary]:
+          overlap: int = OVERLAP_WORDS, ocr: Optional[Callable[[bytes], str]] = None,
+          ocr_pages: int = OCR_PAGES) -> Tuple[List[Dict], Summary]:
     """Rows for the dataset's passages file and a summary. `fetch(member)`
     returns a member's bytes; it is called only for files that changed
     (or whose vectors were made by another `model`: the resolved
     fingerprint of the embed alias, as in embed.py; or whose rows were
-    cut under another `words`/`overlap` layout)."""
+    cut under another `words`/`overlap` layout; or, with `ocr` set, a
+    scan read under another `ocr_pages`, or not read at all). `ocr` is
+    the platform's `transcribe`, or None when off."""
     split = "%d/%d" % (words, overlap)
+    want = ocr_pages if ocr is not None else 0   # the page count rows are read under
     s = Summary(identifier=identifier, split=split)
     by_member: Dict[str, List[Dict]] = {}
     for r in existing:
@@ -195,7 +269,7 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
     n = 0                     # passages so far, against the cap
     base = {"identifier": identifier, "dataset_uuid": rec.get("dataset_uuid"),
             "sensitivity": rec.get("sensitivity"), "model": model, "cut": dims or 0,
-            "split": split}
+            "split": split, "ocr": 0}
     for entry in entries:
         member, checksum = entry["path"], entry.get("checksum_sha256")
         reached.add(member)
@@ -214,7 +288,8 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         old = by_member.get(member) or []
         same = bool(old) and all(o.get("checksum") == checksum and o.get("model") == model
                                  and (o.get("cut") or 0) == (dims or 0)
-                                 and o.get("split") == split for o in old)
+                                 and o.get("split") == split
+                                 and _ocr_same(o, want) for o in old)
         old_text = sorted((o for o in old if o.get("position") != NO_TEXT),
                           key=lambda o: o.get("position") or 0)
         complete = same and all(o.get("embedding") for o in old_text)
@@ -222,12 +297,13 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         # A file cut short by the cap before is read again only when there
         # is now room for more of it than it holds.
         if complete and (not was_partial or len(old_text) >= room):
-            kept = [dict(o) for o in old_text[:room]]
+            kept = [dict(o, ocr=o.get("ocr") or 0) for o in old_text[:room]]
             if was_partial or len(kept) < len(old_text):
                 for o in kept:
                     o["partial"] = True
                 s.capped = True
-            rows.extend(dict(o) for o in old if o.get("position") == NO_TEXT)
+            rows.extend(dict(o, ocr=o.get("ocr") or 0) for o in old
+                        if o.get("position") == NO_TEXT)
             rows.extend(kept)
             carried.add(member)
             n += len(kept)
@@ -243,17 +319,26 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
         reuse = {o["text"]: o for o in old_text
                  if o.get("embedding") and o.get("text") and o.get("model") == model
                  and (o.get("cut") or 0) == (dims or 0)}
-        pages = extract(member, fetch(member))
+        data = fetch(member)
+        pages = extract(member, data)
         if pages is None:
             s.files_other += 1
             continue
         s.files_read += 1
         carried.add(member)
         pieces = chunk(pages, words, overlap)
+        read_under = 0                     # a text layer
+        if not pieces and ocr is not None and member.lower().endswith(PDF_TYPE):
+            pages, sent, failed = _transcribe(data, ocr, ocr_pages)
+            s.pages_ocr += sent
+            read_under = 0 if failed else ocr_pages
+            pieces = chunk(pages, words, overlap)
+            if pieces:
+                s.files_ocr += 1
         if not pieces:
             rows.append(dict(base, member=member, checksum=checksum, page=None,
                              position=NO_TEXT, words=0, text=None, dimension=None,
-                             embedding=None))
+                             embedding=None, ocr=read_under))
             continue
         mine: List[Dict] = []
         for page, position, text in pieces:
@@ -266,13 +351,13 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
                 row = dict(base, member=member, checksum=checksum, page=page,
                            position=position, words=prev.get("words") or len(text.split()),
                            text=text, dimension=prev.get("dimension"),
-                           embedding=prev["embedding"], partial=False)
+                           embedding=prev["embedding"], partial=False, ocr=read_under)
                 rows.append(row)
                 s.kept += 1
             else:
                 row = dict(base, member=member, checksum=checksum, page=page,
                            position=position, words=len(text.split()), text=text,
-                           dimension=None, embedding=None, partial=False)
+                           dimension=None, embedding=None, partial=False, ocr=read_under)
                 todo.append(row)
             mine.append(row)
             n += 1
@@ -325,6 +410,7 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
         pa.field("text", pa.string()), pa.field("model", pa.string()),
         pa.field("cut", pa.int64()), pa.field("dimension", pa.int64()),
         pa.field("partial", pa.bool_()), pa.field("split", pa.string()),
+        pa.field("ocr", pa.int64()),
     ])
     table = pa.Table.from_pylist([{c: r.get(c) for c in COLUMNS if c != "embedding"}
                                   for r in rows], schema=schema)
@@ -340,7 +426,8 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
 def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platform,
             model: str, dims: Optional[int], max_file_bytes: int,
             max_passages: int, words: int = PASSAGE_WORDS,
-            overlap: int = OVERLAP_WORDS) -> Summary:
+            overlap: int = OVERLAP_WORDS, ocr: Optional[Callable[[bytes], str]] = None,
+            ocr_pages: int = OCR_PAGES) -> Summary:
     """Read the previous file, re-read and embed what changed, write the
     new file (or remove it when the dataset has no text). Members are
     fetched from the store with the promoter's own client."""
@@ -354,7 +441,7 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
 
     existing = read_existing(client, bucket, key)
     rows, s = build(identifier, rec, fetch, existing, platform, model, dims,
-                    max_file_bytes, max_passages, words, overlap)
+                    max_file_bytes, max_passages, words, overlap, ocr, ocr_pages)
     if rows:
         client.put_object(Bucket=bucket, Key=key, Body=parquet_bytes(rows),
                           ContentType="application/vnd.apache.parquet")

@@ -12,6 +12,7 @@ callers can fall back to the ordinary search; nothing here retries.
 
 `from_settings` returns None when the platform is not configured, which
 is the off setting: the service and the promoter run without it."""
+import base64
 import json
 import logging
 import math
@@ -104,7 +105,7 @@ class Platform:
                  rerank_model: str = DEFAULT_RERANK_MODEL,
                  timeout: float = DEFAULT_TIMEOUT, embed_dims: Optional[int] = None,
                  fingerprint_seconds: float = DEFAULT_FINGERPRINT_SECONDS,
-                 transport=None):
+                 ocr_model: str = "", transport=None):
         if not base_url or not api_key:
             raise ValueError("base_url and api_key are required")
         self.base_url = base_url.rstrip("/")
@@ -112,6 +113,7 @@ class Platform:
         self.chat_model = chat_model or ""
         self.embed_model = embed_model or ""
         self.rerank_model = rerank_model or ""
+        self.ocr_model = ocr_model or ""      # off unless named: a vision-capable chat alias
         self.embed_dims = embed_dims or None
         self.fingerprint_seconds = fingerprint_seconds
         self._fingerprint: Optional[str] = None      # last good answer
@@ -138,6 +140,7 @@ class Platform:
                    embed_dims=getattr(settings, "llm_embed_dims", None),
                    fingerprint_seconds=getattr(settings, "index_refresh_seconds",
                                                DEFAULT_FINGERPRINT_SECONDS),
+                   ocr_model=getattr(settings, "llm_ocr_model", ""),
                    transport=transport)
 
     def close(self) -> None:
@@ -343,6 +346,30 @@ class Platform:
         })
         text = _THINK.sub("", _chat_text(body)).strip()
         return " ".join(text.split())[:400]
+
+    # --- a page image read as text -------------------------------------------
+
+    TRANSCRIBE_PROMPT = ("Transcribe every word printed on this page exactly as it appears, "
+                         "in reading order, as plain text. Do not summarise, correct, "
+                         "translate or add anything. If the page has no readable text, "
+                         "answer with the single word NONE.")
+
+    def transcribe(self, image: bytes, mime: str = "image/jpeg") -> str:
+        """The text printed on one page image, read by the vision-capable
+        chat alias `ocr_model` (promoter/passages.py sends the first pages
+        of a PDF that has no text layer). "" when the page has none.
+        Raises PlatformError like the rest; the caller keeps the file's
+        no-text marker when that happens."""
+        url = "data:%s;base64,%s" % (mime, base64.b64encode(image).decode("ascii"))
+        body = self._post("/chat/completions", {
+            "model": self.ocr_model, "temperature": 0, "max_tokens": 3000,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "system", "content": self.TRANSCRIBE_PROMPT},
+                         {"role": "user", "content": [
+                             {"type": "image_url", "image_url": {"url": url}}]}],
+        })
+        text = _THINK.sub("", _chat_text(body)).strip()
+        return "" if text.upper() == "NONE" else text
 
     # --- rerank -------------------------------------------------------------
 

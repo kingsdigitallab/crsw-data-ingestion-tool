@@ -1,5 +1,6 @@
 """The platform client: one POST per call, batching, strict parsing,
 every failure a PlatformError. No network: httpx.MockTransport."""
+import base64
 import json
 import unittest
 from unittest import mock
@@ -387,3 +388,56 @@ class TestEmbedFingerprint(unittest.TestCase):
         p = llm.Platform.from_settings(S())
         self.assertEqual(p.fingerprint_seconds, 42)
         p.close()
+
+
+@unittest.skipUnless(HAVE, "web extras not installed")
+class TestTranscribe(unittest.TestCase):
+    """A page image to the vision-capable chat alias, its text back."""
+
+    def platform(self, handler, ocr_model="arc:lite"):
+        return llm.Platform("https://ai.example/api/v1", "sk-test", ocr_model=ocr_model,
+                            transport=httpx.MockTransport(handler))
+
+    def test_posts_the_page_as_a_data_url_under_the_ocr_model(self):
+        def handler(request):
+            self.request = json.loads(request.content)
+            return httpx.Response(200, json={"choices": [{"message": {
+                "content": "<think>x</think>Title of the page\nSecond line \n"}}]})
+        p = self.platform(handler)
+        self.assertEqual(p.transcribe(b"\xff\xd8jpeg"), "Title of the page\nSecond line")
+        self.assertEqual(self.request["model"], "arc:lite")
+        self.assertEqual(self.request["temperature"], 0)
+        self.assertEqual(self.request["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(self.request["messages"][0]["content"], llm.Platform.TRANSCRIBE_PROMPT)
+        part = self.request["messages"][1]["content"][0]
+        self.assertEqual(part["type"], "image_url")
+        self.assertEqual(part["image_url"]["url"],
+                         "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8jpeg").decode())
+        p.transcribe(b"\x89PNG", mime="image/png")
+        self.assertTrue(self.request["messages"][1]["content"][0]["image_url"]["url"]
+                        .startswith("data:image/png;base64,"))
+
+    def test_none_is_no_text_and_failures_are_platform_errors(self):
+        p = self.platform(lambda r: httpx.Response(200, json={"choices": [{"message": {
+            "content": " NONE \n"}}]}))
+        self.assertEqual(p.transcribe(b"x"), "")
+        p = self.platform(lambda r: httpx.Response(400, text="images not supported"))
+        with self.assertRaises(llm.PlatformError) as cm:
+            p.transcribe(b"x")
+        self.assertIn("HTTP 400", str(cm.exception))
+        with self.assertRaises(llm.PlatformError):
+            self.platform(lambda r: httpx.Response(200, json={"choices": []})).transcribe(b"x")
+
+    def test_the_ocr_model_is_off_unless_the_settings_name_one(self):
+        self.assertEqual(fake_platform(lambda r: httpx.Response(500)).ocr_model, "")
+
+        class Settings:
+            llm_base_url = "https://ai.example"
+            llm_api_key = "k"
+            llm_ocr_model = "arc:nano"
+        self.assertEqual(llm.Platform.from_settings(Settings()).ocr_model, "arc:nano")
+
+        class Web:                       # the web Settings have no such field
+            llm_base_url = "https://ai.example"
+            llm_api_key = "k"
+        self.assertEqual(llm.Platform.from_settings(Web()).ocr_model, "")

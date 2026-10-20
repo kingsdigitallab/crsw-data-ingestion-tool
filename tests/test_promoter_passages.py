@@ -626,3 +626,180 @@ class TestPassages(PassagesBase):
         code, out = self.cli(["run"], env=LLM_ENV)
         s = self.written(out)[0]
         self.assertEqual((s["passages"], s["key"], s["files_other"]), (0, None, 1))
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestOcr(unittest.TestCase):
+    """A PDF with no text layer: its first pages rendered and read through
+    the vision model (`ocr`), walked by `build` directly. The synthetic
+    PDF's empty pages render white; the fake reader does not look."""
+
+    class Platform:
+        def __init__(self):
+            self.sent = []
+
+        def embed(self, texts, batch=32):
+            self.sent.extend(texts)
+            return [[float(len(t)), 0.5] for t in texts]
+
+    def build(self, files, existing, ocr, ocr_pages=2):
+        import hashlib
+        rec = {"dataset_uuid": "u", "sensitivity": "green",
+               "files": [{"path": m, "checksum_sha256": hashlib.sha256(d).hexdigest(),
+                          "bytes": len(d)} for m, d in files]}
+        data = dict(files)
+        self.fetched, self.platform = [], self.Platform()
+
+        def fetch(member):
+            self.fetched.append(member)
+            return data[member]
+        return pmod.build("rs1/p/green/0_raw/d", rec, fetch, existing, self.platform,
+                          "toy", None, 10 ** 9, 100, ocr=ocr, ocr_pages=ocr_pages)
+
+    def reader(self):
+        seen = []
+
+        def ocr(image):
+            seen.append(image)
+            return "Scanned page %d words here" % len(seen)
+        return seen, ocr
+
+    def test_page_images_renders_the_first_pages_as_jpeg(self):
+        images = pmod.page_images(make_pdf(["", "", ""]), 2)
+        self.assertEqual(len(images), 2)
+        for image in images:
+            self.assertTrue(image.startswith(b"\xff\xd8"))      # JPEG
+        self.assertEqual(len(pmod.page_images(make_pdf([""]), 5)), 1)
+        self.assertEqual(pmod.page_images(b"not a pdf", 2), [])
+
+    def test_the_first_pages_of_a_no_text_pdf_are_transcribed(self):
+        seen, ocr = self.reader()
+        files = [("scan.pdf", make_pdf(["", "", ""])), ("notes.txt", b"plain words")]
+        rows, s = self.build(files, [], ocr)
+        self.assertEqual(len(seen), 2)                      # two of the three pages
+        self.assertTrue(all(i.startswith(b"\xff\xd8") for i in seen))
+        mine = [r for r in rows if r["member"] == "scan.pdf"]
+        self.assertEqual([(r["page"], r["position"], r["ocr"]) for r in mine], [(1, 0, 2)])
+        self.assertEqual(mine[0]["text"],
+                         "Scanned page 1 words here Scanned page 2 words here")
+        self.assertIn(mine[0]["text"], self.platform.sent)
+        self.assertNotIn(pmod.NO_TEXT, [r["position"] for r in rows])
+        self.assertEqual([r["ocr"] for r in rows if r["member"] == "notes.txt"], [0])
+        self.assertEqual((s.files_read, s.files_ocr, s.pages_ocr, s.files_no_text, s.passages),
+                         (2, 1, 2, 0, 2))
+
+    def test_off_leaves_the_no_text_row_as_before(self):
+        rows, s = self.build([("scan.pdf", make_pdf(["", ""]))], [], None)
+        self.assertEqual([(r["position"], r["ocr"]) for r in rows], [(pmod.NO_TEXT, 0)])
+        self.assertEqual((s.files_ocr, s.pages_ocr, s.files_no_text), (0, 0, 1))
+
+    def test_a_text_layer_never_reaches_the_model(self):
+        seen, ocr = self.reader()
+        rows, s = self.build([("paper.pdf", make_pdf(["Alpha words", "Beta words"]))], [], ocr)
+        self.assertEqual(seen, [])
+        self.assertEqual([r["ocr"] for r in rows], [0])
+        self.assertEqual((s.files_ocr, s.pages_ocr), (0, 0))
+
+    def test_blank_pages_keep_the_no_text_row_and_are_not_tried_again(self):
+        rows, s = self.build([("scan.pdf", make_pdf(["", ""]))], [], lambda i: "")
+        self.assertEqual([(r["position"], r["ocr"]) for r in rows], [(pmod.NO_TEXT, 2)])
+        self.assertEqual((s.files_ocr, s.pages_ocr, s.files_no_text), (0, 2, 1))
+        seen, ocr = self.reader()
+        rows2, s2 = self.build([("scan.pdf", make_pdf(["", ""]))], rows, ocr)
+        self.assertEqual((self.fetched, seen, s2.files_kept), ([], [], 1))
+        self.assertEqual(rows2, rows)
+
+    def test_a_failed_call_keeps_the_no_text_row_and_is_tried_again(self):
+        def boom(image):
+            raise llm.PlatformError("HTTP 400 images not supported")
+        with self.assertLogs("promoter.passages", "WARNING") as logs:
+            rows, s = self.build([("scan.pdf", make_pdf(["", ""])),
+                                  ("notes.txt", b"plain words")], [], boom)
+        self.assertIn("images not supported", "\n".join(logs.output))
+        self.assertEqual([(r["member"], r["position"], r["ocr"]) for r in rows],
+                         [("notes.txt", 0, 0), ("scan.pdf", pmod.NO_TEXT, 0)])
+        self.assertEqual((s.files_ocr, s.pages_ocr, s.files_no_text, s.passages), (0, 1, 1, 1))
+        seen, ocr = self.reader()
+        rows2, s2 = self.build([("scan.pdf", make_pdf(["", ""]))], rows, ocr)
+        self.assertEqual((self.fetched, len(seen), s2.files_ocr), (["scan.pdf"], 2, 1))
+
+    def test_rows_are_kept_until_the_page_count_changes(self):
+        seen, ocr = self.reader()
+        scan = [("scan.pdf", make_pdf(["", "", ""]))]
+        rows, s = self.build(scan, [], ocr)
+        self.assertEqual(len(seen), 2)
+        rows2, s2 = self.build(scan, rows, ocr)                 # same checksum, same pages
+        self.assertEqual((self.fetched, len(seen), s2.files_kept, s2.files_ocr), ([], 2, 1, 0))
+        self.assertEqual(rows2, rows)
+        rows3, s3 = self.build(scan, rows, ocr, ocr_pages=3)    # more pages: read again
+        self.assertEqual((self.fetched, len(seen), s3.files_ocr, s3.pages_ocr),
+                         (["scan.pdf"], 5, 1, 3))
+        self.assertEqual([r["ocr"] for r in rows3], [3])
+        rows4, s4 = self.build(scan, rows3, None)               # switched off: rows stay
+        self.assertEqual((self.fetched, s4.files_kept), ([], 1))
+        self.assertEqual(rows4, rows3)
+        rows5, s5 = self.build(scan, [], None)                  # a marker written without OCR
+        rows6, s6 = self.build(scan, rows5, ocr)                # is read once OCR is on
+        self.assertEqual((self.fetched, s6.files_ocr, s6.files_no_text), (["scan.pdf"], 1, 0))
+
+    def test_rows_from_before_the_column_count_as_not_transcribed(self):
+        seen, ocr = self.reader()
+        files = [("notes.txt", b"plain words")]
+        rows, _ = self.build(files, [], None)
+        old = [{k: v for k, v in r.items() if k != "ocr"} for r in rows]
+        rows2, s2 = self.build(files, old, ocr)
+        self.assertEqual((self.fetched, s2.files_kept), ([], 1))
+        self.assertEqual([r["ocr"] for r in rows2], [0])
+
+    def test_the_parquet_file_carries_the_column(self):
+        seen, ocr = self.reader()
+        rows, _ = self.build([("scan.pdf", make_pdf(["", ""])), ("notes.txt", b"plain words")],
+                             [], ocr)
+        table = pq.read_table(io.BytesIO(pmod.parquet_bytes(rows))).to_pylist()
+        self.assertEqual([(r["member"], r["ocr"]) for r in table],
+                         [("notes.txt", 0), ("scan.pdf", 2)])
+
+
+class TestOcrSettings(PassagesBase):
+    def test_ocr_is_a_setting_off_by_default(self):
+        cfg = PromoterConfig.from_env(dict(self.ENV, **LLM_ENV))
+        self.assertEqual((cfg.llm_ocr_model, cfg.ocr_pages), ("", 2))
+        cfg = PromoterConfig.from_env(dict(self.ENV, **LLM_ENV, PROMOTER_LLM_OCR_MODEL=" arc:lite ",
+                                           PROMOTER_OCR_PAGES="3"))
+        self.assertEqual((cfg.llm_ocr_model, cfg.ocr_pages), ("arc:lite", 3))
+        for bad in ("0", "-1", "two"):
+            with self.assertRaises(ConfigError) as cm:
+                PromoterConfig.from_env(dict(self.ENV, **LLM_ENV, PROMOTER_OCR_PAGES=bad))
+            self.assertIn("OCR_PAGES", str(cm.exception))
+
+    def test_run_reads_a_scan_through_the_vision_model_when_set(self):
+        seen = []
+
+        def fake_transcribe(platform, image, mime="image/jpeg"):
+            seen.append((platform.ocr_model, image[:2], mime))
+            return "Scanned title words"
+        p = mock.patch.object(llm.Platform, "transcribe", fake_transcribe)
+        p.start(); self.addCleanup(p.stop)
+        on = dict(LLM_ENV, PROMOTER_LLM_OCR_MODEL="arc:lite")
+        self.stage(files=self.files)
+        code, out = self.cli(["run"], env=on)
+        self.assertEqual(code, 0, out)
+        s = self.written(out)[0]
+        self.assertEqual((s["files_read"], s["files_no_text"], s["files_ocr"], s["pages_ocr"],
+                          s["passages"]), (4, 0, 1, 1, 4))
+        self.assertEqual(seen, [("arc:lite", b"\xff\xd8", "image/jpeg")])
+        by = {r["member"]: r for r in self.rows()}
+        self.assertEqual((by["scan.pdf"]["page"], by["scan.pdf"]["position"],
+                          by["scan.pdf"]["text"], by["scan.pdf"]["ocr"]),
+                         (1, 0, "Scanned title words", 2))
+        self.assertEqual(by["notes.txt"]["ocr"], 0)
+        # The sweep keeps the rows and its totals carry the two counts.
+        code, out = self.cli(["passages"], env=on)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(seen), 1)
+        fin = self.written(out, "passages_finished")[0]
+        self.assertEqual((fin["files_ocr"], fin["pages_ocr"], fin["files_no_text"]), (0, 0, 0))
+        # Off (the default): the scan is a marker row and nothing is sent.
+        code, out = self.cli(["passages", "--dataset", DEST], env=LLM_ENV)
+        self.assertEqual(self.written(out)[0]["files_kept"], 4)      # rows stay when off
+        self.assertEqual(len(seen), 1)
