@@ -433,6 +433,11 @@ class TestIndex(PromoterBase):
         self.assertEqual(promo["domains"], ["quant"])
         self.assertEqual(table.column("domain").to_pylist(), ["quant", "quant"])
         self.assertEqual(table.column("domains").to_pylist()[1], ["quant"])
+        self.assertEqual((promo["provider"], promo["spatial"], promo["spatial_note"]),
+                         ([], [], None))
+        self.assertEqual(table.column("provider").to_pylist()[1], [])
+        import pyarrow as pa
+        self.assertTrue(pa.types.is_list(table.schema.field("spatial").type))
 
     def test_nothing_changed_means_nothing_written(self):
         self.stage()

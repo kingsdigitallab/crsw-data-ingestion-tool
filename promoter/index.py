@@ -35,13 +35,13 @@ COLUMNS = (
     "identifier", "dataset_uuid", "strand", "project", "sensitivity", "state",
     "dataset", "domain", "domains", "abstract", "subject", "temporal_start",
     "temporal_end", "version", "creator", "license", "source_type", "source_detail",
-    "steward", "depositor", "depositors", "created", "modified", "files", "bytes",
-    "schema_version", "vocabulary_version", "derived_from",
-    "derived_from_identifiers", "provenance", "provenance_tools", "origin",
-    "record_key", "indexed_at",
+    "provider", "spatial", "spatial_note", "steward", "depositor", "depositors",
+    "created", "modified", "files", "bytes", "schema_version", "vocabulary_version",
+    "derived_from", "derived_from_identifiers", "provenance", "provenance_tools",
+    "origin", "record_key", "indexed_at",
 )
-LIST_COLUMNS = ("domains", "subject", "depositors", "derived_from_identifiers",
-                "provenance_tools")
+LIST_COLUMNS = ("domains", "subject", "provider", "spatial", "depositors",
+                "derived_from_identifiers", "provenance_tools")
 INT_COLUMNS = ("files", "bytes")
 
 
@@ -88,7 +88,13 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
         "temporal_start": start, "temporal_end": end,
         "version": rec.get("version"), "creator": rec.get("creator"),
         "license": rec.get("license"), "source_type": rec.get("source_type"),
-        "source_detail": rec.get("source_detail"), "steward": rec.get("steward"),
+        "source_detail": rec.get("source_detail"),
+        # r11: as recorded; the find page expands the places hierarchy at
+        # query time, as it does the subjects.
+        "provider": list(rec.get("provider") or []),
+        "spatial": list(rec.get("spatial") or []),
+        "spatial_note": rec.get("spatial_note"),
+        "steward": rec.get("steward"),
         "depositor": labels.get("depositor"),
         "depositors": list(rec.get("depositors") or []),
         "created": rec.get("created"), "modified": rec.get("modified"),

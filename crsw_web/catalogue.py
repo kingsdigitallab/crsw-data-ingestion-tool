@@ -23,7 +23,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from botocore.exceptions import ClientError
 
-from crsw_deposit import authority, keys, record
+from crsw_deposit import authority, keys, places as places_mod, record
 
 from .llm import PlatformError
 
@@ -41,7 +41,7 @@ SEARCH_FIELDS = ("identifier", "dataset", "project", "abstract", "creator",
                  "source_detail", "depositor")
 RERANK_TOP = 20          # how many candidates the reranker reads
 FILTER_LABELS = (("strand", "strand"), ("state", "state"), ("sensitivity", "sensitivity"),
-                 ("subject", "subject"), ("project", "project"))
+                 ("subject", "subject"), ("project", "project"), ("place", "place"))
 
 
 @dataclass
@@ -118,6 +118,10 @@ def _plain_term(slug: str) -> Dict:
     return {"facet": "", "slug": slug, "depth": 0, "label": slug, "scope": ""}
 
 
+def _plain_place(code: str) -> Dict:
+    return {"code": code, "depth": 0, "label": code, "kind": ""}
+
+
 def _not_modified(e: ClientError) -> bool:
     code = e.response.get("Error", {}).get("Code", "")
     status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
@@ -128,7 +132,8 @@ class Catalogue:
     def __init__(self, client, bucket: str, index_prefix: str = "index",
                  refresh_seconds: int = 60,
                  clock: Callable[[], float] = time.monotonic,
-                 vocabulary: Optional[Callable[[], Dict]] = None):
+                 vocabulary: Optional[Callable[[], Dict]] = None,
+                 places: Optional[Callable[[], Dict]] = None):
         self._client = client
         self._bucket = bucket
         self._index_key = index_prefix.strip("/") + "/" + INDEX_NAME
@@ -139,6 +144,11 @@ class Catalogue:
         # query time so a merged change reaches the subject filter without
         # a restart. None: subjects match as typed.
         self._vocabulary = vocabulary
+        # The places of the moment (r11 §4), the same way: a place filter
+        # follows the hierarchy of the file in hand. None: codes match as
+        # typed.
+        self._places = places
+        self._place_cache: Tuple[Optional[Dict], List[Dict]] = (None, [])
         self._lock = threading.Lock()
         self._rows: Optional[List[Dict]] = None
         self._loaded_at: Optional[float] = None
@@ -269,13 +279,16 @@ class Catalogue:
     def search(self, q: Optional[str] = None, strand: Optional[str] = None,
                state: Optional[str] = None, sensitivity: Optional[str] = None,
                subject: Optional[str] = None, project: Optional[str] = None,
-               limit: Optional[int] = None) -> List[Dict]:
+               limit: Optional[int] = None, place: Optional[str] = None) -> List[Dict]:
         """Case-insensitive substring match over the descriptive fields;
         `subject` follows the vocabulary (`expand`: the term and every
-        term under it, or a retired term's successors); the other
-        arguments are exact filters. Newest modified first."""
+        term under it, or a retired term's successors); `place` follows
+        the places hierarchy (`expand_place`: the place, what contains it
+        and what it contains); the other arguments are exact filters.
+        Newest modified first."""
         needle = (q or "").strip().lower()
         wanted = set(self.expand(subject)[0]) if subject else None
+        wanted_places = set(self.expand_place(place)[0]) if place else None
         out = []
         for r in self.rows():
             if strand and r.get("strand") != strand:
@@ -287,6 +300,9 @@ class Catalogue:
             if project and r.get("project") != project:
                 continue
             if wanted is not None and not wanted.intersection(r.get("subject") or []):
+                continue
+            if wanted_places is not None and not wanted_places.intersection(
+                    r.get("spatial") or []):
                 continue
             if needle:
                 hay = " ".join(str(r.get(f) or "") for f in SEARCH_FIELDS)
@@ -378,6 +394,61 @@ class Catalogue:
         unknown = [_plain_term(s) for s in self.subjects() if s not in known]
         return cached + unknown if unknown else cached
 
+    # --- the places' view of spatial (r11 §4) --------------------------------
+
+    def places_in_use(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:
+        seen = set()
+        for r in self._rows_of(sensitivities):
+            seen.update(r.get("spatial") or [])
+        return sorted(seen)
+
+    def _places_doc(self) -> Optional[Dict]:
+        return self._places() if self._places is not None else None
+
+    def expand_place(self, code: str) -> Tuple[List[str], str]:
+        """What a place filter matches (places.expand_place): the place,
+        what contains it and what it contains. Without a places file,
+        the code as typed."""
+        return places_mod.expand_place(self._places_doc(), code)
+
+    def place_tree(self, sensitivities: Optional[Sequence[str]] = None) -> List[Dict]:
+        """The places a filter may name, in tree order: every code in use
+        on the rows (of the given sensitivities) and every place above
+        one, each as {code, depth, label, kind}; codes the file does not
+        know follow, flat."""
+        used = self.places_in_use(sensitivities)
+        doc = self._places_doc()
+        by_code = places_mod.places_by_code(doc)
+        if not by_code:
+            return [_plain_place(c) for c in used]
+        keep = set(used)
+        for code in used:
+            keep.update(places_mod.ancestors(doc, code))
+        out = [{"code": c, "depth": d, "label": by_code[c].get("label") or c,
+                "kind": by_code[c].get("kind") or ""}
+               for c, d in places_mod.tree(doc) if c in keep]
+        known = {o["code"] for o in out}
+        out.extend(_plain_place(c) for c in used if c not in known)
+        return out
+
+    def place_options(self) -> List[Dict]:
+        """Every place in the file, tree order with depth, for the place
+        select: built once per places document, codes in use that the
+        file does not know appended flat."""
+        doc = self._places_doc()
+        by_code = places_mod.places_by_code(doc)
+        if not by_code:
+            return [_plain_place(c) for c in self.places_in_use()]
+        cached_doc, cached = self._place_cache
+        if cached_doc is None or cached_doc is not doc:
+            cached = [{"code": c, "depth": d, "label": by_code[c].get("label") or c,
+                       "kind": by_code[c].get("kind") or ""}
+                      for c, d in places_mod.tree(doc)]
+            self._place_cache = (doc, cached)
+        known = {o["code"] for o in cached}
+        unknown = [_plain_place(c) for c in self.places_in_use() if c not in known]
+        return cached + unknown if unknown else cached
+
     # --- asking in plain words (finding-and-reuse.md §5) -------------------
 
     def has_vectors(self) -> bool:
@@ -439,7 +510,8 @@ class Catalogue:
                 ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
                                                  keys.SENSITIVITIES,
                                                  self.subject_tree(sensitivities),
-                                                 self.projects(sensitivities))
+                                                 self.projects(sensitivities),
+                                                 places=self.place_tree(sensitivities))
                 ans.steps.append("filter")
             except PlatformError as e:
                 notices.append("The question could not be interpreted (%s); "
@@ -447,7 +519,8 @@ class Catalogue:
         f = ans.filter
         candidates = [r for r in self.search(strand=f.get("strand"), state=f.get("state"),
                                              sensitivity=f.get("sensitivity"),
-                                             subject=f.get("subject"), project=f.get("project"))
+                                             subject=f.get("subject"), project=f.get("project"),
+                                             place=f.get("place"))
                       if years_overlap(r, f.get("year_from"), f.get("year_to"))]
         if not candidates and f:
             # A filter too strict for what is in the store (with a small

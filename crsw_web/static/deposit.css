@@ -188,3 +188,9 @@ code.sha { color: var(--muted); }
 .files .state .mark.added { color: var(--green); }
 .files .state .mark.updated { color: var(--amber); }
 .files .state .mark.unchanged { color: var(--muted); }
+
+/* r11: provider and places are multi-selects; the extra domains a row of boxes. */
+select[multiple] { width: 100%; font-family: inherit; }
+.choices.extra { margin-top: .4rem; font-size: .92rem; }
+.choices.extra .extra-label { color: var(--muted); margin-right: .4rem; }
+.choices.extra label { margin-right: .75rem; }

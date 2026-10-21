@@ -56,6 +56,24 @@ class TestForm(unittest.TestCase):
         self.assertIn("Depositing as <strong>k1078591", html)
         self.assertIn("/static/deposit.js", html)
 
+    def test_form_offers_providers_places_and_the_r11_fields(self):
+        html = self.client.get("/").text
+        self.assertIn('name="provider" multiple', html)
+        self.assertIn('<option value="acled" data-name="Armed Conflict Location &amp; Event Data (ACLED)"',
+                      html)
+        self.assertIn('data-rights="ACLED terms of use', html)
+        self.assertIn('name="provider_other"', html)
+        self.assertIn('name="spatial" multiple', html)
+        self.assertIn('<optgroup label="Americas">', html)
+        self.assertIn('<option value="m49:419">  Latin America and the Caribbean (m49:419)</option>',
+                      html)
+        self.assertIn('<option value="iso:CO">', html)
+        self.assertIn('<optgroup label="World">', html)
+        self.assertIn('name="spatial_note"', html)
+        self.assertIn('name="notes"', html)
+        self.assertIn('name="domain_extra" value="geo"', html)
+        self.assertIn('id="creator-hint"', html)
+
     def test_the_form_terms_are_built_once_per_vocabulary(self):
         from crsw_deposit import authority as auth_mod
         c = self.client

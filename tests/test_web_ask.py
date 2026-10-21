@@ -49,13 +49,16 @@ class FakePlatform:
             self.fingerprint = fingerprint
         self.filter_calls, self.embed_calls, self.rerank_calls = [], [], []
         self.embed_instructions = []        # one per embed call: the instruction, or None
+        self.place_calls = []               # r11: the place codes offered, per call
 
     def embed_fingerprint(self):
         return self.fingerprint
 
-    def filter_for(self, question, strands, states, sensitivities, subjects, projects):
+    def filter_for(self, question, strands, states, sensitivities, subjects, projects,
+                   places=()):
         self.filter_calls.append((question, tuple(s["slug"] for s in subjects),
                                   tuple(projects)))
+        self.place_calls.append(tuple(p["code"] for p in places))
         if "filter" in self.fail:
             raise PlatformError("platform returned HTTP 503 for /chat/completions")
         return dict(self.filter_reply)
@@ -158,6 +161,25 @@ class TestAskOff(AskBase):
 
 
 class TestAsk(AskBase):
+    def test_the_filter_may_name_a_place_and_it_follows_the_hierarchy(self):
+        latam = "rs2/csac/green/2_final/latam"
+        self.put_record(latam, dict(META, state="2_final", dataset="latam"),
+                        [record.manifest_entry("l.csv", "1" * 64, 10)], "k1078591",
+                        "77777777-7777-4777-8777-777777777777", spatial=["m49:419"])
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        p = FakePlatform(filter_reply={"place": "iso:CO"})
+        c = self.app(platform=p)
+        r = c.get("/datasets", params={"ask": "anything about Colombia"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Understood as: place iso:CO.", r.text)
+        self.assertIn('<option value="iso:CO" selected>', r.text)
+        self.assertIn("covering Colombia", r.text)
+        self.assertEqual(self.ids(c, ask="anything about Colombia"), [latam])
+        body = c.get("/datasets.json", params={"ask": "anything about Colombia"}).json()
+        self.assertEqual(body["place_filter"]["how"], "hierarchy")
+        # The model is offered the places in use and what contains them.
+        self.assertEqual(p.place_calls[-1], ("m49:001", "m49:019", "m49:419"))
+
     def test_filter_then_meaning_then_rerank(self):
         self.embed_store()
         p = FakePlatform(filter_reply={"strand": "rs2", "subject": "armed-conflict",

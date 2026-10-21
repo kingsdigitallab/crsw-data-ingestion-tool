@@ -28,6 +28,10 @@
       {% if rec.creator %}<dt>Creator</dt><dd>{{ rec.creator }}</dd>{% endif %}
       {% if rec.license %}<dt>Licence</dt><dd>{{ rec.license }}</dd>{% endif %}
       {% if rec.source_type %}<dt>Source</dt><dd>{{ rec.source_type }}{% if rec.source_detail %}: {{ rec.source_detail }}{% endif %}</dd>{% endif %}
+      {% if rec.provider %}<dt>Provider</dt><dd>{% for p in rec.provider %}{% set entry = providers.get(p) %}{% if entry and entry.url %}<a href="{{ entry.url }}" rel="noopener">{{ entry.name }}</a> <code>{{ p }}</code>{% elif entry %}{{ entry.name }} <code>{{ p }}</code>{% else %}<code>{{ p }}</code>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+      {% if rec.spatial %}<dt>Places</dt><dd>{% for c in rec.spatial %}<a href="/datasets?place={{ c }}">{{ place_labels.get(c, c) }}</a> <code>{{ c }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+      {% if rec.spatial_note %}<dt>Place note</dt><dd>{{ rec.spatial_note }}</dd>{% endif %}
+      {% if rec.notes %}<dt>Notes</dt><dd>{{ rec.notes }}</dd>{% endif %}
       <dt>Deposited</dt><dd>{{ (rec.created or "")[:10] }} by {{ rec.depositors|join(", ") }}; last changed {{ (rec.modified or "")[:10] }}</dd>
       <dt>Dataset UUID</dt><dd><code>{{ rec.dataset_uuid }}</code></dd>
       {% if rec.derived_from %}

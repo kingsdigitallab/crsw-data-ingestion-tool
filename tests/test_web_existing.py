@@ -54,6 +54,18 @@ class TestLookup(ExistingBase):
         self.assertEqual((body["similar"], body["elsewhere"], body["pending"]),
                          ({"project": [], "dataset": []}, [], []))
 
+    def test_defaults_include_provider_places_and_notes(self):
+        self.put_record("rs2/csac/green/0_raw/acled", dict(META, dataset="acled"),
+                        [record.manifest_entry("a.csv", "d" * 64, 5)], "k1078591",
+                        "77777777-7777-4777-8777-777777777777",
+                        provider=["acled"], spatial=["m49:419"], spatial_note="admin1",
+                        notes="aggregated")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        d = self.lookup(self.app(), dataset="acled")["defaults"]
+        self.assertEqual((d["provider"], d["spatial"], d["spatial_note"], d["notes"],
+                          d["domain"]),
+                         (["acled"], ["m49:419"], "admin1", "aggregated", ["quant"]))
+
     def test_a_new_name_with_near_matches_and_the_same_name_elsewhere(self):
         c = self.app()
         body = self.lookup(c, dataset="event")

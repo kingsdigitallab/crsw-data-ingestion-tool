@@ -86,6 +86,45 @@ class TestValidateMeta(unittest.TestCase):
         _, errors, _ = validate_meta(dict(GOOD, domain=[]), VOCAB)
         self.assertIn("domain", errors)
 
+    def test_provider_checked_and_an_unlisted_one_goes_to_the_notes(self):
+        meta, errors, warnings = validate_meta(dict(GOOD, provider=["acled", "tah"]), VOCAB)
+        self.assertEqual(errors, {})
+        self.assertEqual(meta["provider"], ["acled", "tah"])
+        _, errors, _ = validate_meta(dict(GOOD, provider=["nope"]), VOCAB)
+        self.assertIn("not in the vocabulary's providers list: nope", errors["provider"])
+        no_list = {k: v for k, v in VOCAB.items() if k != "providers"}
+        _, errors, _ = validate_meta(dict(GOOD, provider=["acled"]), no_list)
+        self.assertIn("no providers list", errors["provider"])
+        meta, errors, warnings = validate_meta(
+            dict(GOOD, provider_other="Walk Free", notes="aggregated"), VOCAB)
+        self.assertEqual(errors, {})
+        self.assertNotIn("provider", meta)
+        self.assertEqual(meta["notes"],
+                         "Provider (not yet in the vocabulary): Walk Free\naggregated")
+        self.assertTrue(any("Walk Free is not in the vocabulary's providers list" in w
+                            for w in warnings))
+
+    def test_spatial_checked_against_the_places_in_hand(self):
+        from crsw_deposit import places
+        doc = json.loads(places.bundled_places_path().read_text(encoding="utf-8"))
+        meta, errors, warnings = validate_meta(
+            dict(GOOD, spatial=["m49:419", "iso:TH"], spatial_note="admin1 level"), VOCAB, doc)
+        self.assertEqual((errors, warnings), ({}, []))
+        self.assertEqual((meta["spatial"], meta["spatial_note"]),
+                         (["m49:419", "iso:TH"], "admin1 level"))
+        _, errors, _ = validate_meta(dict(GOOD, spatial=["iso:ZZ"]), VOCAB, doc)
+        self.assertIn("not a place in places.json", errors["spatial"])
+        _, errors, _ = validate_meta(dict(GOOD, spatial=["Colombia"]), VOCAB, doc)
+        self.assertIn("not a place code", errors["spatial"])
+        # No places file in hand: the shape is checked, the code is a warning.
+        meta, errors, warnings = validate_meta(dict(GOOD, spatial="iso:ZZ"), VOCAB)
+        self.assertEqual(errors, {})
+        self.assertEqual(meta["spatial"], ["iso:ZZ"])
+        self.assertTrue(any("could not be checked" in w for w in warnings))
+        meta, _, _ = validate_meta(GOOD, VOCAB, doc)
+        self.assertNotIn("spatial", meta)
+        self.assertNotIn("notes", meta)
+
     def test_source_type_enum(self):
         _, errors, _ = validate_meta(dict(GOOD, source_type="magic"), VOCAB)
         self.assertIn("source_type", errors)

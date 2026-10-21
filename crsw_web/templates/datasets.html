@@ -58,12 +58,16 @@
           <label for="subject">Subject</label>
           <select id="subject" name="subject"><option value="">any</option>{% for facet, terms in subject_groups %}<optgroup label="{{ facet }}">{% for t in terms %}<option value="{{ t.slug }}"{% if t.slug == subject %} selected{% endif %}>{{ t.pad }}{{ t.label }} ({{ t.slug }})</option>{% endfor %}</optgroup>{% endfor %}</select>
         </div>
+        <div class="field">
+          <label for="place">Place</label>
+          <select id="place" name="place"><option value="">any</option>{% for group, options in place_groups %}<optgroup label="{{ group }}">{% for p in options %}<option value="{{ p.code }}"{% if p.code == place %} selected{% endif %}>{{ p.pad }}{{ p.label }} ({{ p.code }})</option>{% endfor %}</optgroup>{% endfor %}</select>
+        </div>
       </div>
       <div class="actions"><button class="primary" type="submit">Search</button> <a href="/datasets">Clear</a></div>
     </form>
 
     {% if subject_notice %}<p class="notice">{{ subject_notice }}</p>{% endif %}
-    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}</p>
+    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}{% if place_filter %} covering {{ place_filter.label }}{% if place_filter.how == "hierarchy" %} (or a place containing or inside it){% endif %}{% endif %}</p>
     {% if results %}
     <table class="files results">
       <thead><tr><th>Dataset</th><th>Where</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>

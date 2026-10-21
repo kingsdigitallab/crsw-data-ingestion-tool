@@ -95,6 +95,10 @@
           {% for d in domains %}<option value="{{ d.code }}" data-steward="{{ d.steward }}">{{ d.code }} — {{ d.label }}</option>{% endfor %}
         </select>
         <p class="hint" id="steward-hint">The steward is set by the domain.</p>
+        <div class="choices wrap extra" id="domain-extra">
+          <span class="extra-label">Also relevant:</span>
+          {% for d in domains %}<label><input type="checkbox" name="domain_extra" value="{{ d.code }}"> {{ d.code }}</label>{% endfor %}
+        </div>
         <p class="error" hidden></p>
       </div>
     </div>
@@ -139,15 +143,33 @@
     </div>
 
     <div class="grid two">
+      <div class="field" data-field="provider">
+        <label for="provider">Provider</label>
+        <select id="provider" name="provider" multiple size="4">
+          {% for p in providers %}<option value="{{ p.slug }}" data-name="{{ p.name }}" data-rights="{{ p.rights }}" data-url="{{ p.url }}">{{ p.slug }} — {{ p.name }}</option>{% endfor %}
+        </select>
+        <p class="hint" id="provider-hint">{% if providers %}Who supplies the data, from the vocabulary's list. Choosing one fills the licence with the provider's default rights statement and, for raw data, the creator.{% else %}The vocabulary in hand has no providers list; leave this blank.{% endif %}</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="provider_other">
+        <label for="provider_other">Provider not listed?</label>
+        <input id="provider_other" name="provider_other" type="text" placeholder="Name it here">
+        <p class="hint">Written into the notes until a steward adds it to the vocabulary.</p>
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="grid two">
       <div class="field" data-field="license">
         <label for="license">Licence</label>
         <input id="license" name="license" type="text" placeholder="CC-BY-4.0">
-        <p class="hint">Left blank: CC-BY-4.0 for green, internal-only for amber.</p>
+        <p class="hint">Left blank: CC-BY-4.0 for green, internal-only for amber. Third-party data carries its provider's terms, not ours.</p>
         <p class="error" hidden></p>
       </div>
       <div class="field" data-field="creator">
         <label for="creator">Creator</label>
-        <input id="creator" name="creator" type="text" placeholder="Person or team intellectually responsible">
+        <input id="creator" name="creator" type="text" placeholder="Person, team or organisation intellectually responsible">
+        <p class="hint" id="creator-hint">Person or team intellectually responsible.</p>
         <p class="error" hidden></p>
       </div>
     </div>
@@ -163,9 +185,32 @@
       </div>
       <div class="field" data-field="source_detail">
         <label for="source_detail">Source detail</label>
-        <input id="source_detail" name="source_detail" type="text" placeholder="Archive name, URL, or collection reference">
+        <input id="source_detail" name="source_detail" type="text" placeholder="Which file or extract, which filter, when downloaded">
+        <p class="hint">The specifics of this dataset; the provider entry holds the stable URL and terms.</p>
         <p class="error" hidden></p>
       </div>
+    </div>
+
+    <div class="grid two">
+      <div class="field" data-field="spatial">
+        <label for="spatial">Places covered</label>
+        <select id="spatial" name="spatial" multiple size="6">
+          {% for group, options in place_groups %}<optgroup label="{{ group }}">{% for p in options %}<option value="{{ p.code }}">{{ p.pad }}{{ p.label }} ({{ p.code }})</option>{% endfor %}</optgroup>{% endfor %}
+        </select>
+        <p class="hint">UN M49 regions and countries. A region stands for every country inside it: choose the broadest that fits, or several.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="spatial_note">
+        <label for="spatial_note">Place note</label>
+        <input id="spatial_note" name="spatial_note" type="text" placeholder="What the codes cannot say: sub-national areas, named corpora">
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
+    <div class="field" data-field="notes">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes" rows="3" placeholder="Anything a reader should know that the other fields do not say"></textarea>
+      <p class="error" hidden></p>
     </div>
 
     <details class="origin" id="origin">

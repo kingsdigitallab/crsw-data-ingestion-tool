@@ -20,7 +20,7 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from crsw_deposit import authority, deposit_logic, record
+from crsw_deposit import authority, deposit_logic, places as places_mod, record
 
 VOCAB = json.loads((Path(__file__).resolve().parent.parent
                     / "crsw_deposit" / "vocab.json").read_text(encoding="utf-8"))
@@ -148,7 +148,8 @@ class TestFind(CatalogueBase):
         d = body["datasets"][0]
         self.assertEqual(set(d), {"identifier", "dataset_uuid", "dataset", "project", "strand",
                                   "state", "sensitivity", "domain", "depositor", "files",
-                                  "bytes", "modified", "subject", "version", "abstract"})
+                                  "bytes", "modified", "subject", "version", "abstract",
+                                  "provider", "spatial"})
         self.assertLessEqual(len(d["abstract"]), 201)
         self.assertTrue(body["built_at"])
         self.assertEqual(len(c.get("/datasets.json").json()["datasets"]), 2)
@@ -340,7 +341,9 @@ class TestHierarchy(CatalogueBase):
         html = self.app().get("/datasets").text
         self.assertIn('<option value="forced-labour">Forced labour (forced-labour)</option>',
                       html)
-        self.assertNotIn("\u2007", html)
+        # The subject select is flat; the place select beside it is a tree.
+        subject_select = html[html.index('<select id="subject"'):html.index('<label for="place">')]
+        self.assertNotIn("\u2007", subject_select)
 
 
 class TestDownload(CatalogueBase):
@@ -489,3 +492,101 @@ class TestCatalogueCache(CatalogueBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestPlaces(CatalogueBase):
+    """r11 §4: a place filter follows the M49 hierarchy both ways, the
+    select shows the tree, and the dataset page names provider and
+    places."""
+    LATAM = "rs2/csac/green/2_final/latam"
+    COLOMBIA = "rs2/csac/green/2_final/colombia"
+    THAI = "rs2/csac/green/2_final/thai"
+
+    def seed(self):
+        super().seed()
+        self.put_record(self.LATAM, dict(META, state="2_final", dataset="latam"),
+                        [record.manifest_entry("l.csv", "1" * 64, 10)],
+                        "k1078591", "77777777-7777-4777-8777-777777777777",
+                        provider=["acled"], spatial=["m49:419"],
+                        spatial_note="50 countries, admin1 level", notes="Weekly aggregates.")
+        self.put_record(self.COLOMBIA, dict(META, state="2_final", dataset="colombia"),
+                        [record.manifest_entry("c.csv", "2" * 64, 10)],
+                        "k1078591", "88888888-8888-4888-8888-888888888888",
+                        spatial=["iso:CO"])
+        self.put_record(self.THAI, dict(META, state="2_final", dataset="thai"),
+                        [record.manifest_entry("t.csv", "3" * 64, 10)],
+                        "k1078591", "99999999-9999-4999-8999-999999999999",
+                        spatial=["iso:TH", "iso:AU"])
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+
+    def ids(self, client, **params):
+        return sorted(d["identifier"]
+                      for d in client.get("/datasets.json", params=params).json()["datasets"])
+
+    def test_a_country_finds_a_dataset_tagged_with_its_subregion(self):
+        c = self.app()
+        self.assertEqual(self.ids(c, place="iso:CO"), [self.COLOMBIA, self.LATAM])
+        page = c.get("/datasets", params={"place": "iso:CO"})
+        self.assertIn("2 datasets covering Colombia (or a place containing or inside it)",
+                      page.text)
+        self.assertIn('<option value="iso:CO" selected>', page.text)
+
+    def test_a_region_finds_a_dataset_tagged_with_a_country_inside_it(self):
+        c = self.app()
+        self.assertEqual(self.ids(c, place="m49:019"), [self.COLOMBIA, self.LATAM])
+        self.assertEqual(self.ids(c, place="m49:001"), [self.COLOMBIA, self.LATAM, self.THAI])
+        self.assertEqual(self.ids(c, place="m49:035"), [self.THAI])
+        self.assertEqual(self.ids(c, place="iso:MX"), [self.LATAM])
+
+    def test_the_json_feed_says_what_the_place_matched(self):
+        c = self.app()
+        body = c.get("/datasets.json", params={"place": "iso:CO"}).json()
+        self.assertEqual(body["place_filter"]["asked"], "iso:CO")
+        self.assertEqual(body["place_filter"]["how"], "hierarchy")
+        self.assertEqual(body["place_filter"]["matched"][:5],
+                         ["m49:001", "m49:019", "m49:419", "m49:005", "iso:CO"])
+        self.assertEqual(body["datasets"][0]["spatial"], body["datasets"][0]["spatial"])
+        self.assertNotIn("place_filter", c.get("/datasets.json").json())
+        rows = {d["identifier"]: d for d in c.get("/datasets.json").json()["datasets"]}
+        self.assertEqual((rows[self.LATAM]["provider"], rows[self.LATAM]["spatial"]),
+                         (["acled"], ["m49:419"]))
+
+    def test_the_place_select_is_grouped_by_region_and_indented(self):
+        html = self.app().get("/datasets").text
+        self.assertIn('<optgroup label="World">', html)
+        self.assertIn('<optgroup label="Americas">', html)
+        self.assertIn('<option value="m49:419">  Latin America and the Caribbean '
+                      '(m49:419)</option>', html)
+        self.assertIn('<option value="iso:CO">      Colombia '
+                      '(iso:CO)</option>', html)
+
+    def test_no_places_document_matches_as_typed(self):
+        cat = Catalogue(s3mod.ReadOnly(self.s3), "crsw", "index")
+        self.assertEqual([r["identifier"] for r in cat.search(place="iso:CO")],
+                         [self.COLOMBIA])
+        self.assertEqual(cat.expand_place("iso:CO"), (["iso:CO"], "unknown"))
+        self.assertEqual([p["code"] for p in cat.place_options()],
+                         ["iso:AU", "iso:CO", "iso:TH", "m49:419"])
+
+    def test_the_place_options_are_built_once_per_document(self):
+        docs = {"doc": json.loads(places_mod.bundled_places_path().read_text(encoding="utf-8"))}
+        cat = Catalogue(s3mod.ReadOnly(self.s3), "crsw", "index",
+                        places=lambda: docs["doc"])
+        with mock.patch("crsw_web.catalogue.places_mod.tree",
+                        wraps=places_mod.tree) as tree:
+            cat.place_options(); cat.place_options()
+            self.assertEqual(tree.call_count, 1)
+            docs["doc"] = dict(docs["doc"])
+            cat.place_options()
+            self.assertEqual(tree.call_count, 2)
+
+    def test_the_dataset_page_shows_provider_and_places_by_label(self):
+        page = self.app().get("/datasets/" + self.LATAM).text
+        self.assertIn('<a href="https://acleddata.com/" rel="noopener">Armed Conflict Location '
+                      '&amp; Event Data (ACLED)</a> <code>acled</code>', page)
+        self.assertIn('<a href="/datasets?place=m49:419">Latin America and the Caribbean</a> '
+                      '<code>m49:419</code>', page)
+        self.assertIn("<dt>Place note</dt><dd>50 countries, admin1 level</dd>", page)
+        self.assertIn("<dt>Notes</dt><dd>Weekly aggregates.</dd>", page)
+        self.assertIn("<dt>Domain</dt><dd>quant", page)

@@ -6,12 +6,13 @@ call into crsw_deposit. Run with:
     uvicorn --factory crsw_web.app:create_app
 """
 import hashlib
+import json
 import logging
 import re
 from datetime import timezone
 from email.utils import format_datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from botocore.exceptions import ClientError
@@ -23,7 +24,8 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 import crsw_deposit
-from crsw_deposit import authority, deposit_logic, keys, labels as labels_mod, noise, record, vocab
+from crsw_deposit import (authority, deposit_logic, keys, labels as labels_mod, noise,
+                          places as places_mod, record, vocab)
 from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
@@ -68,7 +70,8 @@ def client_rules() -> Dict:
 
 def create_app(settings: Optional[Settings] = None,
                s3_client=None, vocab_dict: Optional[Dict] = None,
-               read_client=None, platform=None, passage_index=None) -> FastAPI:
+               read_client=None, platform=None, passage_index=None,
+               places_dict: Optional[Dict] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
     client = s3_client or s3.make_client(settings)
@@ -84,14 +87,30 @@ def create_app(settings: Optional[Settings] = None,
     else:
         # Injected (tests): held as given, never refreshed.
         vocab_cache = VocabularyCache(vocab_dict, "injected", refresh_seconds=0)
+    # r11 §4: the places file, through the same cache class over its own
+    # chain (a places document is not an authority file, so the cache's
+    # vocabulary-shaped reads come out empty and are never asked for).
+    if places_dict is not None:
+        places_cache = VocabularyCache(places_dict, "injected", refresh_seconds=0)
+    elif vocab_dict is not None:
+        # An injected vocabulary (tests) gets the bundled places, no fetch.
+        bundled = json.loads(places_mod.bundled_places_path().read_text(encoding="utf-8"))
+        places_cache = VocabularyCache(bundled, "bundled", refresh_seconds=0)
+    else:
+        loaded_places, places_source = places_mod.load_places()
+        places_cache = VocabularyCache(loaded_places, places_source,
+                                       refresh_seconds=settings.vocab_refresh_seconds,
+                                       loader=places_mod.load_places)
     # The read role: a second, read-only client over the read key and the
     # promoter's index. Off (every /datasets route 404) unless configured.
-    # The catalogue asks the vocabulary cache at query time, so a subject
-    # filter follows the hierarchy of the file in hand.
+    # The catalogue asks the vocabulary and places caches at query time,
+    # so a subject or place filter follows the hierarchy of the file in
+    # hand.
     if read_client is None and settings.read_enabled:
         read_client = s3.make_read_client(settings)
     catalogue = (Catalogue(read_client, settings.s3_bucket, settings.index_prefix,
-                           settings.index_refresh_seconds, vocabulary=vocab_cache.current)
+                           settings.index_refresh_seconds, vocabulary=vocab_cache.current,
+                           places=places_cache.current)
                  if read_client is not None else None)
     # Asking in plain words: the KCL LLM platform, only with the read role.
     if platform is None and catalogue is not None and settings.ask_enabled:
@@ -111,6 +130,7 @@ def create_app(settings: Optional[Settings] = None,
                   docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.vocab_cache = vocab_cache
+    app.state.places_cache = places_cache
     app.state.catalogue = catalogue
     app.state.platform = platform
     app.state.passage_index = passage_index
@@ -153,9 +173,43 @@ def create_app(settings: Optional[Settings] = None,
                                for name, terms in facets.items()},
                 "labels": authority.labels_of(vocab_dict),
                 "scopes": authority.scopes_of(vocab_dict),
+                # r11 §3: the providers list, for the form's select and the
+                # dataset page's links.
+                "providers": vocab.providers(vocab_dict),
             }
             held = (vocab_dict, views)
             views_held["held"] = held
+        return held[1]
+
+    # r11 §4: the places, as the two selects and the dataset page want
+    # them, built once per places document (the cache swaps it whole).
+    places_held: Dict[str, object] = {}
+
+    def group_places(options: Sequence[Dict]) -> List[Tuple[str, List[Dict]]]:
+        """[(group, [place, ...])] for a place select: the world on its
+        own, then one group per region holding the region and everything
+        inside it, indented by figure spaces; codes the file does not
+        know under "other"."""
+        groups: List[Tuple[str, List[Dict]]] = []
+        for p in options:
+            top = p["depth"] <= 1 and p.get("kind")
+            name = "other" if not p.get("kind") else (
+                p["label"] if top else (groups[-1][0] if groups else "other"))
+            if not groups or top or groups[-1][0] != name:
+                groups.append((name, []))
+            groups[-1][1].append(dict(p, pad="  " * max(p["depth"] - 1, 0)))
+        return groups
+
+    def place_views(places_doc: dict) -> Dict:
+        held = places_held.get("held")
+        if held is None or held[0] is not places_doc:
+            by_code = places_mod.places_by_code(places_doc)
+            options = [{"code": c, "depth": d, "label": by_code[c].get("label") or c,
+                        "kind": by_code[c].get("kind") or ""}
+                       for c, d in places_mod.tree(places_doc)]
+            held = (places_doc, {"groups": group_places(options),
+                                 "labels": places_mod.labels_of(places_doc)})
+            places_held["held"] = held
         return held[1]
 
     @app.get("/", response_class=HTMLResponse)
@@ -172,6 +226,8 @@ def create_app(settings: Optional[Settings] = None,
             "vocabulary_version": vocab_dict.get("vocabulary_version"),
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
             "activities": v["activities"],
+            "providers": v["providers"],
+            "place_groups": place_views(places_cache.current())["groups"],
             "rules": client_rules(),
         })
 
@@ -212,13 +268,28 @@ def create_app(settings: Optional[Settings] = None,
         return {k: r.get(k) for k in ("identifier", "dataset_uuid", "dataset", "project",
                                       "strand", "state", "sensitivity", "domain",
                                       "depositor", "files", "bytes", "modified",
-                                      "subject", "version")} | {
+                                      "subject", "version", "provider", "spatial")} | {
             "abstract": abstract[:200] + ("…" if len(abstract) > 200 else "")}
 
-    def search_args(q, strand, state, sensitivity, subject, project):
+    def search_args(q, strand, state, sensitivity, subject, project, place=""):
         return dict(q=q, strand=strand or None, state=state or None,
                     sensitivity=sensitivity or None, subject=subject or None,
-                    project=project or None)
+                    project=project or None, place=place or None)
+
+    def place_view(cat: Catalogue, place: str) -> Optional[Dict]:
+        """How a place filter was read (r11 §4): the codes it matched
+        through the places hierarchy and how (exact, hierarchy, unknown),
+        with the asked place's label for the count line. None without a
+        place filter."""
+        if not place:
+            return None
+        matched, how = cat.expand_place(place)
+        labels = place_views(places_cache.current())["labels"]
+        return {"asked": place, "matched": matched, "how": how,
+                "label": labels.get(place, place)}
+
+    def place_public(view: Optional[Dict]) -> Optional[Dict]:
+        return {k: view[k] for k in ("asked", "matched", "how")} if view else None
 
     def subject_view(cat: Catalogue, subject: str, results=()) -> Optional[Dict]:
         """How a subject filter was read, for the page and the JSON feed:
@@ -280,7 +351,7 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/datasets", response_class=HTMLResponse)
     def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
                       sensitivity: str = "", subject: str = "", project: str = "",
-                      ask: str = "", user: User = Depends(current_user)):
+                      place: str = "", ask: str = "", user: User = Depends(current_user)):
         cat = need_read()
         ask = " ".join(ask.split())
         ans = asked(cat, user, ask)
@@ -292,9 +363,11 @@ def create_app(settings: Optional[Settings] = None,
             q, strand, state = f.get("words", ""), f.get("strand", ""), f.get("state", "")
             sensitivity, subject, project = (f.get("sensitivity", ""), f.get("subject", ""),
                                              f.get("project", ""))
+            place = f.get("place", "")
         else:
             ask = ""
-            results = cat.search(**search_args(q, strand, state, sensitivity, subject, project))
+            results = cat.search(**search_args(q, strand, state, sensitivity, subject,
+                                               project, place))
         view = subject_view(cat, subject, results)
         return templates.TemplateResponse(request, "datasets.html", {
             "user": user, "q": q, "strand": strand, "state": state,
@@ -302,6 +375,8 @@ def create_app(settings: Optional[Settings] = None,
             "strands": keys.STRANDS, "states": keys.STATES,
             "sensitivities": keys.SENSITIVITIES, "subject_groups": subject_groups(cat),
             "subject_filter": view, "subject_notice": view["notice"] if view else None,
+            "place": place, "place_groups": group_places(cat.place_options()),
+            "place_filter": place_view(cat, place),
             "results": results,
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
             "built_at": cat.built_at(), "error": cat.error,
@@ -312,8 +387,8 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/datasets.json")
     def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",
-                      subject: str = "", project: str = "", limit: int = 50, ask: str = "",
-                      user: User = Depends(current_user)):
+                      subject: str = "", project: str = "", place: str = "", limit: int = 50,
+                      ask: str = "", user: User = Depends(current_user)):
         cat = need_read()
         limit = max(1, min(limit, 500))
         ans = asked(cat, user, ask, limit=limit)
@@ -324,15 +399,21 @@ def create_app(settings: Optional[Settings] = None,
             view = subject_view(cat, ans.filter.get("subject", ""), ans.rows)
             if view:
                 out["subject_filter"] = subject_public(view)
+            pview = place_view(cat, ans.filter.get("place", ""))
+            if pview:
+                out["place_filter"] = place_public(pview)
             return out
         rows = cat.search(limit=limit,
-                          **search_args(q, strand, state, sensitivity, subject, project))
+                          **search_args(q, strand, state, sensitivity, subject, project, place))
         out = {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
         view = subject_view(cat, subject, rows)
         if view:
             out["subject_filter"] = subject_public(view)
             if view["notice"]:
                 out["notice"] = view["notice"]
+        pview = place_view(cat, place)
+        if pview:
+            out["place_filter"] = place_public(pview)
         return out
 
     # --- search inside documents (finding-and-reuse.md §7) ------------------
@@ -626,6 +707,9 @@ def create_app(settings: Optional[Settings] = None,
             # Each subject as its label, slug and scope note, linked to the filter.
             "subjects": [{"slug": s, "label": labels.get(s), "scope": scopes.get(s)}
                          for s in (rec.get("subject") or [])],
+            # r11: provider entries by slug (name, url) and place labels.
+            "providers": {p["slug"]: p for p in v["providers"]},
+            "place_labels": place_views(places_cache.current())["labels"],
             "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings),
             "sizes": {f["path"]: record.human_bytes(f.get("bytes") or 0) for f in files},
             "total": record.human_bytes(sum(int(f.get("bytes") or 0) for f in files)),
@@ -697,6 +781,9 @@ def create_app(settings: Optional[Settings] = None,
                 "vocabulary_loaded": vocab_cache.loaded,
                 "facets": vocab.facets(vocab_dict),
                 "domains": vocab.domains(vocab_dict),
+                "providers": vocab.providers(vocab_dict),
+                "places_version": places_cache.current().get("places_version"),
+                "places_source": places_cache.source,
                 "strands": list(keys.STRANDS), "states": list(keys.STATES),
                 "sensitivities": list(keys.SENSITIVITIES)}
 
@@ -756,7 +843,8 @@ def create_app(settings: Optional[Settings] = None,
     # --- Phase 2: the deposit API -----------------------------------------
     @app.post("/deposits", status_code=201)
     def create_deposit(form: Dict, user: User = Depends(current_user)):
-        meta, errors, warnings = validate_meta(form, vocab_cache.current())
+        meta, errors, warnings = validate_meta(form, vocab_cache.current(),
+                                               places_cache.current())
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})
@@ -940,7 +1028,8 @@ def create_app(settings: Optional[Settings] = None,
         errors, warnings = record.validate_record(
             rec, vocab_cache.terms, vocab_cache.domain_codes,
             vocab.activity_codes(vocab_cache.current()),
-            provider_slugs=vocab.provider_slugs(vocab_cache.current()))
+            provider_slugs=vocab.provider_slugs(vocab_cache.current()),
+            place_codes=places_mod.codes(places_cache.current()))
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})

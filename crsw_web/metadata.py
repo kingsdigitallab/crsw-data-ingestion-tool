@@ -5,9 +5,9 @@ every rule is a call into crsw_deposit - nothing is re-implemented
 here. The result is field -> message so the form can show errors
 inline; the full-record check (record.validate_record) still runs at
 finalise, when the manifest exists."""
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from crsw_deposit import deposit_logic, keys, record, vocab
+from crsw_deposit import deposit_logic, keys, places, record, vocab
 
 PROVENANCE_FIELDS = ("provenance_activity", "provenance_tool",
                      "provenance_repo", "provenance_commit",
@@ -41,10 +41,12 @@ def default_license(sensitivity: str) -> str:
     return "internal-only" if sensitivity == "amber" else "CC-BY-4.0"
 
 
-def validate_meta(form: Dict, vocab_dict: Dict
+def validate_meta(form: Dict, vocab_dict: Dict, places_doc: Optional[Dict] = None
                   ) -> Tuple[Dict, Dict[str, str], List[str]]:
     """Return (meta, errors, warnings). `meta` is the dict
-    deposit_logic expects; it is complete only when errors is empty."""
+    deposit_logic expects; it is complete only when errors is empty.
+    `places_doc` (r11) is the places file in hand, what `spatial` codes
+    are checked against; None means the shape alone is checked."""
     errors: Dict[str, str] = {}
     warnings: List[str] = []
     meta: Dict = {}
@@ -147,6 +149,46 @@ def validate_meta(form: Dict, vocab_dict: Dict
     creator = _text(form, "creator")
     if creator:
         meta["creator"] = creator
+
+    # r11 §2.2: provider slugs from the vocabulary's list. A provider not
+    # yet listed goes into the notes with a warning: that is the prompt to
+    # add it, and `provider` stays a controlled list.
+    providers = _list(form, "provider")
+    if providers:
+        slugs = vocab.provider_slugs(vocab_dict)
+        if not slugs:
+            errors["provider"] = ("the vocabulary in hand has no providers list; "
+                                  "leave this blank for now")
+        else:
+            unknown = [p for p in providers if p not in slugs]
+            if unknown:
+                errors["provider"] = ("not in the vocabulary's providers list: %s. To "
+                                      "add a provider, open an issue on the vocabulary "
+                                      "repo." % ", ".join(unknown))
+        meta["provider"] = providers
+    notes = _text(form, "notes")
+    other = _text(form, "provider_other")
+    if other:
+        line = "Provider (not yet in the vocabulary): %s" % other
+        notes = line + ("\n" + notes if notes else "")
+        warnings.append("%s is not in the vocabulary's providers list yet, so it has "
+                        "been written into the notes; to add it, open an issue on "
+                        "the vocabulary repo." % other)
+    if notes:
+        meta["notes"] = notes
+
+    # r11 §2.3: coded places, checked against the places file in hand.
+    spatial = _list(form, "spatial")
+    if spatial:
+        place_errors, place_warnings = record.place_errors(
+            spatial, places.codes(places_doc) if places_doc else None)
+        if place_errors:
+            errors["spatial"] = "; ".join(place_errors)
+        warnings.extend(place_warnings)
+        meta["spatial"] = spatial
+    spatial_note = _text(form, "spatial_note")
+    if spatial_note:
+        meta["spatial_note"] = spatial_note
 
     # r8 §3: what this came from, one identifier or URL per line (or a
     # list), through the same rule as the CLI interview.

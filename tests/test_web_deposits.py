@@ -214,6 +214,35 @@ class TestDepositFlow(unittest.TestCase):
         errors, _ = record.validate_record(rec, vocab.all_terms(VOCAB))
         self.assertEqual(errors, [])
 
+    def test_r11_fields_reach_the_record(self):
+        d = self.create(domain=["quant", "geo"], provider=["acled"],
+                        spatial=["m49:419", "iso:CO"], spatial_note="admin1 level",
+                        notes="Weekly aggregates.")
+        self.put(d["id"], "one.csv", b"a,b\n")
+        r = self.client.post("/deposits/%s/finalise" % d["id"])
+        self.assertEqual(r.status_code, 200, r.text)
+        data = self.s3.get_object(Bucket="crsw", Key=r.json()["record_key"])["Body"].read()
+        rec = record.parse_record(data.decode("utf-8"))
+        self.assertEqual((rec["domain"], rec["provider"], rec["spatial"],
+                          rec["spatial_note"], rec["notes"], rec["steward"]),
+                         (["quant", "geo"], ["acled"], ["m49:419", "iso:CO"],
+                          "admin1 level", "Weekly aggregates.", "Kevin Fahey"))
+        errors, warnings = record.validate_record(
+            rec, vocab.all_terms(VOCAB), provider_slugs=vocab.provider_slugs(VOCAB),
+            place_codes={"m49:419", "iso:CO"})
+        self.assertEqual((errors, warnings), ([], []))
+
+    def test_an_unknown_place_or_provider_is_refused_at_create(self):
+        r = self.client.post("/deposits", json=dict(FORM, spatial=["iso:ZZ"]))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("not a place in places.json", r.json()["detail"]["errors"]["spatial"])
+        r = self.client.post("/deposits", json=dict(FORM, provider=["nope"]))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("providers list", r.json()["detail"]["errors"]["provider"])
+        r = self.client.post("/deposits", json=dict(FORM, provider_other="Walk Free"))
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertTrue(any("Walk Free" in w for w in r.json()["warnings"]))
+
     # --- finalise ---------------------------------------------------------
     def test_full_flow_record_is_what_the_cli_would_write(self):
         d = self.create()

@@ -253,9 +253,18 @@ Stop at each and wait for review.
   *Checkpoint: the 0.5 fixtures upgrade two steps and validate; a 0.6
   record in place stays as it is until a change touches it; the index
   writes.*
-- **C. Form, index, find page** (*not built*). *Checkpoint: Sima's ACLED
-  record goes in through the form with `provider` and `spatial`, is
-  promoted, and is found by a query for a country inside its region.*
+- **C. Form, index, find page** (*built*): the form's provider select
+  (licence and, at `0_raw`, creator prefilled from the entry; "not
+  listed" into the notes with a warning), the place select over the
+  whole M49 tree grouped by region, place note, notes, "also relevant"
+  domains, creator help by state; the index's `provider`, `spatial`
+  and `spatial_note` columns; the find page's Place filter and the
+  Ask filter's `place` key, both expanded through the hierarchy; the
+  dataset page's provider and place rows. *Checkpoint: a record with
+  `provider` and `spatial` goes in through the form, validates at
+  finalise against the lists in hand, and is found by a query for a
+  country inside its region (the test suite's `TestPlaces`); the live
+  check is Sima's ACLED deposit.*
 
 ## 7. Not done, deliberately
 

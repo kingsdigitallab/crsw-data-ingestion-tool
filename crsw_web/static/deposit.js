@@ -23,6 +23,19 @@
     }
     return el.value.trim();
   }
+  // Every chosen value of a multi-select or a checkbox group (r11:
+  // provider, places, the extra domains).
+  function vals(name) {
+    var out = [];
+    Array.prototype.forEach.call(form.querySelectorAll('[name="' + name + '"]'), function (el) {
+      if (el.tagName === "SELECT") {
+        Array.prototype.forEach.call(el.selectedOptions, function (o) { if (o.value) out.push(o.value); });
+      } else if (el.checked && el.value) {
+        out.push(el.value);
+      }
+    });
+    return out;
+  }
   function part(v, ph) { return v ? v : '<span class="ph">' + ph + "</span>"; }
   function updateSlip() {
     var ds = slug(val("dataset"));
@@ -51,6 +64,34 @@
   $("abstract").addEventListener("input", function () {
     var n = this.value.trim() ? this.value.trim().split(/\s+/).length : 0;
     $("wordcount").textContent = n + " word" + (n === 1 ? "" : "s");
+  });
+  // r11 §2.4: who the creator is depends on the state of the data.
+  var CREATOR_HINT = {
+    "0_raw": "For third-party data as received: the originating organisation, e.g. ACLED. Filled from the provider when one is chosen.",
+    "1_interim": "The Centre researcher or team responsible; the originator is reached through Derived from.",
+    "2_final": "The Centre researcher or team responsible; the originator is reached through Derived from."
+  };
+  function creatorHint() {
+    var h = $("creator-hint");
+    if (h) h.textContent = CREATOR_HINT[val("state")] || "Person or team intellectually responsible.";
+  }
+  form.addEventListener("change", function (ev) {
+    if (ev.target && ev.target.name === "state") creatorHint();
+  });
+  // r11 §3: a provider's entry carries the default rights statement
+  // and, for raw data, the originating organisation.
+  var providerSel = $("provider");
+  if (providerSel) providerSel.addEventListener("change", function () {
+    var first = providerSel.selectedOptions[0];
+    if (!first) return;
+    var lic = $("license"), cr = $("creator");
+    if (!lic.value && first.dataset.rights) {
+      lic.value = first.dataset.rights;
+      lic.closest(".field").querySelector(".hint").textContent = "From the provider's entry; edit it if your agreement differs.";
+    }
+    if (!cr.value && val("state") === "0_raw" && first.dataset.name) cr.value = first.dataset.name;
+    var hint = $("provider-hint");
+    if (hint && first.dataset.url) hint.textContent = first.dataset.name + ": " + first.dataset.url;
   });
 
   // ----- files --------------------------------------------------------
@@ -297,13 +338,21 @@
       var d = dest.defaults;
       [["version", "version"], ["abstract", "abstract"], ["license", "license"], ["creator", "creator"],
        ["coverage_start", "coverage_start"], ["coverage_end", "coverage_end"],
-       ["source_detail", "source_detail"]].forEach(function (pair) {
-        if (d[pair[1]] !== undefined) $(pair[0]).value = d[pair[1]];
+       ["source_detail", "source_detail"], ["spatial_note", "spatial_note"], ["notes", "notes"]].forEach(function (pair) {
+        if (d[pair[1]] !== undefined && $(pair[0])) $(pair[0]).value = d[pair[1]];
       });
-      // domain is a list, primary first (r11); the select holds the primary.
+      // domain is a list, primary first (r11); the select holds the
+      // primary and the boxes the rest.
       ["domain", "source_type"].forEach(function (id) {
         var want = Array.isArray(d[id]) ? d[id][0] : d[id];
         if (want !== undefined && Array.prototype.some.call($(id).options, function (o) { return o.value === want; })) $(id).value = want;
+      });
+      if (Array.isArray(d.domain)) {
+        form.querySelectorAll('input[name=domain_extra]').forEach(function (c) { c.checked = d.domain.indexOf(c.value) > 0; });
+      }
+      ["provider", "spatial"].forEach(function (id) {
+        var sel = $(id);
+        if (sel && Array.isArray(d[id])) Array.prototype.forEach.call(sel.options, function (o) { o.selected = d[id].indexOf(o.value) >= 0; });
       });
       if (d.subject) {
         form.querySelectorAll('input[name=subject]').forEach(function (c) { c.checked = d.subject.indexOf(c.value) >= 0; });
@@ -361,8 +410,13 @@
      "coverage_start", "coverage_end", "abstract", "license", "creator",
      "source_type", "source_detail", "derived_from", "provenance_activity",
      "provenance_tool", "provenance_repo", "provenance_commit",
-     "provenance_description"].forEach(function (k) { m[k] = val(k); });
+     "provenance_description", "provider_other", "spatial_note", "notes"
+    ].forEach(function (k) { m[k] = val(k); });
     m.subject = Array.prototype.map.call(form.querySelectorAll('input[name=subject]:checked'), function (c) { return c.value; });
+    // r11: domain is a list, primary first; provider and places are lists.
+    m.domain = [val("domain")].concat(vals("domain_extra")).filter(function (d, i, a) { return d && a.indexOf(d) === i; });
+    m.provider = vals("provider");
+    m.spatial = vals("spatial");
     if (destination.confirm()) m.confirm_existing = true;
     return m;
   }

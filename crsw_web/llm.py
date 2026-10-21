@@ -52,7 +52,7 @@ DEFAULT_FINGERPRINT_SECONDS = 300.0
 
 # The filter a question is turned into. Each value is checked against
 # the allowed set before it is used; anything else is dropped.
-FILTER_KEYS = ("strand", "state", "sensitivity", "subject", "project",
+FILTER_KEYS = ("strand", "state", "sensitivity", "subject", "project", "place",
                "words", "year_from", "year_to")
 
 FILTER_PROMPT = """You turn a researcher's question into search filters for a catalogue of datasets.
@@ -62,13 +62,23 @@ Reply with one JSON object and nothing else. Keys, all optional:
   "sensitivity": one of {sensitivities}
   "subject": one of the subject terms below
   "project": one of the project names below
+  "place": one of the place codes below
   "words": a short phrase (at most six words) to match in titles and abstracts
   "year_from", "year_to": four-digit years the data should cover
 Use a key only when the question clearly implies it. Do not invent values.
 Subject terms by facet; a term listed under another is a narrower kind of it, so name the broadest that fits:
 {subjects}
+Place codes (UN M49 regions and ISO countries); a place listed under another lies inside it, so name the broadest that fits:
+{places}
 Project names: {projects}
 Strands: rs1 origins and legacies of slavery, rs2 contemporary slavery and armed conflict, rs3 law and policy, rs4 culture and representation."""
+
+
+def _place_lines(places: Sequence[Dict]) -> str:
+    """The places as the chat model reads them: a place under another
+    indented two spaces more, the label in brackets."""
+    return "\n".join("  " * (int(p.get("depth") or 0) + 1) + p["code"]
+                     + " (%s)" % (p.get("label") or p["code"]) for p in places)
 
 def _subject_lines(subjects: Sequence[Dict]) -> str:
     """The vocabulary as the chat model reads it: a facet per block, a
@@ -278,17 +288,21 @@ class Platform:
 
     def filter_for(self, question: str, strands: Sequence[str], states: Sequence[str],
                    sensitivities: Sequence[str], subjects: Sequence[Dict],
-                   projects: Sequence[str]) -> Dict[str, str]:
+                   projects: Sequence[str], places: Sequence[Dict] = ()
+                   ) -> Dict[str, str]:
         """The filters a question implies, each value checked against the
         allowed set. `subjects` is the vocabulary as a tree, each term
         {facet, slug, depth, label, scope} in order (Catalogue.subject_tree);
         the model sees it indented with the scope notes and may answer
-        with any slug in it. {} when the model answers with nothing
-        usable: the caller then searches on the question's words alone."""
+        with any slug in it. `places` (r11) likewise, each {code, depth,
+        label, kind} (Catalogue.place_tree). {} when the model answers
+        with nothing usable: the caller then searches on the question's
+        words alone."""
         prompt = FILTER_PROMPT.format(
             strands=", ".join(strands), states=", ".join(states),
             sensitivities=", ".join(sensitivities),
             subjects=_subject_lines(subjects) or "(none)",
+            places=_place_lines(places) or "(none)",
             projects=", ".join(projects) or "(none)")
         body = self._post("/chat/completions", {
             "model": self.chat_model, "temperature": 0,
@@ -302,7 +316,8 @@ class Platform:
         allowed = {"strand": set(strands), "state": set(states),
                    "sensitivity": set(sensitivities),
                    "subject": {s["slug"] for s in subjects},
-                   "project": set(projects)}
+                   "project": set(projects),
+                   "place": {p["code"] for p in places}}
         out: Dict[str, str] = {}
         for k in FILTER_KEYS:
             v = raw.get(k)

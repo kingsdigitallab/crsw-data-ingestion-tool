@@ -295,6 +295,23 @@ fails, now says `embed_model_unresolved` and writes nothing rather than
 keying vectors to the bare alias, and a quiet run embeds datasets missing
 from the file (`embed_rows_missing`).
 
+*21 October, places and providers (r11):* a record's `spatial` is a list
+of UN M49 codes (`m49:419`, `iso:CO`) from `places.json`, read through
+the vocabulary's own fetch → cache → bundled chain, and the find page
+gains a Place filter that follows the hierarchy both ways
+(`places.expand_place`: a query for Colombia finds a dataset tagged with
+Latin America and the Caribbean or with the world, and a query for the
+Americas finds one tagged with a country inside it), with the count
+line saying so and `/datasets.json` carrying `place_filter` (asked,
+matched, how). The chat model is offered the places in use plus what
+contains them, indented like the subjects, and may answer with a
+`place` code. The index carries `provider`, `spatial` and
+`spatial_note` as recorded; expansion is query-time, as for subjects.
+The dataset page names the provider (linked to its URL from the
+vocabulary's `providers` block) and the places by label. The embedded
+text does not yet include the place note (every vector would be re-cut
+once); r11 §7 lists it as a follow-up.
+
 **Switches, so any part can be turned off without touching code.** Each
 function is off when its model name is blank (`CRSW_LLM_CHAT_MODEL`,
 `CRSW_LLM_EMBED_MODEL`, `CRSW_LLM_RERANK_MODEL`; `PROMOTER_LLM_EMBED_MODEL`),
