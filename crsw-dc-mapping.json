@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.6",
+  "schema_version": "0.7",
   "namespaces": {
     "dcterms": "http://purl.org/dc/terms/",
     "dcat": "http://www.w3.org/ns/dcat#",
@@ -18,7 +18,9 @@
     "modified":    {"term": "dcterms:modified"},
     "identifier":  {"term": "dcterms:identifier"},
     "language":    {"term": "dcterms:language"},
-    "spatial":     {"term": "dcterms:spatial"},
+    "spatial":     {"term": "dcterms:spatial", "note": "r11: a list of place codes (m49:NNN, iso:XX); labels and hierarchy from places.json in the vocabulary repo"},
+    "spatial_note": {"term": "crsw:spatialNote", "local": true, "note": "r11: free text for what the codes cannot say"},
+    "provider":    {"term": "crsw:provider", "local": true, "note": "r11: slugs from the vocabulary's providers list; the entry carries the stable URL and default rights"},
     "source_type": {"term": "dcterms:provenance", "note": "acquisition, not derivation"},
     "source_detail": {"term": "dcterms:provenance"},
     "derived_from":  {"term": "dcterms:source", "also": "prov:wasDerivedFrom", "note": "list of references (r8); a dataset reference renders as the parent's identifier (UUID when known), an external one as its url or citation"},
@@ -28,7 +30,7 @@
     "project":     {"term": "crsw:project", "local": true},
     "dataset":     {"term": "crsw:dataset", "local": true},
     "state":       {"term": "crsw:state", "local": true},
-    "domain":      {"term": "crsw:domain", "local": true},
+    "domain":      {"term": "crsw:domain", "local": true, "note": "r11: a list, primary first"},
     "version":     {"term": "crsw:version", "local": true},
     "steward":     {"term": "crsw:steward", "local": true},
     "schema_version":     {"term": "crsw:schemaVersion", "local": true},

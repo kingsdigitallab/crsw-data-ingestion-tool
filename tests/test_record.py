@@ -98,8 +98,26 @@ def _record(**overrides):
 
 class TestBuildRecord(unittest.TestCase):
     def test_schema_version_is_current(self):
-        self.assertEqual(_record()["schema_version"], "0.6")
+        self.assertEqual(_record()["schema_version"], "0.7")
         self.assertEqual(_record()["schema_version"], record.SCHEMA_VERSION)
+
+    def test_domain_is_a_list_primary_first(self):
+        # r11: a bare code (the CLI flag, a 0.6 meta) is wrapped.
+        self.assertEqual(_record()["domain"], ["quant"])
+        self.assertEqual(_record(domain=["geo", "quant"])["domain"], ["geo", "quant"])
+
+    def test_provider_spatial_and_note_placed(self):
+        rec = _record(provider=["acled"], spatial=["m49:419"], spatial_note="admin1",
+                      license="x", notes="n", ethics_ref="e")
+        order = list(rec)
+        self.assertLess(order.index("source_detail") if "source_detail" in rec
+                        else order.index("temporal"), order.index("provider"))
+        self.assertLess(order.index("provider"), order.index("license"))
+        self.assertLess(order.index("ethics_ref"), order.index("spatial"))
+        self.assertLess(order.index("spatial"), order.index("spatial_note"))
+        self.assertLess(order.index("spatial_note"), order.index("notes"))
+        self.assertIn("provider", record.RECOMMENDED_FIELDS)
+        self.assertIn("spatial_note", record.OPTIONAL_FIELDS)
 
     def test_field_order_record_shape(self):
         rec = _record(vocabulary_version="2026-07-23", creator="CSAC team")
@@ -242,6 +260,56 @@ class TestValidateRecord(unittest.TestCase):
         rec["licence"] = "CC-BY-4.0"
         self.assertTrue(any("license" in e for e in self._errors(rec)))
 
+    def test_domain_list_rules(self):
+        rec = _record(domain=["quant", "geo"])
+        self.assertEqual(self._errors(rec), [])
+        rec["domain"] = "quant"
+        self.assertTrue(any("the 0.6 form" in e for e in self._errors(rec)))
+        rec["domain"] = ["quant", "nope"]
+        self.assertTrue(any("domain 'nope' is not one of" in e for e in self._errors(rec)))
+        rec["domain"] = ["quant", "quant"]
+        self.assertTrue(any("repeats" in e for e in self._errors(rec)))
+        rec["domain"] = []
+        self.assertTrue(any("missing or empty" in e for e in self._errors(rec)))
+        rec["domain"] = [5]
+        self.assertTrue(any("list of domain codes" in e for e in self._errors(rec)))
+
+    def test_provider_checked_against_the_list_in_hand(self):
+        rec = _record(provider=["acled", "tah"])
+        errors, warnings = record.validate_record(rec, VOCAB_TERMS,
+                                                  provider_slugs=["acled", "tah"])
+        self.assertEqual((errors, warnings), ([], []))
+        errors, _ = record.validate_record(rec, VOCAB_TERMS, provider_slugs=["acled"])
+        self.assertTrue(any("provider 'tah' is not in the vocabulary's providers"
+                            in e for e in errors))
+        # No list in hand: the shape is checked, the slug is a warning.
+        errors, warnings = record.validate_record(rec, VOCAB_TERMS)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("could not be checked" in w for w in warnings))
+        rec["provider"] = "acled"
+        self.assertTrue(any("must be a list" in e for e in self._errors(rec)))
+        rec["provider"] = ["Not A Slug"]
+        self.assertTrue(any("lower-case" in e for e in self._errors(rec)))
+
+    def test_spatial_codes_checked_against_places_in_hand(self):
+        rec = _record(spatial=["m49:419", "iso:CO"], spatial_note="admin1 level")
+        errors, warnings = record.validate_record(
+            rec, VOCAB_TERMS, place_codes={"m49:419", "iso:CO"})
+        self.assertEqual((errors, warnings), ([], []))
+        errors, _ = record.validate_record(rec, VOCAB_TERMS, place_codes={"m49:419"})
+        self.assertTrue(any("'iso:CO' is not a place in places.json" in e for e in errors))
+        errors, warnings = record.validate_record(rec, VOCAB_TERMS)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("no places file" in w for w in warnings))
+        rec["spatial"] = ["Colombia"]
+        self.assertTrue(any("not a place code" in e for e in self._errors(rec)))
+        rec["spatial"] = "Colombia"
+        self.assertTrue(any("the 0.6 form" in e for e in self._errors(rec)))
+        rec["spatial"] = ["iso:CO"]
+        rec["spatial_note"] = ["x"]
+        self.assertTrue(any("'spatial_note' must be a string" in e
+                            for e in self._errors(rec)))
+
     def test_recommended_string_fields_must_be_strings(self):
         for field in ("creator", "source_detail", "license", "steward",
                       "notes", "ethics_ref"):
@@ -374,7 +442,7 @@ class TestParseRecord(unittest.TestCase):
             record.parse_record("[1, 2]")
 
     def test_unknown_schema_version_raises(self):
-        for version in ("0.3", "0.4", "0.7", None):
+        for version in ("0.3", "0.4", "0.8", None):
             rec = _record()
             rec["schema_version"] = version
             with self.assertRaises(record.RecordParseError):
@@ -384,16 +452,78 @@ class TestParseRecord(unittest.TestCase):
         rec = _record(source_type="derived")
         rec["schema_version"] = "0.5"
         rec["derived_from"] = "rs2/csac/amber/1_interim/csac-clean"
+        rec["domain"] = "quant"
         upgraded, flag = record.parse_record_with_status(json.dumps(rec))
         self.assertTrue(flag)
-        self.assertEqual(upgraded["schema_version"], "0.6")
+        # Two steps in one read: 0.5 -> 0.6 -> 0.7.
+        self.assertEqual(upgraded["schema_version"], "0.7")
         self.assertEqual(upgraded["derived_from"], [
             {"kind": "dataset", "identifier": "rs2/csac/amber/1_interim/csac-clean"}])
+        self.assertEqual(upgraded["domain"], ["quant"])
         # Field order survives: derived_from stays where 0.5 put it.
         self.assertEqual(list(upgraded).index("derived_from"),
                          list(rec).index("derived_from"))
         errors, _ = record.validate_record(upgraded, {"armed-conflict", "forced-labour"})
         self.assertEqual(errors, [])
+
+    # --- r11: 0.6 -> 0.7 ----------------------------------------------
+
+    def _06(self, **over):
+        rec = _record()
+        rec["schema_version"] = "0.6"
+        rec["domain"] = "quant"
+        rec.update(over)
+        return rec
+
+    def test_06_domain_string_is_wrapped_in_place(self):
+        rec = self._06()
+        upgraded, flag = record.parse_record_with_status(json.dumps(rec))
+        self.assertTrue(flag)
+        self.assertEqual((upgraded["schema_version"], upgraded["domain"]),
+                         ("0.7", ["quant"]))
+        self.assertEqual(list(upgraded), list(rec))
+        errors, _ = record.validate_record(upgraded, VOCAB_TERMS)
+        self.assertEqual(errors, [])
+
+    def test_06_spatial_string_moves_to_spatial_note(self):
+        rec = self._06(spatial="Latin America and the Caribbean, 50 countries")
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertNotIn("spatial", upgraded)
+        self.assertEqual(upgraded["spatial_note"],
+                         "Latin America and the Caribbean, 50 countries")
+        # It takes spatial's place, so the record keeps its order.
+        self.assertEqual(list(upgraded).index("spatial_note"), list(rec).index("spatial"))
+        self.assertEqual(record.validate_record(upgraded, VOCAB_TERMS)[0], [])
+
+    def test_06_spatial_string_joins_an_existing_note(self):
+        rec = self._06(spatial="Bosnia", spatial_note="pilot corpora")
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertEqual(upgraded["spatial_note"], "pilot corpora; Bosnia")
+        self.assertEqual(list(upgraded).count("spatial_note"), 1)
+
+    def test_06_spatial_coded_list_is_kept(self):
+        rec = self._06(spatial=["m49:419", "iso:TH"])
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertEqual(upgraded["spatial"], ["m49:419", "iso:TH"])
+        self.assertNotIn("spatial_note", upgraded)
+
+    def test_06_spatial_free_list_and_bbox_join_into_the_note(self):
+        rec = self._06(spatial=["Bosnia", "Sudan"])
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertEqual(upgraded["spatial_note"], "Bosnia; Sudan")
+        rec = self._06(spatial=[-10.5, 35, 40, 70])
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertEqual(upgraded["spatial_note"], "-10.5; 35; 40; 70")
+        rec = self._06(spatial="   ")
+        upgraded, _ = record.parse_record_with_status(json.dumps(rec))
+        self.assertNotIn("spatial", upgraded)
+        self.assertNotIn("spatial_note", upgraded)
+
+    def test_07_record_is_not_touched(self):
+        rec = _record(spatial=["m49:419"])
+        same, flag = record.parse_record_with_status(record.record_json(rec))
+        self.assertFalse(flag)
+        self.assertEqual(same, rec)
 
     def test_current_record_is_not_flagged_as_upgraded(self):
         rec = _record()
@@ -434,7 +564,10 @@ class TestRealCorpusUpgrade(unittest.TestCase):
             errors, _ = record.validate_record(
                 rec, vocab.all_terms(vocab_dict), vocab.domain_codes(vocab_dict))
             self.assertEqual(errors, [], path.name)
-            # Written back, it is a 0.6 record that re-reads as itself.
+            # r11: two steps in one read; the domain string is a list now.
+            self.assertEqual(rec["schema_version"], "0.7")
+            self.assertEqual(rec["domain"], [original["domain"]])
+            # Written back, it is a 0.7 record that re-reads as itself.
             again, flag = record.parse_record_with_status(record.record_json(rec))
             self.assertFalse(flag)
             self.assertEqual(again, rec)
@@ -661,7 +794,7 @@ class TestCategoryHistory(unittest.TestCase):
             "k1078591", self.NOW, vocab_terms, ["quant", "geo"],
             vocabulary_version="2026-10-01")
         self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
-        self.assertEqual(out["domain"], "geo")
+        self.assertEqual(out["domain"], ["geo"])
         self.assertEqual(out["modified"], self.NOW)
         self.assertEqual(out["vocabulary_version"], "2026-10-01")
         self.assertEqual([e["kind"] for e in entries],
@@ -678,6 +811,52 @@ class TestCategoryHistory(unittest.TestCase):
         self.assertEqual(list(out), list(r))  # build_record order, exactly
         errors, _ = record.validate_record(out, vocab_terms, ["quant", "geo"])
         self.assertEqual(errors, [])
+
+    def test_set_domain_as_a_list_primary_first(self):
+        r = self.rec(subject=["forced-labour"], domain=["quant"])
+        out, entries = record.apply_dataset_change(
+            r, {"set_domain": ["geo", "quant"]}, "k1", self.NOW, self.VOCAB,
+            ["quant", "geo"])
+        self.assertEqual(out["domain"], ["geo", "quant"])
+        self.assertEqual((entries[0]["kind"], entries[0]["from"], entries[0]["to"]),
+                         ("domain_changed", ["quant"], ["geo", "quant"]))
+        # The same list again is nothing to do; a repeat is refused.
+        self.assertEqual(record.apply_dataset_change(
+            out, {"set_domain": ["geo", "quant"]}, "k1", self.NOW, self.VOCAB,
+            ["quant", "geo"])[1], [])
+        with self.assertRaises(record.RecordChangeError):
+            record.apply_dataset_change(r, {"set_domain": ["geo", "geo"]}, "k1",
+                                        self.NOW, self.VOCAB, ["quant", "geo"])
+
+    def test_set_provider_and_spatial_are_checked(self):
+        r = self.rec(subject=["forced-labour"])
+        self.assertEqual((r["provider"], r["spatial"]), (["acled"], ["m49:419"]))
+        out, entries = record.apply_dataset_change(
+            r, {"set": {"provider": ["acled", "tah"], "spatial": ["iso:CO"],
+                        "spatial_note": "50 countries"}},
+            "k1", self.NOW, self.VOCAB, provider_slugs=["acled", "tah"],
+            place_codes={"m49:419", "iso:CO"})
+        self.assertEqual((out["provider"], out["spatial"], out["spatial_note"]),
+                         (["acled", "tah"], ["iso:CO"], "50 countries"))
+        self.assertEqual([e["field"] for e in entries],
+                         ["provider", "spatial", "spatial_note"])
+        self.assertEqual((entries[0]["from"], entries[1]["from"]),
+                         (["acled"], ["m49:419"]))
+        self.assertEqual(list(out), list(record._in_field_order(out)))
+        for change, fragment in [
+                ({"set": {"provider": ["nope"]}}, "not in the vocabulary's providers"),
+                ({"set": {"spatial": ["iso:ZZ"]}}, "not a place in places.json"),
+                ({"set": {"spatial": ["Colombia"]}}, "not a place code")]:
+            with self.assertRaises(record.RecordChangeError) as cm:
+                record.apply_dataset_change(r, change, "k1", self.NOW, self.VOCAB,
+                                            provider_slugs=["acled", "tah"],
+                                            place_codes={"m49:419", "iso:CO"})
+            self.assertIn(fragment, str(cm.exception))
+        # Without the lists in hand, the shape alone is checked.
+        out, _ = record.apply_dataset_change(
+            r, {"set": {"provider": ["nope"], "spatial": ["iso:ZZ"]}},
+            "k1", self.NOW, self.VOCAB)
+        self.assertEqual(out["provider"], ["nope"])
 
     def test_dataset_change_that_changes_nothing(self):
         r = self.rec(subject=["forced-labour"])
@@ -816,7 +995,7 @@ class TestCategoryHistory(unittest.TestCase):
                          [("removed", None), ("added", None), ("domain_changed", None),
                           ("field_set", "creator"), ("field_set", "steward")])
         self.assertEqual((out["domain"], out["steward"], out["creator"]),
-                         ("geo", "Doreen Boyd", "ACLED"))
+                         (["geo"], "Doreen Boyd", "ACLED"))
         self.assertEqual(list(out), list(r))
 
     def test_vocabulary_mapping_writes_history_by_vocabulary(self):

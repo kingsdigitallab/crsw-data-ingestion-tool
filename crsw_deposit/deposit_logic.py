@@ -61,11 +61,13 @@ def parse_provenance_file(text: str) -> Tuple[List[Dict], List[Dict]]:
     return provenance, refs
 
 # A "meta" dict is the validated interview/form result. Required keys:
-# strand, project, sensitivity, state, dataset, domain, version,
-# abstract, subject (list), coverage_start, coverage_end. Optional:
-# vocabulary_version, creator, source_type, source_detail, license,
+# strand, project, sensitivity, state, dataset, domain (a list, primary
+# first; a bare code is wrapped), version, abstract, subject (list),
+# coverage_start, coverage_end. Optional: vocabulary_version, creator,
+# source_type, source_detail, provider (list of slugs), license,
 # steward, derived_from (list of references), provenance (list of
-# activities).
+# activities), spatial (list of place codes), spatial_note, notes,
+# language, ethics_ref.
 
 
 def plan_keys(meta: Dict, members: List[str],
@@ -110,7 +112,14 @@ def dataset_uuid_for(existing: Optional[Dict], mint=record.mint_uuid) -> str:
 # Not derived_from: assemble_record keeps the existing list unless this
 # deposit supplies one (r8 §3), so a form must not echo it back.
 INHERITED_FIELDS = ("domain", "steward", "version", "subject", "abstract", "license",
-                    "source_type", "source_detail", "creator")
+                    "source_type", "source_detail", "creator", "provider",
+                    "spatial", "spatial_note", "notes")
+
+# r11: descriptive fields a deposit keeps from the existing record
+# unless it supplies its own, the derived_from rule (r8 §3) applied to
+# the rest of the optional tier.
+KEPT_UNLESS_SUPPLIED = ("provider", "spatial", "spatial_note", "notes",
+                        "language", "ethics_ref")
 
 
 def defaults_from_record(existing: Optional[Dict]) -> Dict:
@@ -169,7 +178,9 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
     - depositors accumulate, first-seen order, no repeats
     - provenance activities accumulate too: the existing list followed by
       whatever this deposit supplies (r8 §3, decided); derived_from is
-      this deposit's list if it supplies one, else the existing one
+      this deposit's list if it supplies one, else the existing one, and
+      so are provider, spatial, spatial_note, notes, language and
+      ethics_ref (r11): a re-deposit never silently drops them
     The result is NOT validated here: callers run record.validate_record
     with their vocabulary and treat errors as fatal before writing."""
     existing = existing or {}
@@ -177,6 +188,7 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
     provenance = list(existing.get("provenance") or []) + list(
         meta.get("provenance") or [])
     derived_from = meta.get("derived_from") or existing.get("derived_from")
+    kept = {name: meta.get(name) or existing.get(name) for name in KEPT_UNLESS_SUPPLIED}
     # r9: category history accumulates the same way (the promoter adds
     # entries when it maps a staged record's stale terms).
     category_history = list(existing.get("category_history") or []) + list(
@@ -202,11 +214,15 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         creator=meta.get("creator"),
         source_type=meta.get("source_type"),
         source_detail=meta.get("source_detail"),
+        provider=kept["provider"],
         license=meta.get("license"), steward=meta.get("steward"),
         depositors=record.append_depositor(
             existing.get("depositors"), depositor),
         derived_from=derived_from, provenance=provenance,
-        category_history=category_history)
+        category_history=category_history,
+        language=kept["language"], ethics_ref=kept["ethics_ref"],
+        spatial=kept["spatial"], spatial_note=kept["spatial_note"],
+        notes=kept["notes"])
     return rec, union, added, updated
 
 

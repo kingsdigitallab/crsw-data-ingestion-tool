@@ -23,7 +23,7 @@
     <dl>
       <dt>Subjects</dt><dd>{% for s in subjects %}<a href="/datasets?subject={{ s.slug }}"{% if s.scope %} title="{{ s.scope }}"{% endif %}>{% if s.label %}{{ s.label }} <code>{{ s.slug }}</code>{% else %}{{ s.slug }}{% endif %}</a>{% if not loop.last %}, {% endif %}{% endfor %}</dd>
       <dt>Coverage</dt><dd>{{ rec.temporal.start }} to {{ rec.temporal.end }}</dd>
-      <dt>Domain</dt><dd>{{ rec.domain }}{% if rec.steward %} (steward {{ rec.steward }}){% endif %}</dd>
+      <dt>Domain</dt><dd>{% if rec.domain is string %}{{ rec.domain }}{% else %}{{ rec.domain|join(', ') }}{% endif %}{% if rec.steward %} (steward {{ rec.steward }}){% endif %}</dd>
       <dt>Version</dt><dd>{{ rec.version }}</dd>
       {% if rec.creator %}<dt>Creator</dt><dd>{{ rec.creator }}</dd>{% endif %}
       {% if rec.license %}<dt>Licence</dt><dd>{{ rec.license }}</dd>{% endif %}

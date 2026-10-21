@@ -33,14 +33,15 @@ PARQUET_NAME = "datasets.parquet"
 # provenance are kept whole as JSON text so the schema stays flat.
 COLUMNS = (
     "identifier", "dataset_uuid", "strand", "project", "sensitivity", "state",
-    "dataset", "domain", "abstract", "subject", "temporal_start", "temporal_end",
-    "version", "creator", "license", "source_type", "source_detail", "steward",
-    "depositor", "depositors", "created", "modified", "files", "bytes",
+    "dataset", "domain", "domains", "abstract", "subject", "temporal_start",
+    "temporal_end", "version", "creator", "license", "source_type", "source_detail",
+    "steward", "depositor", "depositors", "created", "modified", "files", "bytes",
     "schema_version", "vocabulary_version", "derived_from",
     "derived_from_identifiers", "provenance", "provenance_tools", "origin",
     "record_key", "indexed_at",
 )
-LIST_COLUMNS = ("subject", "depositors", "derived_from_identifiers", "provenance_tools")
+LIST_COLUMNS = ("domains", "subject", "depositors", "derived_from_identifiers",
+                "provenance_tools")
 INT_COLUMNS = ("files", "bytes")
 
 
@@ -66,6 +67,9 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
     files = [f for f in (rec.get("files") or []) if isinstance(f, dict)]
     start, end = record.temporal_pair(rec.get("temporal"))
     refs = rec.get("derived_from") if isinstance(rec.get("derived_from"), list) else []
+    # r11: `domain` stays the primary code, which every reader of the index
+    # expects as a string; `domains` is the whole list.
+    domains = record.domain_list(rec.get("domain"))
     acts = rec.get("provenance") if isinstance(rec.get("provenance"), list) else []
     tools = []
     for a in acts:
@@ -77,7 +81,8 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
         "dataset_uuid": rec.get("dataset_uuid"),
         "strand": rec.get("strand"), "project": rec.get("project"),
         "sensitivity": rec.get("sensitivity"), "state": rec.get("state"),
-        "dataset": rec.get("dataset"), "domain": rec.get("domain"),
+        "dataset": rec.get("dataset"),
+        "domain": domains[0] if domains else None, "domains": domains,
         "abstract": rec.get("abstract"),
         "subject": list(rec.get("subject") or []),
         "temporal_start": start, "temporal_end": end,

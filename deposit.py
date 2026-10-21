@@ -1129,31 +1129,35 @@ def prompt_metadata(args, vocab_dict: Dict, list_dirs=None,
     # What a re-deposit inherits: one rule, shared with the web form.
     inherited = deposit_logic.defaults_from_record(existing)
 
+    # r11: domain is a list, primary first. --domain names the primary;
+    # an existing record's other domains ride along behind it.
     domain_entries = vocab.domains(vocab_dict)
     codes = [d["code"] for d in domain_entries]
+    inherited_domains = [d for d in record.domain_list(inherited.get("domain"))
+                         if d in codes]
     if args.domain:
         if args.domain not in codes:
             raise ValueError("domain %r is not one of: %s"
                              % (args.domain, ", ".join(codes)))
-        if (existing and existing.get("domain")
-                and existing["domain"] != args.domain):
+        if inherited_domains and inherited_domains[0] != args.domain:
             warn("--domain %s differs from the existing record's %s - "
-                 "using %s." % (args.domain, existing["domain"], args.domain))
-        meta["domain"] = args.domain
-    elif inherited.get("domain") in codes:
-        meta["domain"] = inherited["domain"]
+                 "using %s." % (args.domain, inherited_domains[0], args.domain))
+        meta["domain"] = [args.domain] + [d for d in inherited_domains
+                                          if d != args.domain]
+    elif inherited_domains:
+        meta["domain"] = inherited_domains
     else:
-        meta["domain"] = ask_select(
+        meta["domain"] = [ask_select(
             "Domain", [(str(i), d["code"], d["label"])
-                       for i, d in enumerate(domain_entries, 1)])
+                       for i, d in enumerate(domain_entries, 1)])]
     if inherited.get("steward"):
         meta["steward"] = inherited["steward"]
     else:
-        chosen = next(d for d in domain_entries if d["code"] == meta["domain"])
+        chosen = next(d for d in domain_entries if d["code"] == meta["domain"][0])
         if chosen["steward"] and chosen["steward"] != "TBC":
             meta["steward"] = chosen["steward"]
             say("Steward: %s (from domain %s)"
-                % (chosen["steward"], meta["domain"]))
+                % (chosen["steward"], meta["domain"][0]))
 
     default_version = inherited.get("version") or "1-0"
     while True:
@@ -1479,10 +1483,14 @@ def perform_deposits(rclone, args, plans, meta, entries, existing,
             rec, union, added, updated = deposit_logic.assemble_record(
                 meta, existing, entries, depositor,
                 now=record.utc_now_iso(), dataset_uuid=dataset_uuid)
+            # r11: provider slugs against the vocabulary in hand; the CLI
+            # never loads places, so a re-deposit's spatial codes get the
+            # shape check and a warning.
             errors, _ = record.validate_record(
                 rec, vocab.all_terms(vocab_dict),
                 vocab.domain_codes(vocab_dict),
-                vocab.activity_codes(vocab_dict))
+                vocab.activity_codes(vocab_dict),
+                provider_slugs=vocab.provider_slugs(vocab_dict))
             if errors:
                 raise transfer.TransferError("record_invalid",
                                              "; ".join(errors))

@@ -76,6 +76,38 @@ Other spellings (`aliases`) are slugs people type for a term, such as
 the term and says so; they are never stored in a record or shown as
 terms, and one may not be a current term's slug.
 
+## Providers
+
+`providers` lists the organisations whose data the Centre deposits
+(r11 §3): one entry per provider with a `slug` (what a dataset record's
+`provider` field carries), a `name`, the stable `url`, the default
+`rights` statement a deposit from that provider starts with, and an
+optional `notes`. A provider that is not listed cannot be named in a
+record: the deposit form writes it into the notes with a warning, which
+is the prompt to add it here. Adding or editing a provider is an
+ordinary pull request; it has no change entry because it touches no
+term and no record.
+
+## Places
+
+`places.json` is the UN M49 geoscheme as a hierarchy: the world,
+regions, subregions, intermediate regions (`m49:NNN`) and every
+country or area (`iso:XX`, ISO 3166 alpha-2), each with a `broader`
+parent. A dataset record's `spatial` field holds these codes; the
+deposit tool, the form and the find page read the file through the
+same fetch → cache → bundled chain as `vocab.json`. It is **generated,
+never edited by hand**: download the CSV from
+https://unstats.un.org/unsd/methodology/m49/overview/ and run
+
+```
+python scripts/make_places.py UNSD_M49.csv places.json --version 2026-10-21
+```
+
+M49 and ISO 3166 follow UN member positions (Kosovo, Taiwan, Western
+Sahara, Palestine). The scheme is used as published; a dataset whose
+coverage needs a place the scheme does not name records the nearest
+code in `spatial` and says so in `spatial_note`.
+
 ## The file, briefly
 
 ```json
@@ -83,6 +115,10 @@ terms, and one may not be a current term's slug.
   "vocabulary_version": "2026-10-01",
   "domains": [...],
   "activities": [...],
+  "providers": [
+    {"slug": "acled", "name": "Armed Conflict Location & Event Data (ACLED)",
+     "url": "https://acleddata.com/", "rights": "ACLED terms of use; attribution required; ..."}
+  ],
   "terms": [
     {"slug": "forced-labour", "facet": "practices", "label": "Forced labour",
      "status": "current", "since": "2026-07-23",

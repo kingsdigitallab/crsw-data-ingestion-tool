@@ -53,15 +53,16 @@ def _valid(vocab_dict) -> bool:
             and all(isinstance(v, list) for v in vocab_dict["facets"].values()))
 
 
-def _write_cache(cache: Path, raw: bytes) -> None:
-    """Best-effort atomic cache write; failure to cache is never fatal."""
+def _write_cache(cache: Path, raw: bytes, name: str = "vocab.json") -> None:
+    """Best-effort atomic cache write; failure to cache is never fatal.
+    `places.json` (r11) is cached beside the vocabulary the same way."""
     try:
         cache.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(cache), suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(raw)
-            os.replace(tmp, str(cache / "vocab.json"))
+            os.replace(tmp, str(cache / name))
         except Exception:
             os.unlink(tmp)
             raise
@@ -148,3 +149,21 @@ def activities(vocab_dict: dict) -> List[dict]:
 
 def activity_codes(vocab_dict: dict) -> List[str]:
     return [a["code"] for a in activities(vocab_dict)]
+
+
+def providers(vocab_dict: dict) -> List[dict]:
+    """Data provider entries (r11 §3): slug, name, url, rights, notes,
+    the optional ones "" when absent. No built-in fallback: an empty
+    list means the vocabulary in hand has no providers section, and
+    validation then warns rather than refuses an unknown slug."""
+    entries = []
+    for p in vocab_dict.get("providers") or []:
+        if isinstance(p, dict) and isinstance(p.get("slug"), str) and p["slug"]:
+            entries.append({"slug": p["slug"], "name": p.get("name") or p["slug"],
+                            "url": p.get("url") or "", "rights": p.get("rights") or "",
+                            "notes": p.get("notes") or ""})
+    return entries
+
+
+def provider_slugs(vocab_dict: dict) -> List[str]:
+    return [p["slug"] for p in providers(vocab_dict)]

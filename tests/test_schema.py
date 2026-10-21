@@ -29,7 +29,7 @@ def worked_example() -> dict:
     return record.build_record(
         dataset_uuid="8f14e45f-ceea-467f-a34e-9db1c153f0a1",
         identifier="rs2/csac/green/2_final/csac-clean",
-        strand="rs2", domain="quant", project="csac", dataset="csac-clean",
+        strand="rs2", domain=["quant"], project="csac", dataset="csac-clean",
         state="2_final", sensitivity="green",
         temporal=record.temporal_object("1989", "2025-12-31"),
         version="3-0",
@@ -39,6 +39,7 @@ def worked_example() -> dict:
         creator="CSAC coding team",
         source_type="archive",
         source_detail="CSAC coding project, University of Nottingham",
+        provider=["acled"],
         license="CC-BY-4.0", steward="Kevin Fahey",
         depositors=["njakeman"],
         created="2026-07-29T10:15:00Z", modified="2026-07-29T10:15:00Z",
@@ -49,6 +50,7 @@ def worked_example() -> dict:
                            "to": ["forced-labour"],
                            "reason": "vocabulary change dated 2026-09-01",
                            "vocabulary_version": "2026-09-01"}],
+        spatial=["m49:419"], spatial_note="50 countries, admin1 level",
         files=[
             record.manifest_entry("csac-clean-2025.csv", "e3" * 32,
                                   48211023, fmt="text/csv"),
@@ -217,6 +219,12 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
              "to": ["x"]}]}),
         ("license not a string", {"license": 5}),
         ("bad source type", {"source_type": "magic"}),
+        ("empty domain", {"domain": []}),
+        ("domain not strings", {"domain": [5]}),
+        ("bad spatial code", {"spatial": ["Colombia"]}),
+        ("provider not a list", {"provider": "acled"}),
+        ("provider not a slug", {"provider": ["Not A Slug"]}),
+        ("spatial_note not a string", {"spatial_note": ["x"]}),
     )
 
     def test_schema_invalid_is_runtime_invalid(self):

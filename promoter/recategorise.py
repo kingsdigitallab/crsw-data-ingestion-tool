@@ -63,9 +63,14 @@ def load_change_file(text: str) -> List[Dict]:
             if v is not None and not (isinstance(v, list)
                                       and all(isinstance(s, str) and s for s in v)):
                 raise ChangeFileError("%s: %s must be a list of terms" % (label, k))
-        if "set_domain" in c and not (isinstance(c["set_domain"], str)
-                                      and c["set_domain"]):
-            raise ChangeFileError("%s: set_domain must be a domain code" % label)
+        if "set_domain" in c:
+            sd = c["set_domain"]
+            ok = ((isinstance(sd, str) and sd)
+                  or (isinstance(sd, list) and sd
+                      and all(isinstance(d, str) and d for d in sd)))
+            if not ok:
+                raise ChangeFileError("%s: set_domain must be a domain code, or a "
+                                      "list of codes primary first" % label)
         if "set" in c:
             sets = c["set"]
             if not isinstance(sets, dict) or not sets:
@@ -127,10 +132,13 @@ def _matches(change: Dict, rec: Dict) -> bool:
 
 
 def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
-         who: str, now: str, only: Optional[str] = None) -> Plan:
+         who: str, now: str, only: Optional[str] = None,
+         provider_slugs: Optional[List[str]] = None,
+         place_codes: Optional[Set[str]] = None) -> Plan:
     """What every record in place would become. `only` limits the walk
     to one dataset (identifier or uuid). Change-file entries that match
-    no dataset are problems on the plan."""
+    no dataset are problems on the plan. `provider_slugs` and
+    `place_codes` (r11) check a `set` of provider or spatial."""
     out = Plan()
     terms = vocab.all_terms(vocab_doc)
     codes = vocab.domain_codes(vocab_doc)
@@ -162,14 +170,17 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
             used[i] = True
             try:
                 after, more = record.apply_dataset_change(
-                    after, c, who, now, terms, codes, vocabulary_version=version)
+                    after, c, who, now, terms, codes, vocabulary_version=version,
+                    provider_slugs=provider_slugs, place_codes=place_codes)
             except record.RecordChangeError as e:
                 item.problems.append("change for %s: %s" % (c["dataset"], e))
                 continue
             entries.extend(more)
         item.after, item.entries = after, entries
         if entries:
-            errors, _ = record.validate_record(after, terms, codes)
+            errors, _ = record.validate_record(after, terms, codes,
+                                               provider_slugs=provider_slugs,
+                                               place_codes=place_codes)
             for e in errors:
                 item.problems.append("would leave the record invalid: %s" % e)
         out.items.append(item)

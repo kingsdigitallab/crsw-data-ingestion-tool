@@ -52,11 +52,15 @@ def _sha256_of_object(client, bucket, key) -> str:
 def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
           vocab_terms: Set[str], domain_codes: List[str],
           verify_checksums: bool = True,
-          vocab_doc: Optional[Dict] = None) -> Report:
+          vocab_doc: Optional[Dict] = None,
+          provider_slugs: Optional[List[str]] = None,
+          place_codes: Optional[Set[str]] = None) -> Report:
     """`vocab_doc`, when given, is the whole vocabulary (r9 authority
     file): a staged record whose subject terms have since been renamed,
     merged or retired is mapped and promoted with the mapping in its
-    history; one whose term was split needs a person and is refused."""
+    history; one whose term was split needs a person and is refused.
+    `provider_slugs` and `place_codes` (r11) are the lists the record's
+    provider and spatial are checked against."""
     rep = Report()
     client, bucket = store.client, store.bucket
     p = rep.problems
@@ -127,7 +131,8 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
     if staged_rec:
         errors, _ = record.validate_record(
             staged_rec, vocab_terms, domain_codes,
-            vocab.activity_codes(vocab_doc) if vocab_doc else None)
+            vocab.activity_codes(vocab_doc) if vocab_doc else None,
+            provider_slugs=provider_slugs, place_codes=place_codes)
         for e in errors:
             p.append("staged record invalid: %s" % e)
         if staged_rec.get("identifier") != dep.prefix:

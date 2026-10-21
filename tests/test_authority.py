@@ -72,6 +72,36 @@ class TestValidate(unittest.TestCase):
         d = small(); d["vocabulary_version"] = "v1"
         self.assertRefused(d, "vocabulary_version")
 
+    def test_providers_block_is_validated(self):
+        d = small(); d["providers"] = [{"slug": "acled", "name": "ACLED",
+                                       "url": "https://acleddata.com/",
+                                       "rights": "ACLED terms"}]
+        self.assertEqual(authority.validate_authority(d), [])
+        self.assertEqual(list(authority.providers_of(d)), ["acled"])
+        d = small(); d["providers"] = "acled"
+        self.assertRefused(d, "providers must be a list")
+        d = small(); d["providers"] = [{"slug": "ACLED", "name": "x"}]
+        self.assertRefused(d, "lower-case")
+        d = small(); d["providers"] = [{"slug": "acled"}]
+        self.assertRefused(d, "name is missing")
+        d = small(); d["providers"] = [{"slug": "acled", "name": "x"},
+                                       {"slug": "acled", "name": "y"}]
+        self.assertRefused(d, "appears twice")
+        d = small(); d["providers"] = [{"slug": "acled", "name": "x", "url": "acleddata.com"}]
+        self.assertRefused(d, "url must start")
+        d = small(); d["providers"] = [{"slug": "acled", "name": "x", "rights": 5}]
+        self.assertRefused(d, "rights must be a string")
+        bundled = json.loads(vocab.bundled_vocab_path().read_text(encoding="utf-8"))
+        self.assertIn("acled", authority.providers_of(bundled))
+
+    def test_dump_keeps_providers_in_place(self):
+        d = small(); d["domains"] = [{"code": "quant", "label": "Q", "steward": "K"}]
+        d["providers"] = [{"slug": "acled", "name": "ACLED"}]
+        text = authority.dump_authority(d)
+        self.assertLess(text.index('"domains"'), text.index('"providers"'))
+        self.assertLess(text.index('"providers"'), text.index('"terms"'))
+        self.assertEqual(json.loads(text)["providers"], d["providers"])
+
     def test_change_rules(self):
         d = small(); d["changes"] = [change("merge", **{"from": ["x"], "to": ["forced-labour"]})]
         self.assertRefused(d, "unknown term")

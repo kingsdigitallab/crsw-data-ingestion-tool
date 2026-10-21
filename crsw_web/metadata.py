@@ -78,13 +78,18 @@ def validate_meta(form: Dict, vocab_dict: Dict
                              "%r would be stored as %r" % (raw, slug))
         meta[field] = slug
 
+    # r11: domain is a list, primary first; the form may post one code or
+    # several (repeats collapse, order kept). The first sets the steward.
     domains = vocab.domains(vocab_dict)
     codes = [d["code"] for d in domains]
-    domain = _text(form, "domain")
-    if domain not in codes:
+    domain: List[str] = []
+    for d in _list(form, "domain"):
+        if d not in domain:
+            domain.append(d)
+    if not domain or any(d not in codes for d in domain):
         errors["domain"] = "choose one of %s" % ", ".join(codes)
     else:
-        chosen = next(d for d in domains if d["code"] == domain)
+        chosen = next(d for d in domains if d["code"] == domain[0])
         steward = _text(form, "steward")
         if not steward and chosen["steward"] and chosen["steward"] != "TBC":
             steward = chosen["steward"]

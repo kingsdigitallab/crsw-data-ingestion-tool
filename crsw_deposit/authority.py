@@ -80,6 +80,12 @@ def aliases_of(doc: dict) -> Dict[str, str]:
     return out
 
 
+def providers_of(doc: dict) -> Dict[str, dict]:
+    """slug -> provider entry (r11 §3), for the entries that have a slug."""
+    return {p["slug"]: p for p in doc.get("providers") or []
+            if isinstance(p, dict) and isinstance(p.get("slug"), str)}
+
+
 def facet_order(doc: dict) -> List[str]:
     """Facet names in file order: the `facets` block's order when there
     is one, else first appearance in `terms`."""
@@ -317,6 +323,44 @@ def validate_authority(doc) -> List[str]:
                     errors.append("facets is missing %s" % name)
 
     errors.extend(_validate_changes(doc, by_slug))
+    errors.extend(_validate_providers(doc))
+    return errors
+
+
+def _validate_providers(doc: dict) -> List[str]:
+    """r11 §3: `providers`, when present, is a list of entries with a
+    unique slug and a name; url, rights and notes are optional text."""
+    errors = []
+    if "providers" not in doc:
+        return errors
+    providers = doc["providers"]
+    if not isinstance(providers, list):
+        return ["providers must be a list"]
+    seen = set()
+    for i, p in enumerate(providers):
+        label = "providers[%d]" % (i + 1)
+        if not isinstance(p, dict):
+            errors.append("%s is not an object" % label)
+            continue
+        slug = p.get("slug")
+        if not isinstance(slug, str) or not SLUG_RE.match(slug):
+            errors.append("%s: slug %r is not lower-case words joined by hyphens"
+                          % (label, slug))
+            continue
+        label = "provider %s" % slug
+        if slug in seen:
+            errors.append("%s appears twice" % label)
+            continue
+        seen.add(slug)
+        if not isinstance(p.get("name"), str) or not p["name"].strip():
+            errors.append("%s: name is missing" % label)
+        for field in ("url", "rights", "notes"):
+            value = p.get(field)
+            if value is not None and not isinstance(value, str):
+                errors.append("%s: %s must be a string" % (label, field))
+        url = p.get("url")
+        if isinstance(url, str) and url and not url.startswith(("http://", "https://")):
+            errors.append("%s: url must start with http:// or https://" % label)
     return errors
 
 
@@ -620,7 +664,7 @@ def dump_authority(doc: dict) -> str:
             for i, item in enumerate(items)] + ["  ],"]
 
     lines = ["{", '  "vocabulary_version": %s,' % json.dumps(doc["vocabulary_version"])]
-    for key in ("domains", "activities"):
+    for key in ("domains", "activities", "providers"):
         if key in doc:
             lines += block(key, doc[key])
     lines += block("terms", doc["terms"])

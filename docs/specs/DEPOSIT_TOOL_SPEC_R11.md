@@ -242,12 +242,17 @@ Stop at each and wait for review.
   *Checkpoint: a change file with `set` rewrites a record with
   `field_set` history and fresh labels, a second run writes nothing, a
   bad file is exit 2, `--dry-run` output unchanged.*
-- **B. The record at 0.7** (*not built*): schema 0.7, `upgrade_record`,
+- **B. The record at 0.7** (*built*): schema 0.7, `upgrade_record`,
   `domain` list, `provider`, `spatial`/`spatial_note`, `providers` in
-  the vocabulary, `places.py` and the bundled `places.json`, the
-  minimum in every caller to stay green. *Checkpoint: the 0.5 fixtures
-  upgrade two steps and validate; the one live record stays valid
-  unrewritten; the index writes.*
+  the vocabulary, `places.py` and the bundled `places.json` (278
+  places from the UNSD table of 21 October 2026), the minimum in every
+  caller to stay green: the CLI's `--domain` names the primary, the
+  form posts one or several codes, the promoter loads places and
+  checks both lists, the index keeps `domain` as the primary and adds
+  `domains`, a re-deposit keeps the optional fields it is not given.
+  *Checkpoint: the 0.5 fixtures upgrade two steps and validate; a 0.6
+  record in place stays as it is until a change touches it; the index
+  writes.*
 - **C. Form, index, find page** (*not built*). *Checkpoint: Sima's ACLED
   record goes in through the form with `provider` and `spatial`, is
   promoted, and is found by a query for a country inside its region.*

@@ -14,13 +14,16 @@ import uuid
 from typing import List, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
+from . import authority
 from . import keys
 
 # Every tool writes SCHEMA_VERSION. parse_record also reads the older
 # versions in ACCEPTED_SCHEMA_VERSIONS and upgrades them on the way in
-# (r8 §5): nobody converts a record by hand.
-SCHEMA_VERSION = "0.6"
-ACCEPTED_SCHEMA_VERSIONS = ("0.5", "0.6")
+# (r8 §5): nobody converts a record by hand. 0.7 (r11 §2): `domain` is
+# a list, primary first; `provider` (slugs) and `spatial_note` are new;
+# `spatial` is a list of place codes.
+SCHEMA_VERSION = "0.7"
+ACCEPTED_SCHEMA_VERSIONS = ("0.5", "0.6", "0.7")
 
 REQUIRED_FIELDS = (
     "schema_version", "dataset_uuid", "identifier", "strand", "domain",
@@ -29,10 +32,14 @@ REQUIRED_FIELDS = (
 )
 RECOMMENDED_FIELDS = (
     "vocabulary_version", "creator", "source_type", "source_detail",
-    "license", "steward", "depositors",
+    "provider", "license", "steward", "depositors",
 )
 OPTIONAL_FIELDS = ("derived_from", "provenance", "category_history",
-                   "language", "ethics_ref", "spatial", "notes")
+                   "language", "ethics_ref", "spatial", "spatial_note", "notes")
+
+# r11 §4: a place code in `spatial`: a UN M49 node or an ISO 3166
+# alpha-2 country. The hierarchy itself is places.json (crsw_deposit.places).
+PLACE_CODE_RE = re.compile(r"^(m49:[0-9]{3}|iso:[A-Z]{2})$")
 
 MANIFEST_REQUIRED = ("path", "checksum_sha256", "bytes")
 MANIFEST_OPTIONAL = ("temporal", "format", "derived_from", "notes")
@@ -68,8 +75,9 @@ SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
 # changes only through a new deposit.
 SETTABLE_FIELDS = (
     ("creator", "text"), ("source_type", "source_type"),
-    ("source_detail", "text"), ("license", "text"), ("steward", "text"),
-    ("language", "list"), ("ethics_ref", "text"), ("notes", "text"),
+    ("source_detail", "text"), ("provider", "provider"), ("license", "text"),
+    ("steward", "text"), ("language", "list"), ("ethics_ref", "text"),
+    ("spatial", "place"), ("spatial_note", "text"), ("notes", "text"),
 )
 
 _VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
@@ -520,7 +528,57 @@ def history_entry(when: str, by: str, kind: str, frm=None, to=None,
     return entry
 
 
-def field_set_error(field: str, value) -> Optional[str]:
+def provider_errors(value, provider_slugs: Optional[List[str]] = None,
+                    label: str = "provider") -> Tuple[List[str], List[str]]:
+    """(errors, warnings) for a `provider` value (r11 §2.2): a list of
+    slugs; with a providers list in hand an unknown slug is an error,
+    without one it is a warning that it could not be checked."""
+    if not (isinstance(value, list) and all(isinstance(s, str) for s in value)):
+        return ["%s must be a list of provider slugs" % label], []
+    errors = []
+    for s in value:
+        if not authority.SLUG_RE.match(s):
+            errors.append("%s %r is not lower-case words joined by hyphens" % (label, s))
+    if errors:
+        return errors, []
+    if provider_slugs:
+        for s in value:
+            if s not in provider_slugs:
+                errors.append("%s %r is not in the vocabulary's providers list; to "
+                              "propose an addition, open an issue on the "
+                              "vocabulary repo" % (label, s))
+        return errors, []
+    if value:
+        return [], ["%s could not be checked: the vocabulary in hand has no "
+                    "providers list" % label]
+    return [], []
+
+
+def place_errors(value, place_codes: Optional[Set[str]] = None,
+                 label: str = "spatial") -> Tuple[List[str], List[str]]:
+    """(errors, warnings) for a `spatial` value (r11 §2.3): a list of
+    place codes (`m49:NNN` or `iso:XX`); with places in hand an unknown
+    code is an error, without them a warning."""
+    if isinstance(value, str):
+        return ["%s is a string (the 0.6 form); records read through "
+                "parse_record are upgraded to a list of place codes" % label], []
+    if not (isinstance(value, list) and all(isinstance(s, str) for s in value)):
+        return ["%s must be a list of place codes like m49:419 or iso:CO" % label], []
+    errors = [("%s %r is not a place code like m49:419 or iso:CO" % (label, s))
+              for s in value if not PLACE_CODE_RE.match(s)]
+    if errors:
+        return errors, []
+    if place_codes:
+        return [("%s %r is not a place in places.json" % (label, s))
+                for s in value if s not in place_codes], []
+    if value:
+        return [], ["%s could not be checked: no places file in hand" % label]
+    return [], []
+
+
+def field_set_error(field: str, value,
+                    provider_slugs: Optional[List[str]] = None,
+                    place_codes: Optional[Set[str]] = None) -> Optional[str]:
     """Why one `set` pair cannot be applied, or None. `None` as the value
     clears the field. Shared by the change-file reader (so a bad file is
     refused before any record is read) and apply_dataset_change."""
@@ -532,16 +590,32 @@ def field_set_error(field: str, value) -> Optional[str]:
     if value is None:
         return None
     kind = kinds[field]
-    if kind == "list":
+    if kind in ("list", "provider", "place"):
         if not (isinstance(value, list) and value
                 and all(isinstance(s, str) and s.strip() for s in value)):
             return "%s must be a list of non-empty strings, or null to clear it" % field
-        return None
+        if kind == "provider":
+            errors, _ = provider_errors(value, provider_slugs)
+        elif kind == "place":
+            errors, _ = place_errors(value, place_codes)
+        else:
+            errors = []
+        return errors[0] if errors else None
     if not isinstance(value, str) or not value.strip():
         return "%s must be text, or null to clear it" % field
     if kind == "source_type" and value not in SOURCE_TYPES:
         return "source_type %r is not one of %s" % (value, "/".join(SOURCE_TYPES))
     return None
+
+
+def domain_list(value) -> List[str]:
+    """A record's or interview's domain as the 0.7 list: a bare code
+    (0.6, or a flag) becomes a one-element list; None becomes []."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [d for d in value]
 
 
 def _as_list(value) -> Optional[List[str]]:
@@ -553,18 +627,20 @@ def _as_list(value) -> Optional[List[str]]:
 def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
                          vocab_terms: Set[str],
                          domain_codes: Optional[List[str]] = None,
-                         vocabulary_version: Optional[str] = None
+                         vocabulary_version: Optional[str] = None,
+                         provider_slugs: Optional[List[str]] = None,
+                         place_codes: Optional[Set[str]] = None
                          ) -> Tuple[dict, List[dict]]:
     """One steward decision about one dataset (r9 §4, r11 §1): `change`
-    may carry `add` and `remove` (subject terms), `set_domain`, `set`
-    (descriptive fields, see SETTABLE_FIELDS; a null value clears) and
-    `reason`. Returns (new record, the history entries appended).
-    Unknown terms, unknown domains, removing a term the record does not
-    have, leaving no subject at all, or setting a field that cannot be
-    set this way raise RecordChangeError; the input record is untouched.
-    `modified` moves to `now`; `vocabulary_version` is stamped when
-    given. A change that changes nothing returns the record as it was
-    and no entries."""
+    may carry `add` and `remove` (subject terms), `set_domain` (a code
+    or a list, primary first), `set` (descriptive fields, see
+    SETTABLE_FIELDS; a null value clears) and `reason`. Returns (new
+    record, the history entries appended). Unknown terms, unknown
+    domains, removing a term the record does not have, leaving no
+    subject at all, or setting a field that cannot be set this way raise
+    RecordChangeError; the input record is untouched. `modified` moves
+    to `now`; `vocabulary_version` is stamped when given. A change that
+    changes nothing returns the record as it was and no entries."""
     add = [s for s in (change.get("add") or [])]
     remove = [s for s in (change.get("remove") or [])]
     domain = change.get("set_domain")
@@ -578,13 +654,18 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
     if missing:
         raise RecordChangeError("not on this record, so cannot be removed: %s"
                                 % ", ".join(missing))
+    domains = None
     if domain is not None:
         codes = list(domain_codes) if domain_codes else list(keys.DOMAINS)
-        if domain not in codes:
+        domains = domain_list(domain)
+        bad = [d for d in domains if d not in codes]
+        if bad or not domains:
             raise RecordChangeError("domain %r is not one of %s"
-                                    % (domain, "/".join(codes)))
+                                    % (bad[0] if bad else domain, "/".join(codes)))
+        if len(set(domains)) != len(domains):
+            raise RecordChangeError("set_domain repeats a code: %r" % (domain,))
     for field, value in sets.items():
-        err = field_set_error(field, value)
+        err = field_set_error(field, value, provider_slugs, place_codes)
         if err:
             raise RecordChangeError(err)
     new_subjects = [s for s in subjects if s not in remove]
@@ -605,9 +686,10 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
         entries.append(history_entry(now, who, "added", to=really_added,
                                      reason=reason,
                                      vocabulary_version=vocabulary_version))
-    if domain is not None and domain != rec.get("domain"):
+    current_domains = domain_list(rec.get("domain"))
+    if domains is not None and domains != current_domains:
         entries.append(history_entry(now, who, "domain_changed",
-                                     frm=[rec.get("domain")], to=[domain],
+                                     frm=current_domains, to=domains,
                                      reason=reason,
                                      vocabulary_version=vocabulary_version))
     # One entry per field, in record order whatever order the file used;
@@ -626,8 +708,8 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
         return rec, []
     out = dict(rec)
     out["subject"] = new_subjects
-    if domain is not None:
-        out["domain"] = domain
+    if domains is not None:
+        out["domain"] = domains
     for field in really_set:
         if sets[field] is None:
             out.pop(field, None)
@@ -647,7 +729,6 @@ def apply_vocabulary_mapping(rec: dict, vocab_doc: dict, now: str
     actor "vocabulary". A record whose terms are all current comes back
     as it was, with no entries, so this is safe to run on every record
     on every run."""
-    from . import authority  # local import: authority is record-free
     subjects, applied = authority.map_subjects(
         list(rec.get("subject") or []), vocab_doc)
     if not applied:
@@ -674,8 +755,8 @@ def _in_field_order(rec: dict) -> dict:
              "project", "dataset", "sensitivity", "state", "domain",
              "version", "abstract", "subject", "vocabulary_version",
              "temporal", "creator", "source_type", "source_detail",
-             "license", "steward", "depositors", "created", "modified"
-             ] + list(OPTIONAL_FIELDS) + ["files"]
+             "provider", "license", "steward", "depositors", "created",
+             "modified"] + list(OPTIONAL_FIELDS) + ["files"]
     out = {k: rec[k] for k in order if k in rec}
     for k in rec:
         if k not in out:
@@ -683,12 +764,41 @@ def _in_field_order(rec: dict) -> dict:
     return out
 
 
+def _spatial_text(value) -> str:
+    """The 0.6 free-text `spatial` as one line for `spatial_note`."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "; ".join(str(v).strip() for v in value if str(v).strip())
+    return json.dumps(value, ensure_ascii=False) if value not in (None, {}, "") else ""
+
+
+def _with_spatial_note(rec: dict, text: str) -> dict:
+    """`spatial` (the 0.6 form) replaced in place by `spatial_note`, so
+    the upgraded record keeps its field order."""
+    note = rec.get("spatial_note")
+    if isinstance(note, str) and note.strip():
+        text = note.strip() + "; " + text
+    out = {}
+    for k, v in rec.items():
+        if k == "spatial":
+            out["spatial_note"] = text
+        elif k != "spatial_note":
+            out[k] = v
+    return out
+
+
 def upgrade_record(rec: dict) -> Tuple[dict, bool]:
-    """Bring a record read from storage up to SCHEMA_VERSION in place.
-    Returns (record, upgraded). A current record is returned untouched,
-    which the write-then-read-back checks rely on. 0.5 -> 0.6: the
-    string derived_from becomes one reference (r8 §5); files[].derived_from
-    stays a string. Anything else raises RecordParseError."""
+    """Bring a record read from storage up to SCHEMA_VERSION. Returns
+    (record, upgraded). A current record is returned untouched, which
+    the write-then-read-back checks rely on. The steps run in order, so
+    a 0.5 record goes 0.5 -> 0.6 -> 0.7 in one call.
+    0.5 -> 0.6: the string derived_from becomes one reference (r8 §5);
+    files[].derived_from stays a string.
+    0.6 -> 0.7 (r11 §2.5): the string domain becomes a one-element list;
+    a free-text spatial moves to spatial_note and the key goes; a list
+    of place codes is kept as it is.
+    Anything else raises RecordParseError."""
     version = rec.get("schema_version")
     if version == SCHEMA_VERSION:
         return rec, False
@@ -703,7 +813,24 @@ def upgrade_record(rec: dict) -> Tuple[dict, bool]:
             rec["derived_from"] = [reference_from_text(derived)] if derived.strip() else []
             if not rec["derived_from"]:
                 del rec["derived_from"]
-        rec["schema_version"] = "0.6"
+        version = "0.6"
+    if version == "0.6":
+        domain = rec.get("domain")
+        if isinstance(domain, str) and domain.strip():
+            rec["domain"] = [domain]
+        if "spatial" in rec:
+            spatial = rec["spatial"]
+            coded = (isinstance(spatial, list) and spatial
+                     and all(isinstance(s, str) and PLACE_CODE_RE.match(s)
+                             for s in spatial))
+            if not coded:
+                text = _spatial_text(spatial)
+                if text:
+                    rec = _with_spatial_note(rec, text)
+                else:
+                    del rec["spatial"]
+        version = "0.7"
+    rec["schema_version"] = SCHEMA_VERSION
     return rec, True
 
 
@@ -713,15 +840,18 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
                  state, sensitivity, temporal, version, abstract,
                  subject, files, created, modified, vocabulary_version=None,
                  creator=None, source_type=None, source_detail=None,
-                 license=None, steward=None, depositors=None,
+                 provider=None, license=None, steward=None, depositors=None,
                  derived_from=None, provenance=None, category_history=None,
                  language=None, ethics_ref=None, spatial=None,
-                 notes=None) -> dict:
+                 spatial_note=None, notes=None) -> dict:
     """Assemble the dataset record in field order.
     Recommended/optional fields that are None or empty are omitted.
     `temporal` is the nested {"start", "end"} object; `subject` and
     `license` carry the Dublin Core spellings (r6 §3.1). `derived_from`
-    is a list of references and `provenance` a list of activities (r8)."""
+    is a list of references and `provenance` a list of activities (r8).
+    `domain` is a list, primary first (a bare code is wrapped);
+    `provider` a list of provider slugs and `spatial` a list of place
+    codes (r11)."""
     rec = {
         "schema_version": SCHEMA_VERSION,
         "dataset_uuid": dataset_uuid,
@@ -731,7 +861,7 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
         "dataset": dataset,
         "sensitivity": sensitivity,
         "state": state,
-        "domain": domain,
+        "domain": domain_list(domain),
         "version": version,
         "abstract": abstract,
         "subject": list(subject),
@@ -741,8 +871,9 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
     rec["temporal"] = dict(temporal)
     for name, value in (
             ("creator", creator), ("source_type", source_type),
-            ("source_detail", source_detail), ("license", license),
-            ("steward", steward), ("depositors", depositors)):
+            ("source_detail", source_detail), ("provider", provider),
+            ("license", license), ("steward", steward),
+            ("depositors", depositors)):
         if value:
             rec[name] = value
     rec["created"] = created
@@ -751,7 +882,8 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
             ("derived_from", derived_from), ("provenance", provenance),
             ("category_history", category_history),
             ("language", language), ("ethics_ref", ethics_ref),
-            ("spatial", spatial), ("notes", notes)):
+            ("spatial", spatial), ("spatial_note", spatial_note),
+            ("notes", notes)):
         if value:
             rec[name] = value
     rec["files"] = list(files)
@@ -760,14 +892,19 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
 
 def validate_record(rec: dict, vocab_terms: Set[str],
                     domain_codes: Optional[List[str]] = None,
-                    activity_codes: Optional[List[str]] = None
+                    activity_codes: Optional[List[str]] = None,
+                    provider_slugs: Optional[List[str]] = None,
+                    place_codes: Optional[Set[str]] = None
                     ) -> Tuple[List[str], List[str]]:
     """Return (errors, warnings). Errors block a deposit; warnings do not.
     Hand-rolled on purpose: the shipped tool cannot use jsonschema (stdlib
     constraint) — dataset.schema.json is the contract artefact for CI and
     the gateway, this function is the runtime check (r5 §7).
     domain_codes / activity_codes: valid codes from the fetched vocabulary;
-    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded)."""
+    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded).
+    provider_slugs / place_codes (r11): the providers list and the
+    places in hand; None or empty means an unknown value is a warning,
+    not an error, so an old cache never blocks a deposit."""
     errors = []
     warnings = []
     for field in REQUIRED_FIELDS:
@@ -780,9 +917,19 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         errors.append("strand %r is not one of %s"
                       % (rec["strand"], "/".join(keys.STRANDS)))
     valid_domains = list(domain_codes) if domain_codes else list(keys.DOMAINS)
-    if rec["domain"] not in valid_domains:
-        errors.append("domain %r is not one of %s"
-                      % (rec["domain"], "/".join(valid_domains)))
+    domain = rec["domain"]
+    if isinstance(domain, str):
+        errors.append("domain is a string (the 0.6 form); records read through "
+                      "parse_record are upgraded to a list, primary first")
+    elif not isinstance(domain, list) or not all(isinstance(d, str) for d in domain):
+        errors.append("domain must be a list of domain codes, primary first")
+    else:
+        for d in domain:
+            if d not in valid_domains:
+                errors.append("domain %r is not one of %s"
+                              % (d, "/".join(valid_domains)))
+        if len(set(domain)) != len(domain):
+            errors.append("domain repeats a code")
     if rec["state"] not in keys.STATES:
         errors.append("state %r is not one of %s"
                       % (rec["state"], "/".join(keys.STATES)))
@@ -834,12 +981,21 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         if field in rec and not isinstance(rec[field], list):
             errors.append("'%s' must be a list" % field)
     for field in ("creator", "source_detail", "license", "steward",
-                  "notes", "ethics_ref"):
+                  "notes", "ethics_ref", "spatial_note"):
         if field in rec and not isinstance(rec[field], str):
             errors.append("'%s' must be a string" % field)
     if "source_type" in rec and rec["source_type"] not in SOURCE_TYPES:
         errors.append("source_type %r is not one of %s"
                       % (rec["source_type"], "/".join(SOURCE_TYPES)))
+    # r11: provider slugs and place codes, against the lists in hand.
+    if "provider" in rec:
+        more_errors, more_warnings = provider_errors(rec["provider"], provider_slugs)
+        errors.extend(more_errors)
+        warnings.extend(more_warnings)
+    if "spatial" in rec:
+        more_errors, more_warnings = place_errors(rec["spatial"], place_codes)
+        errors.extend(more_errors)
+        warnings.extend(more_warnings)
 
     if "license" not in rec and "licence" in rec:
         errors.append("'licence' was renamed 'license' in v0.5 (the "

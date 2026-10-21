@@ -46,7 +46,7 @@ class TestLookup(ExistingBase):
         d = body["defaults"]
         self.assertEqual((d["version"], d["creator"], d["subject"], d["domain"],
                           d["coverage_start"], d["coverage_end"]),
-                         ("1-0", "Ada", ["forced-labour"], "quant", "2020", "2021"))
+                         ("1-0", "Ada", ["forced-labour"], ["quant"], "2020", "2021"))
         self.assertEqual(d["abstract"], META["abstract"])     # the whole text, not the index's cut
         self.assertNotIn("derived_from", d)
         self.assertEqual([(m["path"], m["bytes"]) for m in body["manifest"]],

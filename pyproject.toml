@@ -39,7 +39,7 @@ dev = [
 packages = ["crsw_deposit", "crsw_web", "promoter"]
 
 [tool.setuptools.package-data]
-crsw_deposit = ["vocab.json"]
+crsw_deposit = ["vocab.json", "places.json"]
 crsw_web = ["templates/*.html", "static/*"]
 
 [tool.pytest.ini_options]

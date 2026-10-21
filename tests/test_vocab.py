@@ -110,6 +110,32 @@ class TestDomains(unittest.TestCase):
         self.assertEqual(codes, ["quant", "geo", "pol", "narr", "parti"])
 
 
+class TestProviders(unittest.TestCase):
+    WITH = {"vocabulary_version": "x", "facets": {"practices": ["forced-labour"]},
+            "providers": [{"slug": "acled", "name": "ACLED", "url": "https://acleddata.com/",
+                           "rights": "ACLED terms"},
+                          {"slug": "tah"}, "garbage", {"name": "no slug"}]}
+
+    def test_well_formed_entries_with_blank_optionals(self):
+        ps = vocab.providers(self.WITH)
+        self.assertEqual([p["slug"] for p in ps], ["acled", "tah"])
+        self.assertEqual(ps[0]["rights"], "ACLED terms")
+        self.assertEqual((ps[1]["name"], ps[1]["url"], ps[1]["notes"]), ("tah", "", ""))
+        self.assertEqual(vocab.provider_slugs(self.WITH), ["acled", "tah"])
+
+    def test_no_providers_section_means_no_list_not_a_fallback(self):
+        self.assertEqual(vocab.providers(GOOD), [])
+        self.assertEqual(vocab.provider_slugs(GOOD), [])
+
+    def test_bundled_vocab_has_the_starter_providers(self):
+        data = json.loads(vocab.bundled_vocab_path().read_text(encoding="utf-8"))
+        self.assertEqual(vocab.provider_slugs(data),
+                         ["acled", "tah", "unodc-sherloc", "icc-legal-tools",
+                          "un-ods", "ohchr-juris"])
+        self.assertTrue(all(p["url"].startswith("https://") and p["rights"]
+                            for p in vocab.providers(data)))
+
+
 class TestAuthorityShape(unittest.TestCase):
     """r9: an authority file (terms + changes) is accepted through the
     load chain, gets its flat facets derived, and a broken one is

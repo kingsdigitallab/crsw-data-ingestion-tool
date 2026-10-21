@@ -277,7 +277,8 @@ class TestProvenanceExport(unittest.TestCase):
                          [{"@id": "https://github.com/jrnold/CDB90"}])
         self.assertEqual(out["prov:wasGeneratedBy"][0]["prov:used"],
                          out["dcterms:source"])
-        self.assertEqual(out["crsw:schemaVersion"], "0.6")
+        self.assertEqual(out["crsw:schemaVersion"], "0.7")
+        self.assertEqual(out["crsw:domain"], ["quant"])
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "dataset.cdb90.json"
             src.write_text(record.record_json(rec), encoding="utf-8")

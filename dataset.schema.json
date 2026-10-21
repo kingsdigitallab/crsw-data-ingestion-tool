@@ -1,18 +1,24 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "CRSW dataset record",
-  "description": "Schema 0.6 (r8). Records marked 0.5 are still accepted: their derived_from is a string, which every tool upgrades to a list of references on read. Tools write 0.6.",
+  "description": "Schema 0.7 (r11). Records marked 0.5 and 0.6 are still accepted and upgraded on read: 0.5's derived_from is a string that becomes a list of references; 0.6's domain is a string that becomes a one-element list, and its free-text spatial moves to spatial_note. Tools write 0.7.",
   "type": "object",
   "required": ["schema_version", "dataset_uuid", "identifier", "strand",
                "domain", "project", "dataset", "state", "sensitivity",
                "temporal", "version", "abstract", "subject",
                "created", "modified", "files"],
   "properties": {
-    "schema_version": {"enum": ["0.5", "0.6"]},
+    "schema_version": {"enum": ["0.5", "0.6", "0.7"]},
     "dataset_uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
     "identifier": {"type": "string", "pattern": "^(rs1|rs2|rs3|rs4)/[a-z0-9-]+/(green|amber)/(0_raw|1_interim|2_final)/[a-z0-9-]+$"},
     "strand": {"enum": ["rs1", "rs2", "rs3", "rs4"]},
-    "domain": {"type": "string"},
+    "domain": {
+      "oneOf": [
+        {"type": "string", "description": "0.6 form, read and upgraded, never written"},
+        {"type": "array", "items": {"type": "string"}, "minItems": 1,
+         "description": "domain codes, primary first (r11)"}
+      ]
+    },
     "project": {"type": "string", "pattern": "^[a-z0-9-]+$"},
     "dataset": {"type": "string", "pattern": "^[a-z0-9-]+$"},
     "state": {"enum": ["0_raw", "1_interim", "2_final"]},
@@ -32,6 +38,8 @@
     "creator": {"type": "string"},
     "source_type": {"enum": ["archive", "survey", "scrape", "instrument", "partner", "derived", "other"]},
     "source_detail": {"type": "string"},
+    "provider": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
+                 "description": "slugs from the vocabulary's providers list (r11)"},
     "license": {"type": "string"},
     "steward": {"type": "string"},
     "depositors": {"type": "array", "items": {"type": "string"}},
@@ -47,7 +55,14 @@
     "category_history": {"type": "array", "items": {"$ref": "#/definitions/history_entry"}},
     "language": {"type": "array", "items": {"type": "string"}},
     "ethics_ref": {"type": "string"},
-    "spatial": {},
+    "spatial": {
+      "oneOf": [
+        {"type": "string", "description": "0.6 form, read and upgraded into spatial_note, never written"},
+        {"type": "array", "items": {"type": "string", "pattern": "^(m49:[0-9]{3}|iso:[A-Z]{2})$"},
+         "description": "place codes from places.json: UN M49 nodes and ISO 3166 alpha-2 countries (r11)"}
+      ]
+    },
+    "spatial_note": {"type": "string"},
     "notes": {"type": "string"},
     "files": {
       "type": "array", "minItems": 1,

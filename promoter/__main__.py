@@ -51,7 +51,7 @@ import json
 import sys
 from typing import Optional
 
-from crsw_deposit import keys, record, vocab
+from crsw_deposit import keys, places as places_mod, record, vocab
 from crsw_web import s3 as s3mod
 from crsw_web.config import load_dotenv
 from crsw_web.deposits import DepositStore
@@ -175,6 +175,14 @@ def _setup(args):
     log = Log(args.log or cfg.log_path)
     vocab_dict, source = vocab.load_vocabulary()
     return cfg, client, log, vocab_dict, source
+
+
+def _lists(vocab_dict):
+    """r11: what provider slugs and place codes are checked against:
+    the vocabulary's providers and places.json through its own chain.
+    Returns (provider_slugs, place_codes, places_source)."""
+    places_doc, places_source = places_mod.load_places()
+    return vocab.provider_slugs(vocab_dict), places_mod.codes(places_doc), places_source
 
 
 def _write_index(cfg, client, log, dry_run: bool, changed: int,
@@ -392,9 +400,10 @@ def cmd_run(args) -> int:
     cfg, client, log, vocab_dict, source = _setup(args)
     store = DepositStore(client, cfg.s3_bucket, cfg.staging_prefix)
     terms, codes = vocab.all_terms(vocab_dict), vocab.domain_codes(vocab_dict)
+    provider_slugs, place_codes, places_source = _lists(vocab_dict)
     log.write("start", run_id=log.run_id, dry_run=args.dry_run, vocabulary=source,
               vocabulary_version=vocab_dict.get("vocabulary_version"),
-              staging=cfg.staging_prefix, bucket=cfg.s3_bucket)
+              places=places_source, staging=cfg.staging_prefix, bucket=cfg.s3_bucket)
 
     refused = 0
     promoted = 0
@@ -404,7 +413,8 @@ def cmd_run(args) -> int:
         seen += 1
         rep = check(dep, store, cfg, terms, codes,
                     verify_checksums=not args.no_verify_checksums,
-                    vocab_doc=vocab_dict)
+                    vocab_doc=vocab_dict, provider_slugs=provider_slugs,
+                    place_codes=place_codes)
         log.write("checked", dep, ok=rep.ok, problems=rep.problems,
                   warnings=rep.warnings, files=len(dep.entries),
                   bytes=rep.total_bytes)
@@ -426,7 +436,8 @@ def cmd_run(args) -> int:
             continue
         out = promote(dep, rep, store, log, terms, codes,
                       keep_staging=args.keep_staging,
-                      activity_codes=vocab.activity_codes(vocab_dict))
+                      activity_codes=vocab.activity_codes(vocab_dict),
+                      provider_slugs=provider_slugs, place_codes=place_codes)
         if out.promoted:
             promoted += 1
             promoted_prefixes.append(dep.prefix)
@@ -459,13 +470,16 @@ def cmd_recategorise(args) -> int:
         except recat.ChangeFileError as e:
             print("change file: %s" % e, file=sys.stderr)
             return 2
+    provider_slugs, place_codes, places_source = _lists(vocab_dict)
     log.write("start", run_id=log.run_id, command="recategorise", dry_run=args.dry_run,
               vocabulary=source,
               vocabulary_version=vocab_dict.get("vocabulary_version"),
+              places=places_source,
               bucket=cfg.s3_bucket, changes=len(changes), by=args.by)
 
     plan = recat.plan(client, cfg.s3_bucket, vocab_dict, changes, args.by,
-                      record.utc_now_iso(), only=args.dataset)
+                      record.utc_now_iso(), only=args.dataset,
+                      provider_slugs=provider_slugs, place_codes=place_codes)
     for problem in plan.problems:
         log.write("recategorise_refused", problem=problem)
     for item in plan.refused:

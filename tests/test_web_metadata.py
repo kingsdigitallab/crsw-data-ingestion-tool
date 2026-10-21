@@ -73,6 +73,19 @@ class TestValidateMeta(unittest.TestCase):
         self.assertEqual(errors, {})
         self.assertTrue(any("Abstract is 1 words" in w for w in warnings))
 
+    def test_domain_is_a_list_primary_first(self):
+        # r11: one code from a select, or several; repeats collapse, the
+        # first sets the steward.
+        meta, errors, _ = validate_meta(dict(GOOD, domain="quant"), VOCAB)
+        self.assertEqual((meta["domain"], meta["steward"]), (["quant"], "Kevin Fahey"))
+        meta, errors, _ = validate_meta(dict(GOOD, domain=["geo", "quant", "geo"]), VOCAB)
+        self.assertEqual(errors, {})
+        self.assertEqual((meta["domain"], meta["steward"]), (["geo", "quant"], "Doreen Boyd"))
+        _, errors, _ = validate_meta(dict(GOOD, domain=["quant", "nope"]), VOCAB)
+        self.assertIn("domain", errors)
+        _, errors, _ = validate_meta(dict(GOOD, domain=[]), VOCAB)
+        self.assertIn("domain", errors)
+
     def test_source_type_enum(self):
         _, errors, _ = validate_meta(dict(GOOD, source_type="magic"), VOCAB)
         self.assertIn("source_type", errors)

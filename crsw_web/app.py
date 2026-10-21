@@ -939,7 +939,8 @@ def create_app(settings: Optional[Settings] = None,
             dep.dataset_uuid)
         errors, warnings = record.validate_record(
             rec, vocab_cache.terms, vocab_cache.domain_codes,
-            vocab.activity_codes(vocab_cache.current()))
+            vocab.activity_codes(vocab_cache.current()),
+            provider_slugs=vocab.provider_slugs(vocab_cache.current()))
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"errors": errors, "warnings": warnings})

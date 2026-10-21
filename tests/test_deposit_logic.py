@@ -161,6 +161,36 @@ class TestAssembleRecord(unittest.TestCase):
                          ["new.csv", "old.csv"])
 
 
+class TestR11Fields(unittest.TestCase):
+    """r11: domain is a list, primary first; provider, spatial,
+    spatial_note, notes, language and ethics_ref are kept from the
+    existing record unless this deposit supplies them."""
+
+    def test_domain_string_is_wrapped_and_list_kept(self):
+        rec, _, _, _ = deposit_logic.assemble_record(
+            META, None, [entry("a.csv")], "k1", NOW, UUID)
+        self.assertEqual(rec["domain"], ["quant"])
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, domain=["geo", "quant"]), None, [entry("a.csv")], "k1", NOW, UUID)
+        self.assertEqual(rec["domain"], ["geo", "quant"])
+
+    def test_redeposit_keeps_the_fields_unless_supplied(self):
+        first, _, _, _ = deposit_logic.assemble_record(
+            dict(META, provider=["acled"], spatial=["m49:419"], spatial_note="admin1",
+                 notes="aggregated", language=["en"], ethics_ref="E1"),
+            None, [entry("a.csv")], "k1", NOW, UUID)
+        again, _, _, _ = deposit_logic.assemble_record(
+            META, first, [entry("b.csv")], "k2", LATER, UUID)
+        for field in ("provider", "spatial", "spatial_note", "notes", "language",
+                      "ethics_ref"):
+            self.assertEqual(again[field], first[field], field)
+        third, _, _, _ = deposit_logic.assemble_record(
+            dict(META, spatial=["iso:CO"], notes="new note"), again,
+            [entry("c.csv")], "k2", LATER, UUID)
+        self.assertEqual((third["spatial"], third["notes"], third["provider"]),
+                         (["iso:CO"], "new note", ["acled"]))
+
+
 class TestDefaultsFromRecord(unittest.TestCase):
     """What a deposit to an existing dataset starts from (r5 §4), the
     same for the CLI's prompts and the web form's prefill."""
@@ -172,11 +202,22 @@ class TestDefaultsFromRecord(unittest.TestCase):
             None, [entry("a.csv")], "k1", NOW, UUID)
         d = deposit_logic.defaults_from_record(rec)
         self.assertEqual(d, {
-            "domain": "quant", "steward": "Cy", "version": "3-0",
+            "domain": ["quant"], "steward": "Cy", "version": "3-0",
             "subject": ["forced-labour"], "abstract": META["abstract"],
             "coverage_start": "2020", "coverage_end": "2021",
             "license": "CC-BY-4.0", "source_type": "archive",
             "source_detail": "The CSAC database", "creator": "Cy"})
+
+    def test_r11_fields_carry_over_too(self):
+        rec, _, _, _ = deposit_logic.assemble_record(
+            dict(META, provider=["acled"], spatial=["m49:419"],
+                 spatial_note="admin1", notes="aggregated"),
+            None, [entry("a.csv")], "k1", NOW, UUID)
+        d = deposit_logic.defaults_from_record(rec)
+        self.assertEqual((d["provider"], d["spatial"], d["spatial_note"], d["notes"]),
+                         (["acled"], ["m49:419"], "admin1", "aggregated"))
+        d["provider"].append("x")
+        self.assertEqual(rec["provider"], ["acled"])
         # A copy, never the record's own list.
         d["subject"].append("x")
         self.assertEqual(rec["subject"], ["forced-labour"])

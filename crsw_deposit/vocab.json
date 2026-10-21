@@ -19,6 +19,14 @@
     {"code": "manual", "label": "Manual processing"},
     {"code": "other", "label": "Other (describe it)"}
   ],
+  "providers": [
+    {"slug": "acled", "name": "Armed Conflict Location & Event Data (ACLED)", "url": "https://acleddata.com/", "rights": "ACLED terms of use; attribution required; not for redistribution beyond the licensee's organisation", "notes": "Curated regional files are aggregates, not event-level data; say which in source_detail"},
+    {"slug": "tah", "name": "Traffik Analysis Hub", "url": "https://www.traffikanalysis.org/", "rights": "Traffik Analysis Hub acceptable-use terms; platform access limited to approved partners; Centre use only", "notes": "Records are coded by partner organisations; the export's Coordinates column is not usable"},
+    {"slug": "unodc-sherloc", "name": "UNODC SHERLOC case-law database", "url": "https://sherloc.unodc.org/", "rights": "UNODC terms of use; attribution required"},
+    {"slug": "icc-legal-tools", "name": "ICC Legal Tools Database", "url": "https://www.legal-tools.org/", "rights": "ICC Legal Tools terms of use; attribution required"},
+    {"slug": "un-ods", "name": "United Nations Official Document System", "url": "https://documents.un.org/", "rights": "UN terms of use for official documents; attribution required"},
+    {"slug": "ohchr-juris", "name": "OHCHR Jurisprudence database", "url": "https://juris.ohchr.org/", "rights": "OHCHR terms of use; attribution required"}
+  ],
   "terms": [
     {"slug": "forced-labour", "facet": "practices", "label": "Forced labour", "status": "current", "since": "2026-07-23"},
     {"slug": "sexual-slavery", "facet": "practices", "label": "Sexual slavery", "status": "current", "since": "2026-07-23"},

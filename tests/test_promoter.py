@@ -204,7 +204,7 @@ class TestPromote(PromoterBase):
         head = self.s3.head_object(Bucket="crsw", Key=DEST + "/one.csv")
         self.assertEqual(head["Metadata"]["dataset-uuid"], old_uuid)
 
-    def test_05_destination_record_is_merged_and_written_as_06(self):
+    def test_05_destination_record_is_merged_and_written_as_current(self):
         # r8 §5 (decided): nobody converts a record by hand. A 0.5
         # destination with a string derived_from merges with a 0.6 deposit;
         # the result is 0.6 with the reference upgraded and carried over.
@@ -225,7 +225,7 @@ class TestPromote(PromoterBase):
         self.assertTrue(out.promoted, out.error)
         raw = self.s3.get_object(Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode()
         rec = json.loads(raw)
-        self.assertEqual(rec["schema_version"], "0.6")
+        self.assertEqual(rec["schema_version"], "0.7")
         self.assertEqual(rec["derived_from"],
                          [{"kind": "external", "url": "https://github.com/jrnold/CDB90"}])
         self.assertEqual(rec["dataset_uuid"], old_uuid)
@@ -427,6 +427,12 @@ class TestIndex(PromoterBase):
         self.assertEqual(list(table.column_names), list(index_mod.COLUMNS))
         self.assertEqual(table.column("subject").to_pylist()[1], FORM["subject"])
         self.assertEqual(table.column("bytes").to_pylist(), [3, 11])
+        # r11: domain stays the primary code for every reader of the
+        # index; domains carries the list.
+        self.assertEqual(promo["domain"], "quant")
+        self.assertEqual(promo["domains"], ["quant"])
+        self.assertEqual(table.column("domain").to_pylist(), ["quant", "quant"])
+        self.assertEqual(table.column("domains").to_pylist()[1], ["quant"])
 
     def test_nothing_changed_means_nothing_written(self):
         self.stage()
@@ -479,7 +485,7 @@ class TestIndex(PromoterBase):
                          ["rs1/p/green/0_raw/bad", "rs1/p/green/0_raw/old"])
         self.assertEqual(rows[0]["dataset_uuid"], None)
         self.assertEqual(rows[1]["derived_from_identifiers"], ["rs1/p/green/0_raw/older"])
-        self.assertEqual(rows[1]["schema_version"], "0.6")   # upgraded on read
+        self.assertEqual(rows[1]["schema_version"], "0.7")   # upgraded on read
         self.assertIsNotNone(index_mod.parquet_bytes(rows))
 
 
@@ -589,7 +595,7 @@ class TestRecategorise(PromoterBase):
         from tests.test_schema import worked_example
         rec = worked_example()
         rec.update(identifier="rs2/csac/green/2_final/%s" % dataset, dataset=dataset,
-                   subject=list(subject), domain=domain,
+                   subject=list(subject), domain=record.domain_list(domain),
                    dataset_uuid=uuid or record.mint_uuid())
         rec.pop("category_history", None)
         key = "rs2/csac/green/2_final/%s/dataset.%s.json" % (dataset, dataset)
@@ -682,7 +688,7 @@ class TestRecategorise(PromoterBase):
         self.assertEqual(code, 0, lines)
         out = self.read(k)
         self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
-        self.assertEqual(out["domain"], "geo")
+        self.assertEqual(out["domain"], ["geo"])
         kinds = [e["kind"] for e in out["category_history"]]
         self.assertEqual(kinds, ["removed", "added", "domain_changed"])
         self.assertTrue(all(e["by"] == "k1078591" and e["reason"] == "steward review"
@@ -785,6 +791,52 @@ class TestRecategorise(PromoterBase):
                 path.write_text(text, encoding="utf-8")
                 code, _ = self.run_cli("recategorise", VOCAB, "--changes", str(path))
             self.assertEqual(code, 2, text)
+
+    def test_change_file_set_provider_and_spatial_checked_against_the_lists(self):
+        k, data, rec = self.place("p", ["forced-labour"])
+        good = [{"dataset": rec["identifier"],
+                 "set": {"provider": ["acled"], "spatial": ["m49:419", "iso:CO"]}}]
+        with tempfile.TemporaryDirectory() as d:
+            code, lines = self.run_cli("recategorise", VOCAB,
+                                       "--changes", self.changes_file(d, good))
+        self.assertEqual(code, 0, lines)
+        out = self.read(k)
+        self.assertEqual((out["provider"], out["spatial"]), (["acled"], ["m49:419", "iso:CO"]))
+        self.assertEqual(out["schema_version"], "0.7")
+        start = [l for l in lines if l["action"] == "start"][0]
+        self.assertIn(start["places"], ("remote", "cache", "bundled"))
+        for bad, fragment in [
+                ([{"dataset": rec["identifier"], "set": {"provider": ["nope"]}}],
+                 "not in the vocabulary's providers"),
+                ([{"dataset": rec["identifier"], "set": {"spatial": ["iso:ZZ"]}}],
+                 "not a place in places.json")]:
+            with tempfile.TemporaryDirectory() as d:
+                code, lines = self.run_cli("recategorise", VOCAB,
+                                           "--changes", self.changes_file(d, bad))
+            self.assertEqual(code, 1, fragment)
+            refused = [l for l in lines if l["action"] == "recategorise_refused"]
+            self.assertTrue(any(fragment in json.dumps(l) for l in refused), lines)
+
+    def test_a_06_record_in_place_is_rewritten_as_07_only_when_touched(self):
+        k, data, rec = self.place("old", ["forced-labour"])
+        rec = json.loads(data)
+        rec["schema_version"], rec["domain"] = "0.6", "quant"
+        old = deposit_logic.record_bytes(rec)
+        self.s3.put_object(Bucket="crsw", Key=k, Body=old,
+                           Metadata=labels_mod.object_labels(
+                               rec["dataset_uuid"], hashlib.sha256(old).hexdigest(),
+                               "green", "k1078591"))
+        code, lines = self.run_cli("recategorise", VOCAB)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), old)
+        changes = [{"dataset": rec["identifier"], "set": {"notes": "touched"}}]
+        with tempfile.TemporaryDirectory() as d:
+            code, lines = self.run_cli("recategorise", VOCAB,
+                                       "--changes", self.changes_file(d, changes))
+        self.assertEqual(code, 0, lines)
+        out = self.read(k)
+        self.assertEqual((out["schema_version"], out["domain"], out["notes"]),
+                         ("0.7", ["quant"], "touched"))
 
     def test_change_file_set_unknown_dataset_is_refused_and_writes_nothing(self):
         k, data, rec = self.place("u", ["forced-labour"])
@@ -984,7 +1036,7 @@ class TestAuditTrail(PromoterBase):
         self.assertEqual(r["depositor"], "k1078591")
         self.assertEqual(r["files"], 2)
         self.assertEqual(r["bytes"], 11)
-        self.assertEqual(r["schema_version"], "0.6")
+        self.assertEqual(r["schema_version"], "0.7")
         self.assertRegex(r["dataset_uuid"], r"^[0-9a-f-]{36}$")
         code, out = self.cli(["datasets"])
         header, row = out[0].splitlines()

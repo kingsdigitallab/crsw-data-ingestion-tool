@@ -300,8 +300,10 @@
        ["source_detail", "source_detail"]].forEach(function (pair) {
         if (d[pair[1]] !== undefined) $(pair[0]).value = d[pair[1]];
       });
+      // domain is a list, primary first (r11); the select holds the primary.
       ["domain", "source_type"].forEach(function (id) {
-        if (d[id] !== undefined && Array.prototype.some.call($(id).options, function (o) { return o.value === d[id]; })) $(id).value = d[id];
+        var want = Array.isArray(d[id]) ? d[id][0] : d[id];
+        if (want !== undefined && Array.prototype.some.call($(id).options, function (o) { return o.value === want; })) $(id).value = want;
       });
       if (d.subject) {
         form.querySelectorAll('input[name=subject]').forEach(function (c) { c.checked = d.subject.indexOf(c.value) >= 0; });

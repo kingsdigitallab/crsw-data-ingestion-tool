@@ -67,7 +67,9 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
             vocab_terms: Set[str], domain_codes: List[str],
             keep_staging: bool = False, single_copy_max: int = SINGLE_COPY_MAX,
             copy_part: int = COPY_PART,
-            activity_codes: Optional[List[str]] = None) -> Outcome:
+            activity_codes: Optional[List[str]] = None,
+            provider_slugs: Optional[List[str]] = None,
+            place_codes: Optional[Set[str]] = None) -> Outcome:
     if not rep.ok:
         raise PromotionError("refusing to promote a deposit with problems")
     client, bucket = store.client, store.bucket
@@ -136,7 +138,9 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
             meta, existing, dep.entries, dep.user, record.utc_now_iso(),
             dataset_uuid, created=staged_created)
         errors, _ = record.validate_record(rec, vocab_terms, domain_codes,
-                                           activity_codes)
+                                           activity_codes,
+                                           provider_slugs=provider_slugs,
+                                           place_codes=place_codes)
         if errors:
             raise PromotionError("assembled record invalid: %s" % "; ".join(errors))
         data = deposit_logic.record_bytes(rec)
