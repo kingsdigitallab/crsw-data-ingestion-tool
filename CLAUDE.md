@@ -27,7 +27,7 @@ python deposit.py FILE_OR_FOLDER [...] --strand rs2 --project csac --dataset x -
 python deposit.py FILE [...] --provenance prov.json   # r8: activities and derived_from from a file; skips the origin questions
 docker compose -f deploy/compose.yaml up --build   # web service + nginx sidecar, reads .env
 python -m promoter run --dry-run                   # check staged deposits; drop --dry-run to promote
-python -m promoter recategorise --dry-run [--changes FILE] [--dataset ID]   # r9: bring records up to the vocabulary
+python -m promoter recategorise --dry-run [--changes FILE] [--dataset ID]   # r9: bring records up to the vocabulary; r11: a change's `set` writes descriptive fields in place
 python -m promoter audit [--since DATE] [--dataset ID] [--user K] [--action A] [--json]   # the trail, read back from the bucket
 python -m promoter datasets [--strand rsN] [--json]                          # every record in place
 python -m promoter remove --dataset ID [--confirm ID] [--reason TEXT]        # r10: the plan, or with --confirm every version under the prefix gone and the derived layers rebuilt; --staging DEPOSIT_ID for an abandoned deposit

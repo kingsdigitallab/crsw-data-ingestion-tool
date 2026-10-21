@@ -86,6 +86,17 @@ class TestSchemaInStepWithCode(unittest.TestCase):
         self.assertEqual(SCHEMA["properties"]["source_type"]["enum"],
                          cli_codes)
 
+    def test_source_type_enum_matches_record(self):
+        # r11: the enum lives in crsw_deposit; the CLI menu and the web
+        # form read it from there.
+        self.assertEqual(tuple(SCHEMA["properties"]["source_type"]["enum"]),
+                         record.SOURCE_TYPES)
+
+    def test_history_kinds_match_record(self):
+        kinds = SCHEMA["definitions"]["history_entry"]["properties"]["kind"]["enum"]
+        self.assertEqual(tuple(kinds), record.HISTORY_KINDS)
+        self.assertIn("field", SCHEMA["definitions"]["history_entry"]["properties"])
+
     def test_schema_versions_match_record(self):
         # r8 §5: the contract lists every version the tool reads; the
         # one it writes is among them.
@@ -201,6 +212,11 @@ class TestRuntimeAtLeastAsStrict(unittest.TestCase):
             {"when": "2026-09-24T10:00:00Z", "by": "k1"}]}),
         ("history entry with bad kind", {"category_history": [
             {"when": "2026-09-24T10:00:00Z", "by": "k1", "kind": "renamed"}]}),
+        ("field_set without field", {"category_history": [
+            {"when": "2026-09-24T10:00:00Z", "by": "k1", "kind": "field_set",
+             "to": ["x"]}]}),
+        ("license not a string", {"license": 5}),
+        ("bad source type", {"source_type": "magic"}),
     )
 
     def test_schema_invalid_is_runtime_invalid(self):

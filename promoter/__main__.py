@@ -96,7 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "vocabulary's changes or a change file affect")
     common(rc)
     rc.add_argument("--changes", help="JSON change file: per-dataset add/remove/"
-                                      "set_domain decisions")
+                                      "set_domain decisions, and fields to set "
+                                      "in place (r11)")
     rc.add_argument("--dataset", help="only this dataset (identifier or uuid)")
     rc.add_argument("--by", default=None,
                     help="who is making the change (default: your login)")

@@ -13,9 +13,8 @@ PROVENANCE_FIELDS = ("provenance_activity", "provenance_tool",
                      "provenance_repo", "provenance_commit",
                      "provenance_description")
 
-# Matches dataset.schema.json's source_type enum and the CLI's menu.
-SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
-                "derived", "other")
+# The source_type enum, from the shared package (r11).
+SOURCE_TYPES = record.SOURCE_TYPES
 
 RED_MESSAGE = ("red-classified data must not enter shared storage; it "
                "belongs in the TRE. Contact the domain steward.")

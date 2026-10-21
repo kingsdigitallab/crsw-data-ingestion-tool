@@ -242,6 +242,18 @@ class TestValidateRecord(unittest.TestCase):
         rec["licence"] = "CC-BY-4.0"
         self.assertTrue(any("license" in e for e in self._errors(rec)))
 
+    def test_recommended_string_fields_must_be_strings(self):
+        for field in ("creator", "source_detail", "license", "steward",
+                      "notes", "ethics_ref"):
+            rec = _record()
+            rec[field] = ["not", "text"]
+            self.assertTrue(any("'%s' must be a string" % field in e
+                                for e in self._errors(rec)), field)
+        rec = _record()
+        rec["source_type"] = "magic"
+        self.assertTrue(any("source_type 'magic' is not one of" in e
+                            for e in self._errors(rec)))
+
     def test_fetched_domain_codes_used(self):
         rec = _record(domain="newdomain")
         self.assertEqual(self._errors(rec, domain_codes=["newdomain"]), [])
@@ -687,6 +699,125 @@ class TestCategoryHistory(unittest.TestCase):
                 record.apply_dataset_change(r, change, "k1", self.NOW, self.VOCAB,
                                             ["quant", "geo"])
             self.assertIn(fragment, str(cm.exception))
+
+    # --- r11: fields set in place ---------------------------------------
+
+    def test_field_set_entry_validation(self):
+        good = {"when": self.NOW, "by": "k1", "kind": "field_set",
+                "field": "license", "from": ["CC-BY-4.0"], "to": ["internal-only"]}
+        self.assertEqual(record.validate_history_entry(good, "h"), [])
+        first = {"when": self.NOW, "by": "k1", "kind": "field_set",
+                 "field": "notes", "to": ["x"]}
+        self.assertEqual(record.validate_history_entry(first, "h"), [])
+        cleared = {"when": self.NOW, "by": "k1", "kind": "field_set",
+                   "field": "notes", "from": ["x"]}
+        self.assertEqual(record.validate_history_entry(cleared, "h"), [])
+        cases = [
+            ({"when": self.NOW, "by": "k1", "kind": "field_set", "to": ["x"]},
+             "field_set needs field"),
+            ({"when": self.NOW, "by": "k1", "kind": "field_set", "field": "subject",
+              "to": ["x"]}, "field_set needs field"),
+            ({"when": self.NOW, "by": "k1", "kind": "field_set", "field": "license"},
+             "needs from or to"),
+            ({"when": self.NOW, "by": "k1", "kind": "added", "field": "license",
+              "to": ["x"]}, "only belongs on a field_set"),
+        ]
+        for entry, fragment in cases:
+            errors = record.validate_history_entry(entry, "h")
+            self.assertTrue(any(fragment in e for e in errors), (entry, errors))
+
+    def test_dataset_change_set_fields(self):
+        r = self.rec(license="CC-BY-4.0")
+        r.pop("notes", None)
+        vocab_terms = self.VOCAB | {"armed-conflict"}
+        change = {"set": {"notes": "ICC Legal Tools and UN ODS documents",
+                          "license": "Third-party terms; not for redistribution",
+                          "language": ["en", "fr"],
+                          "ethics_ref": None},
+                  "reason": "licence corrected after review"}
+        out, entries = record.apply_dataset_change(
+            r, change, "k1078591", self.NOW, vocab_terms, ["quant", "geo"],
+            vocabulary_version="2026-10-01")
+        self.assertEqual(out["license"], "Third-party terms; not for redistribution")
+        self.assertEqual(out["notes"], "ICC Legal Tools and UN ODS documents")
+        self.assertEqual(out["language"], ["en", "fr"])
+        self.assertNotIn("ethics_ref", out)
+        self.assertEqual(out["modified"], self.NOW)
+        # One entry per field, in record field order, whatever order the
+        # change file used; ethics_ref was absent so clearing it is a no-op.
+        self.assertEqual([e["field"] for e in entries], ["license", "language", "notes"])
+        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1078591",
+                                      "kind": "field_set", "field": "license",
+                                      "from": ["CC-BY-4.0"],
+                                      "to": ["Third-party terms; not for redistribution"],
+                                      "reason": "licence corrected after review",
+                                      "vocabulary_version": "2026-10-01"})
+        self.assertEqual((entries[1]["to"], "from" in entries[1]), (["en", "fr"], False))
+        self.assertNotIn("from", entries[2])   # a first-time set
+        self.assertEqual(out["category_history"], r["category_history"] + entries)
+        self.assertEqual(r["license"], "CC-BY-4.0")   # input untouched
+        self.assertNotIn("notes", r)
+        # The output is in build_record order with the new keys placed.
+        keys_ = list(out)
+        self.assertLess(keys_.index("category_history"), keys_.index("language"))
+        self.assertLess(keys_.index("language"), keys_.index("notes"))
+        self.assertLess(keys_.index("notes"), keys_.index("files"))
+        errors, _ = record.validate_record(out, vocab_terms, ["quant", "geo"])
+        self.assertEqual(errors, [])
+
+    def test_dataset_change_set_clears_a_field(self):
+        r = self.rec(notes="old note")
+        out, entries = record.apply_dataset_change(
+            r, {"set": {"notes": None}}, "k1", self.NOW, self.VOCAB)
+        self.assertNotIn("notes", out)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual((entries[0]["kind"], entries[0]["field"], entries[0]["from"]),
+                         ("field_set", "notes", ["old note"]))
+        self.assertNotIn("to", entries[0])
+
+    def test_dataset_change_set_same_value_is_a_no_op(self):
+        r = self.rec(license="CC-BY-4.0")
+        out, entries = record.apply_dataset_change(
+            r, {"set": {"license": "CC-BY-4.0", "ethics_ref": None}},
+            "k1", self.NOW, self.VOCAB)
+        self.assertIs(out, r)
+        self.assertEqual(entries, [])
+
+    def test_dataset_change_set_refusals(self):
+        r = self.rec(subject=["forced-labour"])
+        cases = [
+            ({"set": {"subject": ["x"]}}, "cannot be set this way"),
+            ({"set": {"domain": "geo"}}, "cannot be set this way"),
+            ({"set": {"abstract": "x"}}, "cannot be set this way"),
+            ({"set": {"derived_from": []}}, "cannot be set this way"),
+            ({"set": {"made_up": "x"}}, "cannot be set this way"),
+            ({"set": {"license": 5}}, "must be text"),
+            ({"set": {"license": "   "}}, "must be text"),
+            ({"set": {"language": "en"}}, "must be a list"),
+            ({"set": {"language": []}}, "must be a list"),
+            ({"set": {"source_type": "magic"}}, "source_type 'magic' is not one of"),
+        ]
+        for change, fragment in cases:
+            with self.assertRaises(record.RecordChangeError, msg=change) as cm:
+                record.apply_dataset_change(r, change, "k1", self.NOW, self.VOCAB,
+                                            ["quant", "geo"])
+            self.assertIn(fragment, str(cm.exception))
+        self.assertIsNone(record.field_set_error("source_type", "archive"))
+        self.assertIsNone(record.field_set_error("creator", None))
+
+    def test_set_combined_with_add_remove_domain_orders_entries(self):
+        r = self.rec(subject=["forced-labour", "survey"], domain="quant")
+        vocab_terms = self.VOCAB | {"armed-conflict"}
+        out, entries = record.apply_dataset_change(
+            r, {"add": ["prevalence"], "remove": ["survey"], "set_domain": "geo",
+                "set": {"steward": "Doreen Boyd", "creator": "ACLED"}},
+            "k1", self.NOW, vocab_terms, ["quant", "geo"])
+        self.assertEqual([(e["kind"], e.get("field")) for e in entries],
+                         [("removed", None), ("added", None), ("domain_changed", None),
+                          ("field_set", "creator"), ("field_set", "steward")])
+        self.assertEqual((out["domain"], out["steward"], out["creator"]),
+                         ("geo", "Doreen Boyd", "ACLED"))
+        self.assertEqual(list(out), list(r))
 
     def test_vocabulary_mapping_writes_history_by_vocabulary(self):
         from crsw_deposit import authority

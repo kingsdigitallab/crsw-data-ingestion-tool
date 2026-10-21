@@ -718,6 +718,83 @@ class TestRecategorise(PromoterBase):
             code, _ = self.run_cli("recategorise", self.evolved(), "--changes", str(path))
         self.assertEqual(code, 2)
 
+    # --- r11: fields set in place ---------------------------------------
+
+    def changes_file(self, d, changes):
+        path = Path(d) / "changes.json"
+        path.write_text(json.dumps(changes), encoding="utf-8")
+        return str(path)
+
+    def test_change_file_set_rewrites_with_field_set_history(self):
+        k, data, rec = self.place("s", ["forced-labour"])
+        self.assertEqual(rec["license"], "CC-BY-4.0")
+        self.assertNotIn("notes", rec)
+        changes = [{"dataset": rec["identifier"],
+                    "set": {"license": "Third-party terms; Centre use only",
+                            "notes": "Aggregated weekly counts, not event-level."},
+                    "reason": "licence corrected"}]
+        with tempfile.TemporaryDirectory() as d:
+            path = self.changes_file(d, changes)
+            code, lines = self.run_cli("recategorise", VOCAB,
+                                       "--changes", path, "--by", "k1078591")
+            self.assertEqual(code, 0, lines)
+            out = self.read(k)
+            self.assertEqual(out["license"], "Third-party terms; Centre use only")
+            self.assertEqual(out["notes"], "Aggregated weekly counts, not event-level.")
+            history = out["category_history"]
+            self.assertEqual([(e["kind"], e["field"]) for e in history],
+                             [("field_set", "license"), ("field_set", "notes")])
+            self.assertEqual((history[0]["from"], history[0]["to"], history[0]["by"],
+                              history[0]["reason"]),
+                             (["CC-BY-4.0"], ["Third-party terms; Centre use only"],
+                              "k1078591", "licence corrected"))
+            self.assertNotIn("from", history[1])
+            self.assertEqual(out["dataset_uuid"], rec["dataset_uuid"])
+            self.assertEqual(out["files"], rec["files"])
+            head = self.s3.head_object(Bucket="crsw", Key=k)["Metadata"]
+            self.assertEqual(head["checksum-sha256"],
+                             hashlib.sha256(deposit_logic.record_bytes(out)).hexdigest())
+            planned = [l for l in lines if l["action"] == "recategorise_planned"][0]
+            self.assertEqual(planned["changes"][0]["field"], "license")
+            # A second run with the same file finds nothing to do.
+            code, lines = self.run_cli("recategorise", VOCAB, "--changes", path)
+            self.assertEqual(code, 0)
+            self.assertEqual(finish(lines)["rewritten"], 0)
+
+    def test_change_file_set_clears_a_field(self):
+        k, _, rec = self.place("c", ["forced-labour"])
+        changes = [{"dataset": rec["dataset_uuid"], "set": {"source_detail": None}}]
+        with tempfile.TemporaryDirectory() as d:
+            code, lines = self.run_cli("recategorise", VOCAB,
+                                       "--changes", self.changes_file(d, changes))
+        self.assertEqual(code, 0, lines)
+        out = self.read(k)
+        self.assertNotIn("source_detail", out)
+        self.assertEqual(out["category_history"][-1]["from"], [rec["source_detail"]])
+        self.assertNotIn("to", out["category_history"][-1])
+
+    def test_change_file_set_bad_field_is_exit_2(self):
+        cases = ['[{"dataset": "x", "set": {"subject": ["a"]}}]',
+                 '[{"dataset": "x", "set": {"license": 5}}]',
+                 '[{"dataset": "x", "set": {}}]',
+                 '[{"dataset": "x", "set": "text"}]',
+                 '[{"dataset": "x", "set": {"source_type": "magic"}}]']
+        for text in cases:
+            with tempfile.TemporaryDirectory() as d:
+                path = Path(d) / "changes.json"
+                path.write_text(text, encoding="utf-8")
+                code, _ = self.run_cli("recategorise", VOCAB, "--changes", str(path))
+            self.assertEqual(code, 2, text)
+
+    def test_change_file_set_unknown_dataset_is_refused_and_writes_nothing(self):
+        k, data, rec = self.place("u", ["forced-labour"])
+        changes = [{"dataset": "rs2/csac/green/2_final/nope", "set": {"license": "x"}}]
+        with tempfile.TemporaryDirectory() as d:
+            code, lines = self.run_cli("recategorise", VOCAB,
+                                       "--changes", self.changes_file(d, changes))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), data)
+
     def test_dry_run_plans_and_writes_nothing(self):
         k, data, _ = self.place("dry", ["debt-bondage"])
         code, lines = self.run_cli("recategorise", self.evolved(), "--dry-run")

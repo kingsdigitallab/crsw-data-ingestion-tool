@@ -8,7 +8,8 @@ a label or a key):
   affected term, recorded in the record by the actor "vocabulary";
 - a change file: a steward's per-dataset decisions, each naming a
   dataset by identifier or UUID with terms to add, terms to remove, a
-  new domain and a reason.
+  new domain, descriptive fields to set in place (r11: licence, notes,
+  creator and the like; `record.SETTABLE_FIELDS`) and a reason.
 
 `plan` reads every record and works out what would change; `apply`
 writes one planned record the way promotion does (validate, put, read
@@ -25,7 +26,7 @@ from .checks import _read_json_object
 from .log import Log
 from .scan import list_datasets
 
-CHANGE_KEYS = ("dataset", "add", "remove", "set_domain", "reason")
+CHANGE_KEYS = ("dataset", "add", "remove", "set_domain", "set", "reason")
 
 
 class ChangeFileError(ValueError):
@@ -35,7 +36,9 @@ class ChangeFileError(ValueError):
 def load_change_file(text: str) -> List[Dict]:
     """The change file as a validated list. Shape:
     [{"dataset": "<identifier or uuid>", "add": [...], "remove": [...],
-      "set_domain": "...", "reason": "..."}, ...]"""
+      "set_domain": "...", "set": {"license": "...", "notes": null},
+      "reason": "..."}, ...]
+    A null in `set` clears that field."""
     try:
         data = json.loads(text)
     except ValueError as e:
@@ -63,9 +66,19 @@ def load_change_file(text: str) -> List[Dict]:
         if "set_domain" in c and not (isinstance(c["set_domain"], str)
                                       and c["set_domain"]):
             raise ChangeFileError("%s: set_domain must be a domain code" % label)
-        if not (c.get("add") or c.get("remove") or c.get("set_domain")):
-            raise ChangeFileError("%s: nothing to do (no add, remove or set_domain)"
-                                  % label)
+        if "set" in c:
+            sets = c["set"]
+            if not isinstance(sets, dict) or not sets:
+                raise ChangeFileError("%s: set must be an object of field: value"
+                                      % label)
+            for field, value in sets.items():
+                err = record.field_set_error(field, value)
+                if err:
+                    raise ChangeFileError("%s: set: %s" % (label, err))
+        if not (c.get("add") or c.get("remove") or c.get("set_domain")
+                or c.get("set")):
+            raise ChangeFileError("%s: nothing to do (no add, remove, set_domain "
+                                  "or set)" % label)
         out.append(c)
     return out
 

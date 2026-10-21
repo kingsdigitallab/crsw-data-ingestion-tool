@@ -124,12 +124,15 @@
       "properties": {
         "when": {"type": "string"},
         "by": {"type": "string"},
-        "kind": {"enum": ["added", "removed", "replaced", "split_review", "domain_changed"]},
+        "kind": {"enum": ["added", "removed", "replaced", "split_review", "domain_changed", "field_set"]},
+        "field": {"type": "string"},
         "from": {"type": "array", "items": {"type": "string"}},
         "to": {"type": "array", "items": {"type": "string"}},
         "reason": {"type": "string"},
         "vocabulary_version": {"type": "string"}
-      }
+      },
+      "if": {"properties": {"kind": {"const": "field_set"}}, "required": ["kind"]},
+      "then": {"required": ["field"]}
     }
   }
 }

@@ -189,7 +189,8 @@ deposit whose term was split is refused with the successors named, and
 the depositor re-finalises with the right one.
 
 Change file format, one entry per dataset, any of `add`, `remove`,
-`set_domain`:
+`set_domain`, `set` (r11: descriptive fields set in place; a `null`
+clears the field):
 
 ```json
 [
@@ -197,15 +198,30 @@ Change file format, one entry per dataset, any of `add`, `remove`,
    "add": ["prevalence"], "remove": ["survey-online"],
    "reason": "steward review after the survey split, issue #31"},
   {"dataset": "8f14e45f-ceea-467f-a34e-9db1c153f0a1",
-   "set_domain": "geo", "reason": "reassigned to the geospatial steward"}
+   "set_domain": "geo", "reason": "reassigned to the geospatial steward"},
+  {"dataset": "rs1/legal-sources/green/0_raw/international-instruments-sample",
+   "set": {"license": "Third-party material under the originating bodies' terms; not for redistribution",
+           "notes": "ICC Legal Tools, UN ODS and OHCHR documents",
+           "ethics_ref": null},
+   "reason": "licence corrected after review"}
 ]
 ```
+
+`set` may name `creator`, `source_type`, `source_detail`, `license`,
+`steward`, `language`, `ethics_ref` or `notes` (`record.SETTABLE_FIELDS`;
+from schema 0.7 also `provider`, `spatial`, `spatial_note`). It never
+names `subject` or `domain` (use `add`/`remove`/`set_domain`), nor
+`derived_from`, `provenance`, `depositors` or any required field. Each
+field set gets its own `field_set` history entry naming the field with
+the value before and after; a value the record already has is nothing
+to do.
 
 A change naming an unknown term, an unknown dataset, a term the record
 does not have, or leaving a dataset with no subject at all is refused
 and nothing is written for that dataset. Exit codes: 0 all rewritten or
 nothing to do; 1 something refused or failed; 2 configuration error or
-an unusable change file.
+an unusable change file (including a `set` of a field that cannot be
+set this way).
 
 **Deferred**: a form in the web service for stewards to file a change
 request into `staging/` for the promoter to pick up (r9 §1.4 B). Not

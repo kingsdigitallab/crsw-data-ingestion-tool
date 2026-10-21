@@ -48,9 +48,29 @@ _URL_SCHEMES = ("http", "https")
 # r9: what a category_history entry can say happened to a record's
 # subject terms or domain after deposit. `by` is a username, or
 # "vocabulary" when a vocabulary change was applied mechanically.
+# r11: `field_set`, one entry per descriptive field a steward set in
+# place; the entry names the field.
 HISTORY_KINDS = ("added", "removed", "replaced", "split_review",
-                 "domain_changed")
+                 "domain_changed", "field_set")
 VOCABULARY_ACTOR = "vocabulary"
+
+# The source_type enum: the schema, the CLI menu and the web form all
+# read it from here.
+SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
+                "derived", "other")
+
+# r11: the fields a change file may set in place, in record order, each
+# with its shape. Only descriptive recommended/optional fields: `subject`
+# and `domain` have their own change-file keys (add/remove/set_domain)
+# and their own history kinds; `derived_from`, `provenance`, `depositors`
+# and `category_history` accumulate through deposit and are never
+# overwritten; every required field is identity or the manifest and
+# changes only through a new deposit.
+SETTABLE_FIELDS = (
+    ("creator", "text"), ("source_type", "source_type"),
+    ("source_detail", "text"), ("license", "text"), ("steward", "text"),
+    ("language", "list"), ("ethics_ref", "text"), ("notes", "text"),
+)
 
 _VERSION_IN_RE = re.compile(r"^v?(\d+)[-.](\d+)$", re.IGNORECASE)
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -467,6 +487,15 @@ def validate_history_entry(entry, label: str) -> List[str]:
         errors.append("%s: %s needs from" % (label, kind))
     if needs_to and not entry.get("to"):
         errors.append("%s: %s needs to" % (label, kind))
+    settable = [name for name, _ in SETTABLE_FIELDS]
+    if kind == "field_set":
+        if entry.get("field") not in settable:
+            errors.append("%s: field_set needs field, one of %s"
+                          % (label, "/".join(settable)))
+        if not entry.get("from") and not entry.get("to"):
+            errors.append("%s: field_set needs from or to" % label)
+    elif "field" in entry:
+        errors.append("%s: field only belongs on a field_set entry" % label)
     for field in ("reason", "vocabulary_version"):
         if field in entry and not isinstance(entry[field], str):
             errors.append("%s: %s must be a string" % (label, field))
@@ -475,8 +504,11 @@ def validate_history_entry(entry, label: str) -> List[str]:
 
 def history_entry(when: str, by: str, kind: str, frm=None, to=None,
                   reason: Optional[str] = None,
-                  vocabulary_version: Optional[str] = None) -> dict:
+                  vocabulary_version: Optional[str] = None,
+                  field: Optional[str] = None) -> dict:
     entry = {"when": when, "by": by, "kind": kind}
+    if field:
+        entry["field"] = field
     if frm:
         entry["from"] = list(frm)
     if to:
@@ -488,22 +520,55 @@ def history_entry(when: str, by: str, kind: str, frm=None, to=None,
     return entry
 
 
+def field_set_error(field: str, value) -> Optional[str]:
+    """Why one `set` pair cannot be applied, or None. `None` as the value
+    clears the field. Shared by the change-file reader (so a bad file is
+    refused before any record is read) and apply_dataset_change."""
+    kinds = dict(SETTABLE_FIELDS)
+    if field not in kinds:
+        return ("%r cannot be set this way; a change file may set %s "
+                "(subject by add/remove, domain by set_domain)"
+                % (field, ", ".join(name for name, _ in SETTABLE_FIELDS)))
+    if value is None:
+        return None
+    kind = kinds[field]
+    if kind == "list":
+        if not (isinstance(value, list) and value
+                and all(isinstance(s, str) and s.strip() for s in value)):
+            return "%s must be a list of non-empty strings, or null to clear it" % field
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return "%s must be text, or null to clear it" % field
+    if kind == "source_type" and value not in SOURCE_TYPES:
+        return "source_type %r is not one of %s" % (value, "/".join(SOURCE_TYPES))
+    return None
+
+
+def _as_list(value) -> Optional[List[str]]:
+    if value is None:
+        return None
+    return list(value) if isinstance(value, list) else [value]
+
+
 def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
                          vocab_terms: Set[str],
                          domain_codes: Optional[List[str]] = None,
                          vocabulary_version: Optional[str] = None
                          ) -> Tuple[dict, List[dict]]:
-    """One steward decision about one dataset (r9 §4): `change` may
-    carry `add` and `remove` (subject terms), `set_domain` and `reason`.
-    Returns (new record, the history entries appended). Unknown terms,
-    unknown domains, removing a term the record does not have, or
-    leaving no subject at all raise RecordChangeError; the input record
-    is untouched. `modified` moves to `now`; `vocabulary_version` is
-    stamped when given. A change that changes nothing returns the record
-    as it was and no entries."""
+    """One steward decision about one dataset (r9 §4, r11 §1): `change`
+    may carry `add` and `remove` (subject terms), `set_domain`, `set`
+    (descriptive fields, see SETTABLE_FIELDS; a null value clears) and
+    `reason`. Returns (new record, the history entries appended).
+    Unknown terms, unknown domains, removing a term the record does not
+    have, leaving no subject at all, or setting a field that cannot be
+    set this way raise RecordChangeError; the input record is untouched.
+    `modified` moves to `now`; `vocabulary_version` is stamped when
+    given. A change that changes nothing returns the record as it was
+    and no entries."""
     add = [s for s in (change.get("add") or [])]
     remove = [s for s in (change.get("remove") or [])]
     domain = change.get("set_domain")
+    sets = change.get("set") or {}
     reason = change.get("reason") or None
     unknown = unknown_subjects(add, vocab_terms)
     if unknown:
@@ -518,6 +583,10 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
         if domain not in codes:
             raise RecordChangeError("domain %r is not one of %s"
                                     % (domain, "/".join(codes)))
+    for field, value in sets.items():
+        err = field_set_error(field, value)
+        if err:
+            raise RecordChangeError(err)
     new_subjects = [s for s in subjects if s not in remove]
     for s in add:
         if s not in new_subjects:
@@ -541,12 +610,29 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
                                      frm=[rec.get("domain")], to=[domain],
                                      reason=reason,
                                      vocabulary_version=vocabulary_version))
+    # One entry per field, in record order whatever order the file used;
+    # a value the record already has (or clearing an absent field) is
+    # nothing to record.
+    really_set = []
+    for field, _kind in SETTABLE_FIELDS:
+        if field not in sets or sets[field] == rec.get(field):
+            continue
+        really_set.append(field)
+        entries.append(history_entry(now, who, "field_set", field=field,
+                                     frm=_as_list(rec.get(field)),
+                                     to=_as_list(sets[field]), reason=reason,
+                                     vocabulary_version=vocabulary_version))
     if not entries:
         return rec, []
     out = dict(rec)
     out["subject"] = new_subjects
     if domain is not None:
         out["domain"] = domain
+    for field in really_set:
+        if sets[field] is None:
+            out.pop(field, None)
+        else:
+            out[field] = sets[field]
     out["modified"] = now
     if vocabulary_version:
         out["vocabulary_version"] = vocabulary_version
@@ -747,6 +833,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     for field in ("depositors", "language"):
         if field in rec and not isinstance(rec[field], list):
             errors.append("'%s' must be a list" % field)
+    for field in ("creator", "source_detail", "license", "steward",
+                  "notes", "ethics_ref"):
+        if field in rec and not isinstance(rec[field], str):
+            errors.append("'%s' must be a string" % field)
+    if "source_type" in rec and rec["source_type"] not in SOURCE_TYPES:
+        errors.append("source_type %r is not one of %s"
+                      % (rec["source_type"], "/".join(SOURCE_TYPES)))
 
     if "license" not in rec and "licence" in rec:
         errors.append("'licence' was renamed 'license' in v0.5 (the "
