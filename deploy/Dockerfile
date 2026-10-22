@@ -3,7 +3,12 @@
 # No credentials are baked in; they arrive via environment at run time.
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# The release this image was built from (the git tag), shown in the page
+# header and /health. Compose passes it from the shell's CRSW_VERSION;
+# the runbook's upgrade line sets it with `git describe --tags`.
+ARG CRSW_VERSION=unknown
+ENV CRSW_VERSION=$CRSW_VERSION \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 

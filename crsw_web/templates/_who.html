@@ -2,3 +2,4 @@
     display name comes from the proxy when CRSW_PROXY_NAME_HEADER is set;
     the k-number is always shown because it is what the record holds. -#}
 <span class="who">{{ who_verb }} <strong>{{ user.display_name or user.username }}</strong>{% if user.display_name %} ({{ user.username }}){% endif %}</span>
+<span class="release" title="the release this service was built from">{{ release }}</span>

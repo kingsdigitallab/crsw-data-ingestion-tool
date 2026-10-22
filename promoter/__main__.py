@@ -56,6 +56,7 @@ from crsw_web import s3 as s3mod
 from crsw_web.config import load_dotenv
 from crsw_web.deposits import DepositStore
 from crsw_web.llm import Platform
+from crsw_web.version import release
 
 from . import audit
 from . import embed as embed_mod
@@ -403,7 +404,8 @@ def cmd_run(args) -> int:
     provider_slugs, place_codes, places_source = _lists(vocab_dict)
     log.write("start", run_id=log.run_id, dry_run=args.dry_run, vocabulary=source,
               vocabulary_version=vocab_dict.get("vocabulary_version"),
-              places=places_source, staging=cfg.staging_prefix, bucket=cfg.s3_bucket)
+              places=places_source, staging=cfg.staging_prefix, bucket=cfg.s3_bucket,
+              release=release())
 
     refused = 0
     promoted = 0

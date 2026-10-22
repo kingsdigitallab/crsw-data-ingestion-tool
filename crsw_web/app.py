@@ -37,6 +37,7 @@ from .config import Settings
 from .deposits import STATUS_COMPLETE, STATUS_OPEN, Deposit, DepositStore
 from .vocabulary import VocabularyCache
 from .metadata import SOURCE_TYPES, validate_meta
+from .version import release
 from . import quota
 from .upload import TooLarge, stream_to_s3
 
@@ -140,6 +141,10 @@ def create_app(settings: Optional[Settings] = None,
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals["passages_enabled"] = passages_enabled
+    # The release the image was built from (deploy/Dockerfile's
+    # CRSW_VERSION), in every masthead and /health, so a deploy shows.
+    release_tag = release()
+    templates.env.globals["release"] = release_tag
 
     def emphasise(text: str, question: str) -> Markup:
         """The text escaped, with the question's words in <b>."""
@@ -750,7 +755,7 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/health")
     def health():
         return {"status": "ok", "version": crsw_deposit.__version__,
-                "auth_mode": settings.auth_mode}
+                "release": release_tag, "auth_mode": settings.auth_mode}
 
     @app.get("/whoami")
     def whoami(user: User = Depends(current_user)):

@@ -21,6 +21,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        CRSW_VERSION: ${CRSW_VERSION:-unknown}   # export CRSW_VERSION=$(git describe --tags) first
     image: crsw-deposit-web:local
     env_file:
       - path: ../.env
@@ -76,6 +78,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        CRSW_VERSION: ${CRSW_VERSION:-unknown}
     env_file:
       - ../.env.promoter
     environment:

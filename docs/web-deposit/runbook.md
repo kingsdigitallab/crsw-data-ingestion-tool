@@ -55,8 +55,9 @@ cd /opt/crsw-deposit-web
 cp .env.example .env            # fill in: staging key, CRSW_AUTH_MODE=proxy, CRSW_TRUSTED_PROXY_CIDRS
 chmod 600 .env
 export CRSW_HTTP_PORT=8080 CRSW_TRUSTED_PROXY_CIDRS=<ranges>   # also read by the nginx sidecar
+export CRSW_VERSION=$(git describe --tags)                      # shown in the page header and /health
 docker compose -f deploy/compose.yaml up -d --build
-curl -s localhost:8080/health
+curl -s localhost:8080/health                                   # "release": "v0.17.2"
 ```
 
 The read role (section 7) stays off on the VM until eResearch issue the read-scoped key: leave `CRSW_READ_S3_ACCESS_KEY` and `CRSW_READ_S3_SECRET_KEY` blank. **Never put a personal key on the web VM**; a personal key can write anywhere, and the staging-only design depends on the VM holding nothing that can.
@@ -125,7 +126,7 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 
 ## 4. Routine operations
 
-- **Upgrade**: `git fetch && git checkout <new tag>`, then `docker compose -f deploy/compose.yaml up -d --build` on the web VM and `--profile internal build promoter` on the internal VM. Both must run the same tag.
+- **Upgrade**: `git fetch --tags && git checkout <new tag>`, `export CRSW_VERSION=$(git describe --tags)` (the tag the image reports in the page header, `/health` and the promoter's `start` line; without it the image says `unknown`), then `docker compose -f deploy/compose.yaml up -d --build` on the web VM and `--profile internal build promoter` on the internal VM. Both must run the same tag. The header's release string is the check that the deploy took.
 - **Roll back**: check out the previous tag and rebuild; images are reproducible from the tag.
 - **Disk**: after an upgrade run `docker system prune -f` to drop the old image layers. Logs are rotated by compose; `docker system df` shows what Docker holds.
 - **Vocabulary change merged**: the web service re-fetches the vocabulary every `CRSW_VOCAB_REFRESH_SECONDS` (default 600), so a merged change is in the form within ten minutes; `docker compose -f deploy/compose.yaml restart deposit-web` makes it immediate. `GET /vocabulary` shows the version, source and load time the service is using.

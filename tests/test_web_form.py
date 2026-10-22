@@ -82,6 +82,17 @@ class TestForm(unittest.TestCase):
         self.assertIn('name="domain_extra" value="geo"', html)
         self.assertIn('id="creator-hint"', html)
 
+    def test_header_and_health_show_the_release_the_image_was_built_from(self):
+        with mock.patch.dict(os.environ, {"CRSW_VERSION": "v9.9.9"}):
+            c = TestClient(create_app(Settings(**SETTINGS), s3_client=self.s3, vocab_dict=VOCAB))
+        self.assertIn('<span class="release" title="the release this service was built from">'
+                      'v9.9.9</span>', c.get("/").text)
+        self.assertEqual(c.get("/health").json()["release"], "v9.9.9")
+        from crsw_web import version
+        self.assertEqual(version.release({"CRSW_VERSION": "v1.2.3"}), "v1.2.3")
+        # Blank or the Dockerfile's default: the checkout's git describe, else "dev".
+        self.assertTrue(version.release({"CRSW_VERSION": "unknown"}))
+
     def test_spatial_sits_with_temporal_coverage_and_origin_is_derivation(self):
         html = self.client.get("/").text
         self.assertLess(html.index('id="coverage_end"'), html.index('id="place-search"'))
