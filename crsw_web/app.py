@@ -204,11 +204,19 @@ def create_app(settings: Optional[Settings] = None,
         held = places_held.get("held")
         if held is None or held[0] is not places_doc:
             by_code = places_mod.places_by_code(places_doc)
-            options = [{"code": c, "depth": d, "label": by_code[c].get("label") or c,
+            labels = places_mod.labels_of(places_doc)
+            options = [{"code": c, "depth": d, "label": labels.get(c, c),
                         "kind": by_code[c].get("kind") or ""}
                        for c, d in places_mod.tree(places_doc)]
-            held = (places_doc, {"groups": group_places(options),
-                                 "labels": places_mod.labels_of(places_doc)})
+            # For the form's type-ahead: each place with the labels of
+            # what contains it, nearest first, so "Colombia" can be found
+            # and shown as "South America › Latin America and the Caribbean".
+            typeahead = [{"code": o["code"], "label": o["label"], "kind": o["kind"],
+                          "path": [labels.get(a, a)
+                                   for a in places_mod.ancestors(places_doc, o["code"])]}
+                         for o in options]
+            held = (places_doc, {"groups": group_places(options), "labels": labels,
+                                 "options": typeahead})
             places_held["held"] = held
         return held[1]
 
@@ -227,7 +235,7 @@ def create_app(settings: Optional[Settings] = None,
             "source_types": [(c, SOURCE_TYPE_HELP.get(c, "")) for c in SOURCE_TYPES],
             "activities": v["activities"],
             "providers": v["providers"],
-            "place_groups": place_views(places_cache.current())["groups"],
+            "places": place_views(places_cache.current())["options"],
             "rules": client_rules(),
         })
 

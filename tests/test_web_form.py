@@ -63,16 +63,32 @@ class TestForm(unittest.TestCase):
                       html)
         self.assertIn('data-rights="ACLED terms of use', html)
         self.assertIn('name="provider_other"', html)
-        self.assertIn('name="spatial" multiple', html)
-        self.assertIn('<optgroup label="Americas">', html)
-        self.assertIn('<option value="m49:419">  Latin America and the Caribbean (m49:419)</option>',
-                      html)
-        self.assertIn('<option value="iso:CO">', html)
-        self.assertIn('<optgroup label="World">', html)
+        # Spatial coverage is a type-ahead over the places in the page, with
+        # the chosen ones as pills; no multi-select.
+        self.assertIn('id="place-search"', html)
+        self.assertIn('id="place-pills"', html)
+        self.assertNotIn('name="spatial" multiple', html)
+        start = html.index('<script id="places" type="application/json">') + len(
+            '<script id="places" type="application/json">')
+        places = json.loads(html[start:html.index("</script>", start)])
+        by_code = {p["code"]: p for p in places}
+        self.assertEqual(by_code["iso:CO"]["label"], "Colombia")
+        self.assertEqual(by_code["iso:CO"]["path"],
+                         ["South America", "Latin America and the Caribbean", "Americas", "World"])
+        self.assertEqual(by_code["m49:001"]["path"], [])
+        self.assertEqual(len(places), 278)
         self.assertIn('name="spatial_note"', html)
         self.assertIn('name="notes"', html)
         self.assertIn('name="domain_extra" value="geo"', html)
         self.assertIn('id="creator-hint"', html)
+
+    def test_spatial_sits_with_temporal_coverage_and_origin_is_derivation(self):
+        html = self.client.get("/").text
+        self.assertLess(html.index('id="coverage_end"'), html.index('id="place-search"'))
+        self.assertLess(html.index('id="place-search"'), html.index('name="subject"'))
+        self.assertIn("Derivation: what this was made from, and what made it", html)
+        self.assertNotIn("Origin:", html)
+        self.assertIn('id="origin"', html)          # the script's hook is unchanged
 
     def test_the_form_terms_are_built_once_per_vocabulary(self):
         from crsw_deposit import authority as auth_mod

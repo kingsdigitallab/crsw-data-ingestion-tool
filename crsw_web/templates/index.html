@@ -122,6 +122,22 @@
       </div>
     </div>
 
+    <div class="grid two">
+      <div class="field" data-field="spatial">
+        <label for="place-search">Spatial coverage</label>
+        <div class="pills" id="place-pills"></div>
+        <input id="place-search" type="search" autocomplete="off" spellcheck="false" placeholder="Type a country or region and pick it">
+        <ul class="lookup-results place-results" id="place-results" hidden></ul>
+        <p class="hint">UN M49 regions and countries. A region stands for every country inside it: pick the broadest that fits, or several. Remove a place with its ×.</p>
+        <p class="error" hidden></p>
+      </div>
+      <div class="field" data-field="spatial_note">
+        <label for="spatial_note">Place note</label>
+        <input id="spatial_note" name="spatial_note" type="text" placeholder="What the codes cannot say: sub-national areas, named corpora">
+        <p class="error" hidden></p>
+      </div>
+    </div>
+
     <fieldset class="field" data-field="subject">
       <legend>Subjects <i class="req"></i> <span class="legend-note">choose one or more (vocabulary {{ vocabulary_version }})</span></legend>
       <div class="facets">
@@ -191,22 +207,6 @@
       </div>
     </div>
 
-    <div class="grid two">
-      <div class="field" data-field="spatial">
-        <label for="spatial">Places covered</label>
-        <select id="spatial" name="spatial" multiple size="6">
-          {% for group, options in place_groups %}<optgroup label="{{ group }}">{% for p in options %}<option value="{{ p.code }}">{{ p.pad }}{{ p.label }} ({{ p.code }})</option>{% endfor %}</optgroup>{% endfor %}
-        </select>
-        <p class="hint">UN M49 regions and countries. A region stands for every country inside it: choose the broadest that fits, or several.</p>
-        <p class="error" hidden></p>
-      </div>
-      <div class="field" data-field="spatial_note">
-        <label for="spatial_note">Place note</label>
-        <input id="spatial_note" name="spatial_note" type="text" placeholder="What the codes cannot say: sub-national areas, named corpora">
-        <p class="error" hidden></p>
-      </div>
-    </div>
-
     <div class="field" data-field="notes">
       <label for="notes">Notes</label>
       <textarea id="notes" name="notes" rows="3" placeholder="Anything a reader should know that the other fields do not say"></textarea>
@@ -214,7 +214,7 @@
     </div>
 
     <details class="origin" id="origin">
-      <summary>Origin: what this was made from, and what made it</summary>
+      <summary>Derivation: what this was made from, and what made it</summary>
       <p class="lede">Optional. Fill this in if the dataset was derived from other data, or produced by a script or notebook you can name.</p>
       <div class="field" data-field="derived_from">
         <label for="derived_from">Derived from</label>
@@ -321,6 +321,7 @@
 </main>
 
 <script id="rules" type="application/json">{{ rules | tojson }}</script>
+<script id="places" type="application/json">{{ places | tojson }}</script>
 <script src="/static/deposit.js" defer></script>
 </body>
 </html>

@@ -23,14 +23,14 @@
     }
     return el.value.trim();
   }
-  // Every chosen value of a multi-select or a checkbox group (r11:
-  // provider, places, the extra domains).
+  // Every chosen value of a multi-select, a checkbox group or a row of
+  // pills (hidden inputs): provider, places, the extra domains.
   function vals(name) {
     var out = [];
     Array.prototype.forEach.call(form.querySelectorAll('[name="' + name + '"]'), function (el) {
       if (el.tagName === "SELECT") {
         Array.prototype.forEach.call(el.selectedOptions, function (o) { if (o.value) out.push(o.value); });
-      } else if (el.checked && el.value) {
+      } else if (el.type === "hidden" ? el.value : (el.checked && el.value)) {
         out.push(el.value);
       }
     });
@@ -162,6 +162,91 @@
   $("pick-files").addEventListener("change", function () { addFiles(this.files, false); this.value = ""; });
   $("pick-folder").addEventListener("change", function () { addFiles(this.files, true); this.value = ""; });
   $("clear-files").addEventListener("click", function () { files = []; renderFiles(0); });
+
+  // ----- spatial coverage: type a place, pick it, it becomes a pill -------
+  // The places (UN M49, from places.json) are in the page; matching is
+  // on the label, the code and the labels of what contains the place.
+  var placeWidget = (function () {
+    var search = $("place-search"), list = $("place-results"), pills = $("place-pills");
+    if (!search) return { add: function () {} };
+    var PLACES = JSON.parse(document.getElementById("places").textContent);
+    var byCode = {};
+    PLACES.forEach(function (p) { byCode[p.code] = p; });
+    var active = -1, shown = [];
+    function chosen() {
+      return Array.prototype.map.call(pills.querySelectorAll("input[name=spatial]"), function (i) { return i.value; });
+    }
+    function add(code) {
+      if (!code || chosen().indexOf(code) >= 0) return;
+      var p = byCode[code] || { code: code, label: code, path: [] };
+      var pill = document.createElement("span"); pill.className = "pill"; pill.dataset.code = code;
+      pill.appendChild(document.createTextNode(p.label + " "));
+      var c = document.createElement("code"); c.textContent = code; pill.appendChild(c);
+      var x = document.createElement("button"); x.type = "button"; x.textContent = "×";
+      x.setAttribute("aria-label", "Remove " + p.label);
+      x.addEventListener("click", function () { pill.remove(); search.focus(); });
+      pill.appendChild(x);
+      var hidden = document.createElement("input"); hidden.type = "hidden"; hidden.name = "spatial"; hidden.value = code;
+      pill.appendChild(hidden);
+      pills.appendChild(pill);
+    }
+    function close() { list.hidden = true; list.textContent = ""; shown = []; active = -1; }
+    function matches(q) {
+      var have = chosen();
+      var starts = [], contains = [];
+      PLACES.forEach(function (p) {
+        if (have.indexOf(p.code) >= 0) return;
+        var label = p.label.toLowerCase();
+        if (label.indexOf(q) === 0) starts.push(p);
+        else if (label.indexOf(q) >= 0 || p.code.toLowerCase().indexOf(q) >= 0 ||
+                 p.path.some(function (a) { return a.toLowerCase().indexOf(q) >= 0; })) contains.push(p);
+      });
+      return starts.concat(contains).slice(0, 12);
+    }
+    function render() {
+      var q = search.value.trim().toLowerCase();
+      if (!q) { close(); return; }
+      shown = matches(q); active = -1;
+      list.textContent = "";
+      if (!shown.length) {
+        var none = document.createElement("li"); none.className = "empty"; none.textContent = "No place matches.";
+        list.appendChild(none);
+      }
+      shown.forEach(function (p, i) {
+        var li = document.createElement("li");
+        var b = document.createElement("button"); b.type = "button";
+        var name = document.createElement("strong"); name.textContent = p.label;
+        var where = document.createElement("small");
+        where.textContent = (p.path.length ? "in " + p.path.join(" › ") + " · " : "") + p.code;
+        b.appendChild(name); b.appendChild(where);
+        b.addEventListener("mousedown", function (ev) { ev.preventDefault(); });   // keep focus in the box
+        b.addEventListener("click", function () { pick(i); });
+        li.appendChild(b); list.appendChild(li);
+      });
+      list.hidden = false;
+    }
+    function highlight() {
+      Array.prototype.forEach.call(list.querySelectorAll("li"), function (li, i) { li.classList.toggle("active", i === active); });
+    }
+    function pick(i) {
+      if (i < 0 || i >= shown.length) return;
+      add(shown[i].code);
+      search.value = "";
+      close();
+      search.focus();
+    }
+    search.addEventListener("input", render);
+    search.addEventListener("focus", render);
+    search.addEventListener("blur", function () { setTimeout(close, 150); });
+    search.addEventListener("keydown", function (ev) {
+      if (list.hidden) return;
+      if (ev.key === "ArrowDown") { ev.preventDefault(); active = Math.min(active + 1, shown.length - 1); highlight(); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+      else if (ev.key === "Enter") { ev.preventDefault(); pick(active >= 0 ? active : 0); }
+      else if (ev.key === "Escape") { close(); }
+    });
+    return { add: add };
+  })();
 
   // ----- the upstream-dataset lookup (read role only) -------------------
   // Searches /datasets.json and appends the chosen identifier as a new
@@ -350,10 +435,10 @@
       if (Array.isArray(d.domain)) {
         form.querySelectorAll('input[name=domain_extra]').forEach(function (c) { c.checked = d.domain.indexOf(c.value) > 0; });
       }
-      ["provider", "spatial"].forEach(function (id) {
-        var sel = $(id);
-        if (sel && Array.isArray(d[id])) Array.prototype.forEach.call(sel.options, function (o) { o.selected = d[id].indexOf(o.value) >= 0; });
-      });
+      if ($("provider") && Array.isArray(d.provider)) {
+        Array.prototype.forEach.call($("provider").options, function (o) { o.selected = d.provider.indexOf(o.value) >= 0; });
+      }
+      if (Array.isArray(d.spatial)) d.spatial.forEach(placeWidget.add);
       if (d.subject) {
         form.querySelectorAll('input[name=subject]').forEach(function (c) { c.checked = d.subject.indexOf(c.value) >= 0; });
       }

@@ -194,3 +194,15 @@ select[multiple] { width: 100%; font-family: inherit; }
 .choices.extra { margin-top: .4rem; font-size: .92rem; }
 .choices.extra .extra-label { color: var(--muted); margin-right: .4rem; }
 .choices.extra label { margin-right: .75rem; }
+
+/* Spatial coverage: type-ahead results under the box, chosen places as pills. */
+.pills { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .4rem; }
+.pills:empty { margin: 0; }
+.pill { display: inline-flex; align-items: center; gap: .35rem; padding: .1rem .3rem .1rem .6rem; border: 1px solid var(--rule); border-radius: 1rem; background: var(--surface); font-size: .9rem; line-height: 1.5; }
+.pill code { font-size: .8rem; color: var(--muted); }
+.pill button { border: 0; background: none; cursor: pointer; font: inherit; font-size: 1.05rem; line-height: 1; padding: 0 .2rem; color: var(--muted); }
+.pill button:hover, .pill button:focus-visible { color: var(--danger); }
+.place-results { margin: .25rem 0 0; border: 1px solid var(--rule); background: var(--surface); max-height: 14rem; padding: 0 .5rem; }
+.place-results li:first-child { border-top: 0; }
+.place-results li.active button { background: var(--page); }
+.place-results small { display: inline; margin: 0 0 0 .5rem; }
