@@ -67,23 +67,33 @@
     </form>
 
     {% if subject_notice %}<p class="notice">{{ subject_notice }}</p>{% endif %}
-    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}{% if place_filter %} covering {{ place_filter.label }}{% if place_filter.how == "hierarchy" %} (or a place containing or inside it){% endif %}{% endif %}</p>
+    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %} in {{ n_projects }} project{% if n_projects != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}{% if place_filter %} covering {{ place_filter.label }}{% if place_filter.how == "hierarchy" %} (or a place containing or inside it){% endif %}{% endif %}</p>
     {% if results %}
-    <table class="files results">
-      <thead><tr><th>Dataset</th><th>Where</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>
-      <tbody>
-      {% for r in results %}
-      <tr>
-        <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span></td>
-        <td><code>{{ r.identifier }}</code></td>
-        <td>{{ r.depositor or "" }}</td>
-        <td class="num">{{ r.files }}</td>
-        <td class="num">{{ sizes[r.identifier] }}</td>
-        <td>{{ (r.modified or "")[:10] }}</td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="projects">
+    {% for g in groups %}
+    <details class="project"{% if opened %} open{% endif %}>
+      <summary><span class="name">{{ g.project }}</span><span class="tag strand">{{ g.strand }}</span><span class="meta">{{ g.rows|length }} dataset{% if g.rows|length != 1 %}s{% endif %} · {{ g.files }} file{% if g.files != 1 %}s{% endif %} · {{ g.size }} · {{ g.modified[:10] }}</span></summary>
+      <table class="files results">
+        <thead><tr><th>Dataset</th><th>State</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>
+        <tbody>
+        {% for r in g.rows %}
+        <tr class="dataset">
+          <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span></td>
+          <td>{{ r.state }}</td>
+          <td>{{ r.depositor or "" }}</td>
+          <td class="num">{{ r.files }}</td>
+          <td class="num">{{ sizes[r.identifier] }}</td>
+          <td>{{ (r.modified or "")[:10] }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endfor %}
+    </div>
+    {% if pages > 1 or per != per_default or n_projects > per_default %}
+    <p class="pager">{% if pages > 1 %}<span class="range">Projects {{ first }}–{{ last }} of {{ n_projects }}</span> {% if page > 1 %}<a href="{{ pager_url(page - 1, per) }}">Previous</a>{% endif %} {% for p in range(1, pages + 1) %}{% if p == page %}<span class="current">{{ p }}</span>{% else %}<a href="{{ pager_url(p, per) }}">{{ p }}</a>{% endif %} {% endfor %}{% if page < pages %}<a href="{{ pager_url(page + 1, per) }}">Next</a>{% endif %} {% endif %}<span class="show">Show {% for n in per_choices %}{% if n == per %}<span class="current">{{ n }}</span>{% else %}<a href="{{ pager_url(1, n) }}">{{ n }}</a>{% endif %} {% endfor %}a page</span></p>
+    {% endif %}
     {% else %}
     <p class="empty">Nothing matches.</p>
     {% endif %}

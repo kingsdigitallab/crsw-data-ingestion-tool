@@ -122,13 +122,13 @@ class TestFind(CatalogueBase):
         self.assertIn('href="/datasets"', html)
         page = c.get("/datasets")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("2 datasets", page.text)
+        self.assertIn("2 datasets in 2 projects", page.text)
         self.assertIn('href="/datasets/%s"' % GREEN, page.text)
         self.assertIn('href="/datasets/%s"' % AMBER, page.text)
         self.assertIn("Index built 2026-", page.text)
         self.assertIn("1.2 KB", page.text)
         page = c.get("/datasets", params={"q": "interview"})
-        self.assertIn("1 dataset<", page.text)
+        self.assertIn("1 dataset in 1 project<", page.text)
         self.assertNotIn(GREEN, page.text)
         page = c.get("/datasets", params={"strand": "rs2"})
         self.assertNotIn(AMBER, page.text)
@@ -206,6 +206,133 @@ class TestFind(CatalogueBase):
         self.assertEqual(c.get("/datasets/" + GREEN).status_code, 200)
 
 
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestGrouping(unittest.TestCase):
+    """The find page's list is projects first: `group_projects` folds
+    rows into projects in order of first appearance (so newest-first
+    and an answer's ranking both survive), `page_of` cuts the projects
+    into pages of 10, 25 or 50."""
+    def rows(self):
+        return [
+            {"identifier": "rs2/csac/green/2_final/latam", "strand": "rs2", "project": "csac",
+             "files": 3, "bytes": 300, "modified": "2026-10-22T10:00:00Z"},
+            {"identifier": "rs1/oral/amber/1_interim/interviews", "strand": "rs1",
+             "project": "oral", "files": 1, "bytes": 9, "modified": "2026-10-19T10:00:00Z"},
+            {"identifier": "rs2/csac/green/0_raw/events", "strand": "rs2", "project": "csac",
+             "files": 2, "bytes": 1240, "modified": "2026-09-01T00:00:00Z"},
+        ]
+
+    def test_groups_keep_first_appearance_order_and_sum_the_datasets(self):
+        from crsw_web.catalogue import group_projects
+        groups = group_projects(self.rows())
+        self.assertEqual([(g["strand"], g["project"]) for g in groups],
+                         [("rs2", "csac"), ("rs1", "oral")])
+        csac = groups[0]
+        self.assertEqual([r["identifier"].split("/")[-1] for r in csac["rows"]],
+                         ["latam", "events"])
+        self.assertEqual((csac["files"], csac["bytes"], csac["modified"]),
+                         (5, 1540, "2026-10-22T10:00:00Z"))
+        self.assertEqual(group_projects([]), [])
+        # A project name reused in another strand is another project.
+        rows = self.rows() + [{"identifier": "rs3/csac/green/0_raw/x", "strand": "rs3",
+                               "project": "csac", "files": 0, "bytes": 0, "modified": ""}]
+        self.assertEqual(len(group_projects(rows)), 3)
+
+    def test_pages_clamp_the_page_and_the_size(self):
+        from crsw_web.catalogue import page_of, PER_CHOICES, PER_DEFAULT
+        self.assertEqual((PER_CHOICES, PER_DEFAULT), ((10, 25, 50), 10))
+        items = list(range(23))
+        self.assertEqual(page_of(items, 1, 10), (items[:10], 1, 3, 10))
+        self.assertEqual(page_of(items, 3, 10), (items[20:], 3, 3, 10))
+        self.assertEqual(page_of(items, 9, 10), (items[20:], 3, 3, 10))      # past the end
+        self.assertEqual(page_of(items, 0, 10), (items[:10], 1, 3, 10))      # before it
+        self.assertEqual(page_of(items, 1, 25), (items, 1, 1, 25))
+        self.assertEqual(page_of(items, 2, 50), (items, 1, 1, 50))
+        self.assertEqual(page_of(items, 1, 7), (items[:10], 1, 3, 10))       # not a choice
+        self.assertEqual(page_of(items, 1, None), (items[:10], 1, 3, 10))
+        self.assertEqual(page_of([], 1, 10), ([], 1, 1, 10))
+
+
+class TestProjectAccordion(CatalogueBase):
+    """The find page groups datasets under their project, closed while
+    browsing and open once a search narrowed the list, ten projects a
+    page with the page size in the address and remembered."""
+    def seed(self):
+        super().seed()
+        for n in range(11):
+            ident = "rs3/proj-%02d/green/0_raw/d" % n
+            self.put_record(ident, dict(META, strand="rs3", project="proj-%02d" % n, dataset="d",
+                                        abstract="Project number %d. " % n * 10),
+                            [record.manifest_entry("d.csv", ("%x" % n) * 64, 10)],
+                            "k1078591", "%08d-0000-4000-8000-000000000000" % n,
+                            modified="2026-08-%02dT00:00:00Z" % (n + 1))
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+
+    def test_projects_are_closed_when_browsing_and_open_when_searching(self):
+        c = self.app()
+        html = c.get("/datasets").text
+        self.assertIn("13 datasets in 13 projects", html)
+        self.assertIn('<details class="project">', html)
+        self.assertNotIn('<details class="project" open>', html)
+        # Project, strand, then the datasets inside; "Where" has gone.
+        self.assertIn('<span class="name">csac</span><span class="tag strand">rs2</span>', html)
+        self.assertLess(html.index('<span class="name">csac</span>'),
+                        html.index('href="/datasets/%s"' % GREEN))
+        self.assertNotIn("<th>Where</th>", html)
+        self.assertIn("<th>State</th>", html)
+        self.assertIn("1.2 KB", html)
+        for params in ({"q": "interview"}, {"strand": "rs1"}, {"sensitivity": "amber"}):
+            html = c.get("/datasets", params=params).text
+            self.assertIn('<details class="project" open>', html, params)
+            self.assertNotIn('<details class="project">', html, params)
+            self.assertIn("1 dataset in 1 project", html)
+
+    def test_ten_projects_a_page_newest_first(self):
+        c = self.app()
+        html = c.get("/datasets").text
+        self.assertEqual(html.count('<details class="project"'), 10)
+        self.assertIn("Projects 1–10 of 13", html)
+        self.assertIn('href="/datasets?page=2&amp;per=10">Next', html)
+        self.assertNotIn("Previous</a>", html)
+        # Newest project first: the two seeded datasets were modified in
+        # September, the eleven others in August.
+        for name in ("csac", "oral"):
+            self.assertLess(html.index('<span class="name">%s</span>' % name),
+                            html.index('<span class="name">proj-10</span>'))
+        self.assertNotIn('<span class="name">proj-02</span>', html)
+        html = c.get("/datasets", params={"page": 2}).text
+        self.assertEqual(html.count('<details class="project"'), 3)
+        self.assertIn("Projects 11–13 of 13", html)
+        self.assertIn('<span class="name">proj-02</span>', html)
+        self.assertIn('href="/datasets?page=1&amp;per=10">Previous', html)
+        self.assertNotIn("Next</a>", html)
+        # The pager carries the filters along.
+        html = c.get("/datasets", params={"strand": "rs3", "page": 2}).text
+        self.assertIn("11 datasets in 11 projects", html)
+        self.assertIn('href="/datasets?strand=rs3&amp;page=1&amp;per=10">Previous', html)
+        # Past the end lands on the last page, not an empty one.
+        html = c.get("/datasets", params={"page": 9}).text
+        self.assertIn("Projects 11–13 of 13", html)
+
+    def test_page_size_in_the_address_and_remembered(self):
+        c = self.app()
+        r = c.get("/datasets", params={"per": 25})
+        self.assertEqual(r.text.count('<details class="project"'), 13)
+        self.assertNotIn("Projects 1–", r.text)                    # one page: no pager
+        self.assertIn('href="/datasets?page=1&amp;per=10">10</a>', r.text)   # but the sizes
+        self.assertIn('<span class="current">25</span>', r.text)
+        self.assertEqual(r.cookies.get("crsw_per"), "25")
+        # The browser sends the cookie back: the choice sticks.
+        self.assertEqual(c.get("/datasets").text.count('<details class="project"'), 13)
+        c.cookies.set("crsw_per", "7")                                  # not a choice
+        self.assertEqual(c.get("/datasets").text.count('<details class="project"'), 10)
+        r = c.get("/datasets", params={"per": 7})
+        self.assertEqual(r.text.count('<details class="project"'), 10)
+        self.assertIsNone(r.cookies.get("crsw_per"))
+        # Fewer projects than a page: no pager at all.
+        self.assertNotIn('class="pager"', c.get("/datasets", params={"strand": "rs2"}).text)
+
+
 class TestHierarchy(CatalogueBase):
     """Vocabulary handoff, part 1: a subject filter follows the hierarchy,
     a retired slug finds its successors, and the select shows the tree."""
@@ -240,7 +367,7 @@ class TestHierarchy(CatalogueBase):
         page = c.get("/datasets", params={"subject": "armed-conflict"})
         self.assertIn('href="/datasets/%s"' % self.WARS, page.text)
         self.assertNotIn(GREEN, page.text)
-        self.assertIn("1 dataset with subject armed-conflict (and 1 narrower term)", page.text)
+        self.assertIn("1 dataset in 1 project with subject armed-conflict (and 1 narrower term)", page.text)
         self.assertNotIn(self.WARS, c.get("/datasets", params={"subject": "occupation"}).text)
         self.assertEqual(self.ids(c, subject="interstate-war"), [self.WARS])
 
@@ -317,7 +444,7 @@ class TestHierarchy(CatalogueBase):
             "date": "2026-10-04", "by": "k1"})
         c = self.app(vocab=v)
         page = c.get("/datasets", params={"subject": "armed-conflict"})
-        self.assertIn("1 dataset with subject armed-conflict (and 1 narrower term)", page.text)
+        self.assertIn("1 dataset in 1 project with subject armed-conflict (and 1 narrower term)", page.text)
         self.assertNotIn("2 narrower", page.text)
         body = c.get("/datasets.json", params={"subject": "armed-conflict"}).json()
         self.assertEqual(body["subject_filter"]["matched"],
@@ -528,7 +655,7 @@ class TestPlaces(CatalogueBase):
         c = self.app()
         self.assertEqual(self.ids(c, place="iso:CO"), [self.COLOMBIA, self.LATAM])
         page = c.get("/datasets", params={"place": "iso:CO"})
-        self.assertIn("2 datasets covering Colombia (or a place containing or inside it)",
+        self.assertIn("2 datasets in 1 project covering Colombia (or a place containing or inside it)",
                       page.text)
         self.assertIn('<option value="iso:CO" selected>', page.text)
 

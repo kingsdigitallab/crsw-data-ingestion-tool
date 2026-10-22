@@ -62,6 +62,20 @@ ol.hits b, .hint b { font-weight: 600; }
 .tag { display: inline-block; margin-left: .5rem; padding: 0 .4rem; border-radius: 3px; font-size: .75rem; font-weight: 600; text-transform: none; }
 .tag.green { background: var(--green); color: var(--action-ink); }
 .tag.amber { background: var(--amber); color: var(--action-ink); }
+.tag.strand { background: var(--surface); border: 1px solid var(--rule); color: var(--muted); text-transform: uppercase; font-size: .7rem; }
+.projects { border-top: 1px solid var(--rule); }
+.projects details.project { border-bottom: 1px solid var(--rule); }
+.projects details.project > summary { display: flex; align-items: baseline; gap: .25rem .5rem; flex-wrap: wrap; padding: .55rem 0; cursor: pointer; list-style: none; }
+.projects details.project > summary::-webkit-details-marker { display: none; }
+.projects details.project > summary::before { content: "▸"; color: var(--muted); width: 1rem; flex: none; }
+.projects details.project[open] > summary::before { content: "▾"; }
+.projects details.project > summary .name { font-weight: 600; }
+.projects details.project > summary .meta { color: var(--muted); font-size: .9rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+.projects details.project > table.files { margin: 0 0 .75rem 1.5rem; width: calc(100% - 1.5rem); }
+.projects details.project > table.files tbody tr:last-child td { border-bottom: 0; }
+.pager { color: var(--muted); font-size: .92rem; display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
+.pager .show { margin-left: auto; }
+.pager .current { font-weight: 600; color: var(--ink); }
 .notice { padding: .7rem 1rem; border-left: 3px solid var(--amber); background: var(--surface); }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li { margin: .15rem 0; }
@@ -94,7 +108,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .choices.stack { flex-direction: column; gap: .3rem; }
 .choices label { display: inline-flex; align-items: baseline; gap: .4rem; }
 .choices small { color: var(--muted); }
-.sens.green { color: var(--green); } .sens.amber { color: var(--amber); }
+label.sens.green { color: var(--green); } label.sens.amber { color: var(--amber); }
 .hint { color: var(--muted); font-size: .92rem; margin: .35rem 0 0; }
 details.origin { border: 1px solid var(--rule); padding: .6rem 1rem; margin: 0 0 1.25rem; }
 details.origin > summary { cursor: pointer; font-weight: 600; }

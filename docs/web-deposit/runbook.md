@@ -460,7 +460,7 @@ unchanged until the key exists.
 
 | Route | What |
 |---|---|
-| `/datasets` | search box and filters (strand, state, sensitivity, subject, place) over the index; subject and place follow their hierarchies (r9, r11) |
+| `/datasets` | search box and filters (strand, state, sensitivity, subject, place) over the index; subject and place follow their hierarchies (r9, r11). The list folds into projects (newest first, each a row that opens to its datasets; closed when browsing, open once a search or filter narrowed the list), ten projects a page: `page=N`, `per=10|25|50`; a `per` given in the address is remembered in the `crsw_per` cookie |
 | `/datasets.json?q=…` | the same rows as JSON; feeds the form's "Find a dataset in the store" picker under the derived-from box and the project and dataset name pickers |
 | `/deposits/lookup?strand&project&sensitivity&state&dataset` | what a deposit would land on: the existing dataset (summary, the record's values for prefill, its file list), a same-named dataset elsewhere in the project, near-matches, and deposits to it still waiting in staging. The form calls it as the name is typed; `POST /deposits` to an existing or waiting dataset then needs `confirm_existing`, and a version lower than the record's is refused |
 | `/datasets/<identifier>` | the record's description, derived-from links both ways, provenance, files |

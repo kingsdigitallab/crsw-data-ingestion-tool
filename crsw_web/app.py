@@ -13,7 +13,7 @@ from datetime import timezone
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -29,7 +29,7 @@ from crsw_deposit import (authority, deposit_logic, keys, labels as labels_mod, 
 from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
-from .catalogue import Catalogue
+from .catalogue import PER_CHOICES, PER_DEFAULT, Catalogue, group_projects, page_of
 from .llm import Platform, PlatformError
 from .passages import (open_index, split_sentences, mark_closest, word_pattern,
                        question_stems)
@@ -361,12 +361,28 @@ def create_app(settings: Optional[Settings] = None,
                  "yes" if ans.notice else "no")
         return ans
 
+    PER_COOKIE = "crsw_per"
+
+    def per_from(per: Optional[int], request: Request) -> Tuple[int, bool]:
+        """The page size: the address's `per` when it is a choice (and
+        then it is remembered in a cookie), else the cookie's, else the
+        default. The flag says whether to set the cookie."""
+        if per in PER_CHOICES:
+            return per, True
+        try:
+            saved = int(request.cookies.get(PER_COOKIE, ""))
+        except ValueError:
+            saved = 0
+        return (saved if saved in PER_CHOICES else PER_DEFAULT), False
+
     @app.get("/datasets", response_class=HTMLResponse)
     def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
                       sensitivity: str = "", subject: str = "", project: str = "",
-                      place: str = "", ask: str = "", user: User = Depends(current_user)):
+                      place: str = "", ask: str = "", page: int = 1,
+                      per: Optional[int] = None, user: User = Depends(current_user)):
         cat = need_read()
         ask = " ".join(ask.split())
+        per, remember = per_from(per, request)
         ans = asked(cat, user, ask)
         if ans is not None:
             results = ans.rows
@@ -382,7 +398,21 @@ def create_app(settings: Optional[Settings] = None,
             results = cat.search(**search_args(q, strand, state, sensitivity, subject,
                                                project, place))
         view = subject_view(cat, subject, results)
-        return templates.TemplateResponse(request, "datasets.html", {
+        # Projects first (r11 find page): the list folds into projects,
+        # ten a page, closed while browsing and open once something
+        # narrowed the list.
+        groups = group_projects(results)
+        shown, page, pages, per = page_of(groups, page, per)
+        for g in shown:
+            g["size"] = record.human_bytes(g["bytes"])
+        query = [(k, v) for k, v in (("q", q), ("strand", strand), ("state", state),
+                                     ("sensitivity", sensitivity), ("subject", subject),
+                                     ("project", project), ("place", place), ("ask", ask)) if v]
+
+        def pager_url(to_page: int, to_per: int) -> str:
+            return "/datasets?" + urlencode(query + [("page", to_page), ("per", to_per)])
+
+        response = templates.TemplateResponse(request, "datasets.html", {
             "user": user, "q": q, "strand": strand, "state": state,
             "sensitivity": sensitivity, "subject": view["selected"] if view else subject,
             "strands": keys.STRANDS, "states": keys.STATES,
@@ -390,13 +420,22 @@ def create_app(settings: Optional[Settings] = None,
             "subject_filter": view, "subject_notice": view["notice"] if view else None,
             "place": place, "place_groups": group_places(cat.place_options()),
             "place_filter": place_view(cat, place),
-            "results": results,
+            "results": results, "groups": shown,
+            "opened": bool(ask or q or strand or state or sensitivity or subject
+                           or project or place),
+            "n_projects": len(groups), "page": page, "pages": pages, "per": per,
+            "per_choices": PER_CHOICES, "per_default": PER_DEFAULT, "pager_url": pager_url,
+            "first": (page - 1) * per + 1, "last": min(page * per, len(groups)),
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
             "built_at": cat.built_at(), "error": cat.error,
             "ask_enabled": ask_enabled, "ask": ask,
             "understood": ans.understood() if ans is not None else "",
             "ask_notice": ans.notice if ans is not None else None,
         })
+        if remember:
+            response.set_cookie(PER_COOKIE, str(per), max_age=365 * 86400, httponly=True,
+                                samesite="lax")
+        return response
 
     @app.get("/datasets.json")
     def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",

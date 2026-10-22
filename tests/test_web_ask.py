@@ -125,7 +125,7 @@ class TestAskOff(AskBase):
         html = c.get("/datasets", params={"ask": "conflict deaths"}).text
         self.assertNotIn('id="ask"', html)
         self.assertNotIn("Understood as", html)
-        self.assertEqual(html.count("<tr>"), 4)          # header + all three rows
+        self.assertEqual(html.count('<tr class="dataset">'), 3)   # all three rows
         body = c.get("/datasets.json", params={"ask": "conflict deaths"}).json()
         self.assertNotIn("understood", body)
         self.assertEqual(len(body["datasets"]), 3)
@@ -195,7 +195,8 @@ class TestAsk(AskBase):
         self.assertIn('<option value="rs2" selected>', html)
         self.assertIn('<option value="armed-conflict" selected>', html)
         self.assertIn('id="ask" name="ask" type="search" value="anything on conflict deaths since 1990"', html)
-        self.assertEqual(html.count("<tr>"), 2)          # header + the one match
+        self.assertEqual(html.count('<tr class="dataset">'), 1)   # the one match
+        self.assertIn('<details class="project" open>', html)   # a question opens the projects
         self.assertIn(CLEAN, html)
         # What the platform saw: the question, the vocabulary in use on
         # green rows, the question again for the vector; the reranker got

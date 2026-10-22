@@ -57,6 +57,43 @@ class Answer:
         return describe_filter(self.filter)
 
 
+PER_CHOICES = (10, 25, 50)   # projects a page on the find page
+PER_DEFAULT = 10
+
+
+def group_projects(rows: Sequence[Dict]) -> List[Dict]:
+    """The find page's list, projects first: one group per (strand,
+    project) in order of first appearance, so a newest-first list stays
+    newest-first and an answer's ranking puts the best match's project
+    at the top. Rows keep their order inside the group."""
+    groups: Dict[Tuple[str, str], Dict] = {}
+    for r in rows:
+        key = (r.get("strand") or "", r.get("project") or "")
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"strand": key[0], "project": key[1], "rows": [],
+                               "files": 0, "bytes": 0, "modified": ""}
+        g["rows"].append(r)
+        g["files"] += int(r.get("files") or 0)
+        g["bytes"] += int(r.get("bytes") or 0)
+        g["modified"] = max(g["modified"], r.get("modified") or "")
+    return list(groups.values())
+
+
+def page_of(items: Sequence, page, per) -> Tuple[List, int, int, int]:
+    """One page of `items`: (the slice, the page shown, how many pages,
+    the size used). A size that is not a choice is the default; a page
+    past the end is the last one, before the start the first."""
+    per = per if per in PER_CHOICES else PER_DEFAULT
+    pages = max(1, (len(items) + per - 1) // per)
+    try:
+        page = int(page or 1)
+    except (TypeError, ValueError):
+        page = 1
+    page = min(max(page, 1), pages)
+    return list(items[(page - 1) * per:page * per]), page, pages, per
+
+
 def describe_filter(filt: Dict[str, str]) -> str:
     """The filter in words, for the "Understood as" line."""
     parts = [label + " " + filt[k] for k, label in FILTER_LABELS if filt.get(k)]

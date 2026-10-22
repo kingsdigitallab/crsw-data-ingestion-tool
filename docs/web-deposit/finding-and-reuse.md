@@ -321,6 +321,19 @@ sensitivities' metadata may go to the platform is one list on each side,
 the Centre's answer on amber is a one-word change, not a build. The same
 lists will govern file contents when section 7 is built.
 
+**22 October 2026, the list as projects.** With the first real deposits
+in place the flat table (one row per dataset, the whole identifier in a
+"Where" column) was reviewed against what a reader wants first: the
+project. The find page now folds the rows into projects
+(`catalogue.group_projects`, in order of first appearance so a
+newest-first list and a question's ranking both survive), each a row
+that opens to its datasets with state, depositor, files, size and date;
+closed while browsing, open once a search, filter or question narrowed
+the list. Ten projects a page (`page`, `per` of 10, 25 or 50; a size
+chosen in the address is remembered in a cookie, so no script is
+needed). `/datasets.json` stays unpaged: the form's pickers read every
+row of a strand from it.
+
 ## 6. Sequence
 
 1. **Now, with no external dependency.** Fix the "derived from" defect and
