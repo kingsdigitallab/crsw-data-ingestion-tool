@@ -58,10 +58,17 @@ class TestForm(unittest.TestCase):
 
     def test_form_offers_providers_places_and_the_r11_fields(self):
         html = self.client.get("/").text
-        self.assertIn('name="provider" multiple', html)
-        self.assertIn('<option value="acled" data-name="Armed Conflict Location &amp; Event Data (ACLED)"',
-                      html)
-        self.assertIn('data-rights="ACLED terms of use', html)
+        # Provider is a type-ahead with pills too, over the vocabulary's list.
+        self.assertIn('id="provider-search"', html)
+        self.assertIn('id="provider-pills"', html)
+        self.assertNotIn('name="provider" multiple', html)
+        start = html.index('<script id="providers" type="application/json">') + len(
+            '<script id="providers" type="application/json">')
+        providers = json.loads(html[start:html.index("</script>", start)])
+        acled = next(p for p in providers if p["slug"] == "acled")
+        self.assertEqual(acled["name"], "Armed Conflict Location & Event Data (ACLED)")
+        self.assertTrue(acled["rights"].startswith("ACLED terms of use"))
+        self.assertEqual(len(providers), 6)
         self.assertIn('name="provider_other"', html)
         # Spatial coverage is a type-ahead over the places in the page, with
         # the chosen ones as pills; no multi-select.

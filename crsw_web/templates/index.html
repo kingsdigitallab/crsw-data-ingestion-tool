@@ -160,11 +160,11 @@
 
     <div class="grid two">
       <div class="field" data-field="provider">
-        <label for="provider">Provider</label>
-        <select id="provider" name="provider" multiple size="4">
-          {% for p in providers %}<option value="{{ p.slug }}" data-name="{{ p.name }}" data-rights="{{ p.rights }}" data-url="{{ p.url }}">{{ p.slug }} — {{ p.name }}</option>{% endfor %}
-        </select>
-        <p class="hint" id="provider-hint">{% if providers %}Who supplies the data, from the vocabulary's list. Choosing one fills the licence with the provider's default rights statement and, for raw data, the creator.{% else %}The vocabulary in hand has no providers list; leave this blank.{% endif %}</p>
+        <label for="provider-search">Provider</label>
+        <div class="pills" id="provider-pills"></div>
+        <input id="provider-search" type="search" autocomplete="off" spellcheck="false" placeholder="Type a provider and pick it"{% if not providers %} disabled{% endif %}>
+        <ul class="lookup-results place-results" id="provider-results" hidden></ul>
+        <p class="hint" id="provider-hint">{% if providers %}Who supplies the data, from the vocabulary's list. Picking one fills the licence with the provider's default rights statement and, for raw data, the creator. Remove a provider with its ×.{% else %}The vocabulary in hand has no providers list; leave this blank.{% endif %}</p>
         <p class="error" hidden></p>
       </div>
       <div class="field" data-field="provider_other">
@@ -322,6 +322,7 @@
 
 <script id="rules" type="application/json">{{ rules | tojson }}</script>
 <script id="places" type="application/json">{{ places | tojson }}</script>
+<script id="providers" type="application/json">{{ providers | tojson }}</script>
 <script src="/static/deposit.js" defer></script>
 </body>
 </html>

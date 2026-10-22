@@ -78,21 +78,6 @@
   form.addEventListener("change", function (ev) {
     if (ev.target && ev.target.name === "state") creatorHint();
   });
-  // r11 §3: a provider's entry carries the default rights statement
-  // and, for raw data, the originating organisation.
-  var providerSel = $("provider");
-  if (providerSel) providerSel.addEventListener("change", function () {
-    var first = providerSel.selectedOptions[0];
-    if (!first) return;
-    var lic = $("license"), cr = $("creator");
-    if (!lic.value && first.dataset.rights) {
-      lic.value = first.dataset.rights;
-      lic.closest(".field").querySelector(".hint").textContent = "From the provider's entry; edit it if your agreement differs.";
-    }
-    if (!cr.value && val("state") === "0_raw" && first.dataset.name) cr.value = first.dataset.name;
-    var hint = $("provider-hint");
-    if (hint && first.dataset.url) hint.textContent = first.dataset.name + ": " + first.dataset.url;
-  });
 
   // ----- files --------------------------------------------------------
   function human(n) {
@@ -163,22 +148,24 @@
   $("pick-folder").addEventListener("change", function () { addFiles(this.files, true); this.value = ""; });
   $("clear-files").addEventListener("click", function () { files = []; renderFiles(0); });
 
-  // ----- spatial coverage: type a place, pick it, it becomes a pill -------
-  // The places (UN M49, from places.json) are in the page; matching is
-  // on the label, the code and the labels of what contains the place.
-  var placeWidget = (function () {
-    var search = $("place-search"), list = $("place-results"), pills = $("place-pills");
+  // ----- pill pickers: type, pick from the list, it becomes a pill --------
+  // One widget for spatial coverage (the UN M49 places) and provider
+  // (the vocabulary's list). `items` are {code, label, detail, search}:
+  // matching is on the label (prefix matches first), the code and the
+  // extra search strings; each chosen item is a pill holding a hidden
+  // input named `name`, so the form posts a list as before.
+  function pillPicker(opts) {
+    var search = $(opts.search), list = $(opts.results), pills = $(opts.pills);
     if (!search) return { add: function () {} };
-    var PLACES = JSON.parse(document.getElementById("places").textContent);
     var byCode = {};
-    PLACES.forEach(function (p) { byCode[p.code] = p; });
+    opts.items.forEach(function (p) { byCode[p.code] = p; });
     var active = -1, shown = [];
     function chosen() {
-      return Array.prototype.map.call(pills.querySelectorAll("input[name=spatial]"), function (i) { return i.value; });
+      return Array.prototype.map.call(pills.querySelectorAll('input[name="' + opts.name + '"]'), function (i) { return i.value; });
     }
     function add(code) {
       if (!code || chosen().indexOf(code) >= 0) return;
-      var p = byCode[code] || { code: code, label: code, path: [] };
+      var p = byCode[code] || { code: code, label: code, detail: "", search: [] };
       var pill = document.createElement("span"); pill.className = "pill"; pill.dataset.code = code;
       pill.appendChild(document.createTextNode(p.label + " "));
       var c = document.createElement("code"); c.textContent = code; pill.appendChild(c);
@@ -186,20 +173,21 @@
       x.setAttribute("aria-label", "Remove " + p.label);
       x.addEventListener("click", function () { pill.remove(); search.focus(); });
       pill.appendChild(x);
-      var hidden = document.createElement("input"); hidden.type = "hidden"; hidden.name = "spatial"; hidden.value = code;
+      var hidden = document.createElement("input"); hidden.type = "hidden"; hidden.name = opts.name; hidden.value = code;
       pill.appendChild(hidden);
       pills.appendChild(pill);
+      if (opts.onAdd && byCode[code]) opts.onAdd(byCode[code]);
     }
     function close() { list.hidden = true; list.textContent = ""; shown = []; active = -1; }
     function matches(q) {
       var have = chosen();
       var starts = [], contains = [];
-      PLACES.forEach(function (p) {
+      opts.items.forEach(function (p) {
         if (have.indexOf(p.code) >= 0) return;
         var label = p.label.toLowerCase();
         if (label.indexOf(q) === 0) starts.push(p);
         else if (label.indexOf(q) >= 0 || p.code.toLowerCase().indexOf(q) >= 0 ||
-                 p.path.some(function (a) { return a.toLowerCase().indexOf(q) >= 0; })) contains.push(p);
+                 (p.search || []).some(function (a) { return a.toLowerCase().indexOf(q) >= 0; })) contains.push(p);
       });
       return starts.concat(contains).slice(0, 12);
     }
@@ -209,16 +197,16 @@
       shown = matches(q); active = -1;
       list.textContent = "";
       if (!shown.length) {
-        var none = document.createElement("li"); none.className = "empty"; none.textContent = "No place matches.";
+        var none = document.createElement("li"); none.className = "empty"; none.textContent = opts.nothing;
         list.appendChild(none);
       }
       shown.forEach(function (p, i) {
         var li = document.createElement("li");
         var b = document.createElement("button"); b.type = "button";
         var name = document.createElement("strong"); name.textContent = p.label;
-        var where = document.createElement("small");
-        where.textContent = (p.path.length ? "in " + p.path.join(" › ") + " · " : "") + p.code;
-        b.appendChild(name); b.appendChild(where);
+        var detail = document.createElement("small");
+        detail.textContent = (p.detail ? p.detail + " · " : "") + p.code;
+        b.appendChild(name); b.appendChild(detail);
         b.addEventListener("mousedown", function (ev) { ev.preventDefault(); });   // keep focus in the box
         b.addEventListener("click", function () { pick(i); });
         li.appendChild(b); list.appendChild(li);
@@ -246,7 +234,41 @@
       else if (ev.key === "Escape") { close(); }
     });
     return { add: add };
-  })();
+  }
+  function pageJson(id) {
+    var el = document.getElementById(id);
+    return el ? JSON.parse(el.textContent) : [];
+  }
+  // Spatial coverage: matching also on the labels of what contains the place.
+  var placeWidget = pillPicker({
+    search: "place-search", results: "place-results", pills: "place-pills", name: "spatial",
+    nothing: "No place matches.",
+    items: pageJson("places").map(function (p) {
+      return { code: p.code, label: p.label, search: p.path,
+               detail: p.path.length ? "in " + p.path.join(" › ") : "" };
+    })
+  });
+  // Provider (r11 §3): the entry carries the default rights statement
+  // and, for raw data, the originating organisation; picking fills both
+  // where they are still blank.
+  var providerWidget = pillPicker({
+    search: "provider-search", results: "provider-results", pills: "provider-pills", name: "provider",
+    nothing: "No provider matches. Name it under \"Provider not listed?\".",
+    items: pageJson("providers").map(function (p) {
+      return { code: p.slug, label: p.name, search: [p.url || "", p.rights || ""], detail: p.url || "",
+               name: p.name, url: p.url, rights: p.rights };
+    }),
+    onAdd: function (p) {
+      var lic = $("license"), cr = $("creator");
+      if (!lic.value && p.rights) {
+        lic.value = p.rights;
+        lic.closest(".field").querySelector(".hint").textContent = "From the provider's entry; edit it if your agreement differs.";
+      }
+      if (!cr.value && val("state") === "0_raw" && p.name) cr.value = p.name;
+      var hint = $("provider-hint");
+      if (hint && p.url) hint.textContent = p.name + ": " + p.url;
+    }
+  });
 
   // ----- the upstream-dataset lookup (read role only) -------------------
   // Searches /datasets.json and appends the chosen identifier as a new
@@ -435,9 +457,7 @@
       if (Array.isArray(d.domain)) {
         form.querySelectorAll('input[name=domain_extra]').forEach(function (c) { c.checked = d.domain.indexOf(c.value) > 0; });
       }
-      if ($("provider") && Array.isArray(d.provider)) {
-        Array.prototype.forEach.call($("provider").options, function (o) { o.selected = d.provider.indexOf(o.value) >= 0; });
-      }
+      if (Array.isArray(d.provider)) d.provider.forEach(providerWidget.add);
       if (Array.isArray(d.spatial)) d.spatial.forEach(placeWidget.add);
       if (d.subject) {
         form.querySelectorAll('input[name=subject]').forEach(function (c) { c.checked = d.subject.indexOf(c.value) >= 0; });
