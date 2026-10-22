@@ -18,14 +18,11 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from botocore.exceptions import ClientError
 
 from crsw_deposit import authority, keys, places as places_mod, record
-
-from .llm import PlatformError
 
 try:                                    # ranking needs both; optional
     import numpy as np
@@ -40,23 +37,6 @@ EMBEDDINGS_NAME = "embeddings.parquet"
 SEARCH_FIELDS = ("identifier", "dataset", "project", "abstract", "creator",
                  "source_detail", "depositor")
 RERANK_TOP = 20          # how many candidates the reranker reads
-FILTER_LABELS = (("strand", "strand"), ("state", "state"), ("sensitivity", "sensitivity"),
-                 ("subject", "subject"), ("project", "project"), ("place", "place"))
-
-
-@dataclass
-class Answer:
-    """What `ask` found: the rows in order, the filter the question was
-    turned into, which steps ran, and a notice when one could not."""
-    rows: List[Dict]
-    filter: Dict[str, str] = field(default_factory=dict)
-    steps: List[str] = field(default_factory=list)
-    notice: Optional[str] = None
-
-    def understood(self) -> str:
-        return describe_filter(self.filter)
-
-
 PER_CHOICES = (10, 25, 50)   # projects a page on the find page
 PER_DEFAULT = 10
 
@@ -92,63 +72,6 @@ def page_of(items: Sequence, page, per) -> Tuple[List, int, int, int]:
         page = 1
     page = min(max(page, 1), pages)
     return list(items[(page - 1) * per:page * per]), page, pages, per
-
-
-def describe_filter(filt: Dict[str, str]) -> str:
-    """The filter in words, for the "Understood as" line."""
-    parts = [label + " " + filt[k] for k, label in FILTER_LABELS if filt.get(k)]
-    y0, y1 = filt.get("year_from"), filt.get("year_to")
-    if y0 and y1:
-        parts.append("years %s to %s" % (y0, y1))
-    elif y0:
-        parts.append("from %s" % y0)
-    elif y1:
-        parts.append("up to %s" % y1)
-    if filt.get("words"):
-        parts.append("words: " + filt["words"])
-    return ", ".join(parts) if parts else "no filters; matching on the question itself"
-
-
-def _year(value) -> Optional[int]:
-    s = str(value or "")[:4]
-    return int(s) if s.isdigit() else None
-
-
-def years_overlap(row: Dict, y_from: Optional[str], y_to: Optional[str]) -> bool:
-    """False only when the row's coverage clearly misses the asked range;
-    a row with no dates is kept."""
-    start, end = _year(row.get("temporal_start")), _year(row.get("temporal_end"))
-    lo, hi = _year(y_from), _year(y_to)
-    if lo is not None and end is not None and end < lo:
-        return False
-    if hi is not None and start is not None and start > hi:
-        return False
-    return True
-
-
-def _hay(row: Dict) -> str:
-    hay = " ".join(str(row.get(f) or "") for f in SEARCH_FIELDS)
-    return (hay + " " + " ".join(row.get("subject") or [])).lower()
-
-
-def name_match(row: Dict, question: str) -> bool:
-    """A word of the question (four letters or more) inside the dataset's
-    name: someone typing a name wants that dataset, whatever a model
-    thinks of its abstract."""
-    name = (row.get("dataset") or "").lower()
-    return any(t in name for t in question.lower().split() if len(t) >= 4)
-
-
-def words_match(row: Dict, words: str, all_of: bool) -> bool:
-    """`all_of`: every word present (a phrase the model chose); otherwise
-    any word of four letters or more (the raw question, forgivingly)."""
-    hay = _hay(row)
-    tokens = [t for t in words.lower().split() if t]
-    if not all_of:
-        tokens = [t for t in tokens if len(t) >= 4]
-    if not tokens:
-        return False
-    return all(t in hay for t in tokens) if all_of else any(t in hay for t in tokens)
 
 
 def _plain_term(slug: str) -> Dict:
@@ -378,33 +301,6 @@ class Catalogue:
             return [subject], "exact"
         return authority.expand_subject(self._vocabulary(), subject)
 
-    def subject_tree(self, sensitivities: Optional[Sequence[str]] = None) -> List[Dict]:
-        """The subject terms a filter may name, in the vocabulary's order:
-        every term in use on the rows (of the given sensitivities) and
-        every term above one, so a broad question can name a parent;
-        each as {facet, slug, depth, label, scope}. Without a vocabulary,
-        or with a flat pre-r9 file, the terms in use at depth 0."""
-        used = self.subjects(sensitivities)
-        doc = self._vocabulary() if self._vocabulary is not None else None
-        if not authority.is_authority(doc):
-            return [_plain_term(s) for s in used]
-        by_slug = authority.terms_by_slug(doc)
-        keep = set(used)
-        for slug in used:
-            keep.update(authority.ancestors(doc, slug))
-        out = []
-        for facet in authority.facet_order(doc):
-            for slug, depth in authority.tree(doc, facet):
-                if slug in keep:
-                    t = by_slug[slug]
-                    out.append({"facet": facet, "slug": slug, "depth": depth,
-                                "label": t.get("label") or slug,
-                                "scope": t.get("scope") or ""})
-        known = {o["slug"] for o in out}
-        # A term the vocabulary no longer knows (a record not yet rewritten).
-        out.extend(_plain_term(s) for s in used if s not in known)
-        return out
-
     def term_tree(self) -> List[Dict]:
         """Every current term of the vocabulary, in its order and with
         its depth, for the subject select: the whole tree is offered, a
@@ -448,26 +344,6 @@ class Catalogue:
         the code as typed."""
         return places_mod.expand_place(self._places_doc(), code)
 
-    def place_tree(self, sensitivities: Optional[Sequence[str]] = None) -> List[Dict]:
-        """The places a filter may name, in tree order: every code in use
-        on the rows (of the given sensitivities) and every place above
-        one, each as {code, depth, label, kind}; codes the file does not
-        know follow, flat."""
-        used = self.places_in_use(sensitivities)
-        doc = self._places_doc()
-        by_code = places_mod.places_by_code(doc)
-        if not by_code:
-            return [_plain_place(c) for c in used]
-        keep = set(used)
-        for code in used:
-            keep.update(places_mod.ancestors(doc, code))
-        out = [{"code": c, "depth": d, "label": by_code[c].get("label") or c,
-                "kind": by_code[c].get("kind") or ""}
-               for c, d in places_mod.tree(doc) if c in keep]
-        known = {o["code"] for o in out}
-        out.extend(_plain_place(c) for c in used if c not in known)
-        return out
-
     def place_options(self) -> List[Dict]:
         """Every place in the file, tree order with depth, for the place
         select: built once per places document, codes in use that the
@@ -486,7 +362,7 @@ class Catalogue:
         unknown = [_plain_place(c) for c in self.places_in_use() if c not in known]
         return cached + unknown if unknown else cached
 
-    # --- asking in plain words (finding-and-reuse.md §5) -------------------
+    # --- ranking by meaning (finding-and-reuse.md §5) -----------------------
 
     def has_vectors(self) -> bool:
         self._maybe_load()
@@ -524,97 +400,6 @@ class Catalogue:
             if within is None or ident in within:
                 out.append((ident, float(scores[int(i)])))
         return out
-
-    def ask(self, question: str, platform, limit: Optional[int] = None,
-            sensitivities: Sequence[str] = ("green",),
-            query_instruction: Optional[str] = None) -> Answer:
-        """A question in plain words to rows in order. Filter first (the
-        model picks from the vocabulary; anything else is dropped), then
-        rank by meaning where vectors exist, rows without a vector by the
-        words, then the reranker over the top few. Each step that fails
-        leaves a notice and the rest still runs; a step whose model name
-        is blank is switched off and simply does not run. Abstracts of
-        only the given sensitivities are ever sent to the reranker."""
-        question = " ".join((question or "").split())[:500]
-        ans = Answer(rows=[])
-        if not question:
-            return ans
-        notices = []
-        if getattr(platform, "chat_model", True):
-            try:
-                # Names found only on rows of other sensitivities stay out
-                # of the prompt, like their abstracts.
-                ans.filter = platform.filter_for(question, keys.STRANDS, keys.STATES,
-                                                 keys.SENSITIVITIES,
-                                                 self.subject_tree(sensitivities),
-                                                 self.projects(sensitivities),
-                                                 places=self.place_tree(sensitivities))
-                ans.steps.append("filter")
-            except PlatformError as e:
-                notices.append("The question could not be interpreted (%s); "
-                               "matching on its words instead." % e)
-        f = ans.filter
-        candidates = [r for r in self.search(strand=f.get("strand"), state=f.get("state"),
-                                             sensitivity=f.get("sensitivity"),
-                                             subject=f.get("subject"), project=f.get("project"),
-                                             place=f.get("place"))
-                      if years_overlap(r, f.get("year_from"), f.get("year_to"))]
-        if not candidates and f:
-            # A filter too strict for what is in the store (with a small
-            # store, easily): fall back to everything, ranked, and say so.
-            candidates = self.rows()
-            f = {k: v for k, v in f.items() if k == "words"}
-            notices.append("Nothing matches all of that, so these are the closest "
-                           "datasets instead.")
-        words, all_of = (f["words"], True) if f.get("words") else (question, False)
-        ranked: List[Dict] = []
-        if self.has_vectors() and getattr(platform, "embed_model", True):
-            # Only vectors made with what the alias resolves to today can
-            # be scored against the question's; with none of those, the
-            # promoter has not yet rebuilt the index for the new model.
-            model = platform.embed_fingerprint()
-            if not self.vectors_for(model):
-                notices.append("Ranking by meaning is off until the index is rebuilt "
-                               "for the current embedding model.")
-            else:
-                try:
-                    # A query, so it carries the instruction; the dataset
-                    # vectors it is ranked against were embedded bare.
-                    vec = platform.embed([question], instruction=query_instruction)[0]
-                    by_id = {r["identifier"]: r for r in candidates}
-                    ranked = [by_id[i] for i, _ in self.rank(vec, set(by_id), model=model)]
-                    ans.steps.append("meaning")
-                except PlatformError as e:
-                    notices.append("Ranking by meaning is unavailable (%s)." % e)
-        seen = {r["identifier"] for r in ranked}
-        rest = [r for r in candidates if r["identifier"] not in seen
-                and words_match(r, words, all_of)]
-        rows = ranked + rest
-        if not rows and f and not f.get("words"):
-            rows = candidates          # the filter alone was the answer
-        if getattr(platform, "rerank_model", True):
-            rows = self._rerank(question, platform, rows, set(sensitivities), ans, notices)
-        named = [r for r in rows if name_match(r, question)]
-        rows = named + [r for r in rows if r not in named]
-        ans.rows = rows[:limit] if limit else rows
-        ans.notice = " ".join(notices) or None
-        return ans
-
-    def _rerank(self, question, platform, rows, sensitivities, ans, notices) -> List[Dict]:
-        top, tail = rows[:RERANK_TOP], rows[RERANK_TOP:]
-        sendable = [i for i, r in enumerate(top) if r.get("sensitivity") in sensitivities]
-        if len(sendable) < 2:
-            return rows
-        docs = [(top[i].get("dataset") or "") + ". " + (top[i].get("abstract") or "")
-                for i in sendable]
-        try:
-            order = platform.rerank(question, docs)
-        except PlatformError as e:
-            notices.append("The reranker is unavailable (%s)." % e)
-            return rows
-        ans.steps.append("rerank")
-        held = [top[i] for i in range(len(top)) if i not in sendable]
-        return [top[sendable[j]] for j in order] + held + tail
 
     # --- live reads -----------------------------------------------------
 

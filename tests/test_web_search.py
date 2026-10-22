@@ -1,33 +1,177 @@
-"""Searching inside documents, the web side: the VM's copy of the
-passages kept in step with the bucket, search by meaning, the download
-rule applied to every hit, the reranker over the top, and the whole
-thing off unless switched on."""
+"""Search by meaning or content, the web side: the platform fixtures,
+the VM's copy of the passages kept in step with the bucket, dataset
+descriptions and passages ranked by meaning, the download rule applied
+to every passage, the reranker over the top, and the whole thing off
+unless the embedding model is on."""
 import os
 import tempfile
 import unittest
 from unittest import mock
 
-from tests.test_web_ask import (AskBase, FakePlatform, bag, ASK, CLEAN, GREEN, AMBER, DIM)
-from tests.test_web_catalogue import HAVE_WEB, VOCAB, READ
+from tests.test_web_catalogue import (HAVE_WEB, CatalogueBase, META, GREEN, AMBER, READ,
+                                      SETTINGS, VOCAB)
 
 if HAVE_WEB:
     import duckdb
     from fastapi.testclient import TestClient
+    from crsw_deposit import record
     from crsw_web import llm as llm_mod
     from crsw_web import s3 as s3mod
     from crsw_web.app import create_app
-    from crsw_web.config import Settings
+    from crsw_web.catalogue import Catalogue
+    from crsw_web.config import ConfigError, Settings
+    from crsw_web.llm import PlatformError
     from crsw_web.passages import (PassageIndex, open_index, split_sentences, mark_closest,
                                    word_pattern, question_stems)
-    from promoter import passages as pmod
+    from promoter import embed as embed_mod
     from promoter import index as index_mod
+    from promoter import passages as pmod
 
-SEARCH = dict(ASK, passages=True, llm_embed_dims=DIM)
+CLEAN = "rs2/csac/green/2_final/csac-clean"
+LLM = dict(READ, llm_base_url="https://ai.example/api/v1", llm_api_key="sk-test")
+DIM = 8
+SEARCH = dict(LLM, passages=True, llm_embed_dims=DIM)
 PREFIX = "index"
 
 
+def bag(text):
+    """A deterministic toy embedding: letters folded into eight bins, so
+    texts that share words land near each other."""
+    v = [0.0] * DIM
+    for word in text.lower().split():
+        v[sum(ord(c) for c in word) % DIM] += 1.0
+    return v
+
+
+class FakePlatform:
+    """Records what it was sent; each method can be told to fail."""
+
+    chat_model, embed_model, rerank_model = "arc:lite", "arc:embedvl", "arc:rerankvl"
+    fingerprint = "toy"      # what the stores the fixtures write are keyed to
+
+    def __init__(self, fail=(), reverse=False, off=(), fingerprint=None):
+        self.fail = set(fail)
+        self.reverse = reverse              # a reranker that disagrees, so it shows
+        for name in off:                    # a blank model name is the off switch
+            setattr(self, name + "_model", "")
+        if fingerprint is not None:         # the alias repointed to another backend
+            self.fingerprint = fingerprint
+        self.embed_calls, self.rerank_calls, self.explain_calls = [], [], []
+        self.embed_instructions = []        # one per embed call: the instruction, or None
+
+    def embed_fingerprint(self):
+        return self.fingerprint
+
+    def embed(self, texts, batch=32, instruction=None):
+        self.embed_calls.append(list(texts))
+        self.embed_instructions.append(instruction)
+        if "embed" in self.fail:
+            raise PlatformError("platform unreachable: ConnectError")
+        return [bag(t) for t in texts]
+
+    def explain(self, question, passage):
+        self.explain_calls.append((question, passage))
+        if "explain" in self.fail:
+            raise PlatformError("platform returned HTTP 503 for /chat/completions")
+        return "It mentions %s." % passage.split()[0]
+
+    def rerank(self, question, documents):
+        self.rerank_calls.append((question, list(documents)))
+        if "rerank" in self.fail:
+            raise PlatformError("platform returned HTTP 404 for /rerank")
+        order = list(range(len(documents)))
+        return order[::-1] if self.reverse else order
+
+
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
-class SearchBase(AskBase):
+class PlatformBase(CatalogueBase):
+    """The catalogue's three records plus a cleaned one, the index
+    written, and a platform fake; the embeddings file on request."""
+
+    def seed(self):
+        super().seed()
+        clean = dict(META, state="2_final", dataset="csac-clean", subject=["armed-conflict"],
+                     coverage_start="1989", coverage_end="2025", creator="Cy",
+                     abstract="Conflict deaths per year, cleaned from the CSAC database. " * 4)
+        self.put_record(CLEAN, clean, [record.manifest_entry("clean.csv", "d" * 64, 300)],
+                        "k3", "33333333-3333-4333-8333-333333333333")
+        rows = index_mod.rows(self.s3, "crsw")
+        index_mod.write(self.s3, "crsw", "index", rows)
+        self.index_rows = rows
+
+    def embed_store(self, include_amber=False, model="toy"):
+        embed_mod.refresh(self.s3, "crsw", "index", self.index_rows, FakePlatform(),
+                          model, {"green", "amber"} if include_amber else {"green"})
+
+    def rekey(self, identifier, model):
+        """Rewrite the store with one dataset's vector keyed to `model`,
+        as it is while the promoter is between two embedding models."""
+        rows = embed_mod.read_existing(self.s3, "crsw", "index/embeddings.parquet")
+        rows[identifier]["model"] = model
+        embed_mod.write(self.s3, "crsw", "index", list(rows.values()))
+
+    def app(self, platform=None, vocab=None, **overrides):
+        settings = Settings(**dict(LLM, **overrides))
+        return TestClient(create_app(settings, s3_client=self.s3, vocab_dict=vocab or VOCAB,
+                                     read_client=s3mod.ReadOnly(self.s3), platform=platform))
+
+    def ids(self, client, **params):
+        return [d["identifier"] for d in client.get("/datasets.json", params=params).json()["datasets"]]
+
+
+class TestFindData(PlatformBase):
+    def test_no_question_box_and_a_pointer_to_the_search_page(self):
+        """The question-to-filter step was retired on 22 October 2026:
+        `ask` is ignored, nothing goes to the platform from Find data,
+        and the page says where meaning search lives."""
+        self.embed_store()
+        p = FakePlatform()
+        c = self.app(platform=p)
+        html = c.get("/datasets", params={"ask": "conflict deaths"}).text
+        self.assertNotIn('id="ask"', html)
+        self.assertNotIn("Understood as", html)
+        self.assertEqual(html.count('<tr class="dataset">'), 3)       # ask ignored
+        self.assertEqual((p.embed_calls, p.rerank_calls), ([], []))
+        self.assertIn('use <a href="/search">Search by meaning or content</a>', html)
+        body = c.get("/datasets.json", params={"ask": "conflict deaths"}).json()
+        self.assertNotIn("understood", body)
+        self.assertEqual(len(body["datasets"]), 3)
+        # Without the platform there is nothing to point to.
+        c = TestClient(create_app(Settings(**READ), s3_client=self.s3, vocab_dict=VOCAB,
+                                  read_client=s3mod.ReadOnly(self.s3)))
+        html = c.get("/datasets").text
+        self.assertNotIn("Search by meaning or content", html)
+        self.assertEqual(html.count('<tr class="dataset">'), 3)
+
+    def test_config_pair_and_defaults(self):
+        env = {"CRSW_S3_ENDPOINT": "https://rgw.example", "CRSW_S3_ACCESS_KEY": "t",
+               "CRSW_S3_SECRET_KEY": "t", "CRSW_S3_BUCKET": "crsw",
+               "CRSW_STAGING_PREFIX": "staging/_test", "CRSW_LLM_API_KEY": "k"}
+        with self.assertRaises(ConfigError) as cm:
+            Settings.from_env(env)
+        self.assertIn("CRSW_LLM_BASE_URL", str(cm.exception))
+        env["CRSW_LLM_BASE_URL"] = "https://ai.example/api/v1"
+        s = Settings.from_env(env)
+        self.assertEqual((s.llm_chat_model, s.llm_embed_model, s.llm_rerank_model,
+                          s.llm_embed_dims, s.llm_timeout_seconds, s.llm_sensitivities),
+                         ("arc:lite", "arc:embedvl", "arc:rerankvl", 1024, 20, ("green",)))
+        self.assertFalse(s.llm_enabled)                  # no read role
+        self.assertFalse(s.search_enabled)
+        env.update({"CRSW_READ_S3_ACCESS_KEY": "r", "CRSW_READ_S3_SECRET_KEY": "r",
+                    "CRSW_LLM_SENSITIVITIES": "green, amber", "CRSW_LLM_EMBED_DIMS": "0",
+                    "CRSW_LLM_RERANK_MODEL": ""})
+        s = Settings.from_env(env)
+        self.assertTrue(s.llm_enabled)
+        self.assertTrue(s.search_enabled)
+        self.assertEqual((s.llm_sensitivities, s.llm_embed_dims, s.llm_rerank_model),
+                         (("green", "amber"), 0, ""))
+        with self.assertRaises(ConfigError):
+            Settings.from_env(dict(env, CRSW_LLM_SENSITIVITIES="green,red"))
+        self.assertFalse(Settings.from_env(dict(env, CRSW_LLM_EMBED_MODEL="")).search_enabled)
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class SearchBase(PlatformBase):
     def seed(self):
         super().seed()
         # Documents in three datasets: two green, one amber.
@@ -87,20 +231,41 @@ class SearchBase(AskBase):
 
 
 class TestOff(SearchBase):
-    def test_off_unless_switched_on_and_platform_present(self):
+    def test_on_with_the_embedding_model_alone(self):
+        """The page ranks dataset descriptions from the embeddings file,
+        so it is on whenever the embedding model is; the passages group
+        needs CRSW_PASSAGES as well. No platform, or a blank embedding
+        model, and the page and its link are gone."""
         self.write_passages()
-        c = TestClient(create_app(Settings(**ASK), s3_client=self.s3, vocab_dict=VOCAB,
+        self.embed_store()
+        c = TestClient(create_app(Settings(**LLM), s3_client=self.s3, vocab_dict=VOCAB,
                                   read_client=s3mod.ReadOnly(self.s3), platform=FakePlatform()))
-        self.assertEqual(c.get("/search", params={"q": "x"}).status_code, 404)
-        self.assertEqual(c.get("/search.json", params={"q": "x"}).status_code, 404)
-        self.assertNotIn("Search inside content", c.get("/datasets").text)
-        # Switched on but no platform: still off.
+        self.assertEqual(c.get("/search", params={"q": "x"}).status_code, 200)
+        self.assertEqual(c.get("/search.json", params={"q": "x"}).status_code, 200)
+        self.assertIn('href="/search">Search by meaning or content</a>', c.get("/datasets").text)
+        self.assertNotIn("<h2>Passages</h2>", c.get("/search", params={"q": "x"}).text)
+        # Passages switched on but no platform: off, no link.
         c = TestClient(create_app(Settings(**dict(READ, passages=True)), s3_client=self.s3,
                                   vocab_dict=VOCAB, read_client=s3mod.ReadOnly(self.s3)))
         self.assertEqual(c.get("/search").status_code, 404)
+        self.assertNotIn("Search by meaning or content", c.get("/datasets").text)
+        # Embedding model blank: off, whatever else is set.
+        c = TestClient(create_app(Settings(**dict(SEARCH, llm_embed_model="")), s3_client=self.s3,
+                                  vocab_dict=VOCAB, read_client=s3mod.ReadOnly(self.s3),
+                                  platform=FakePlatform(off=("embed",))))
+        self.assertEqual(c.get("/search").status_code, 404)
+        self.assertNotIn("Search by meaning or content", c.get("/datasets").text)
         s = Settings(**dict(SEARCH, llm_embed_model=""))
+        self.assertFalse(s.search_enabled)
         self.assertFalse(s.passages_enabled)
         self.assertTrue(Settings(**SEARCH).passages_enabled)
+        self.assertTrue(Settings(**LLM).search_enabled)
+        self.assertFalse(Settings(**LLM).passages_enabled)
+        # The platform without the read role: nothing to search.
+        s = Settings(**dict(SETTINGS, llm_base_url="https://ai.example", llm_api_key="k"))
+        self.assertFalse(s.llm_enabled)
+        c = TestClient(create_app(s, s3_client=self.s3, vocab_dict=VOCAB))
+        self.assertEqual(c.get("/search", params={"q": "x"}).status_code, 404)
 
     def test_config(self):
         env = {"CRSW_S3_ENDPOINT": "https://rgw.example", "CRSW_S3_ACCESS_KEY": "t",
@@ -460,9 +625,9 @@ class TestSearchPage(SearchBase):
         p = FakePlatform()
         c = self.app(platform=p)
         html = c.get("/datasets").text
-        self.assertIn('href="/search">Search inside content</a>', html)
+        self.assertIn('href="/search">Search by meaning or content</a>', html)
         for path in ("/", "/datasets/" + GREEN):
-            self.assertIn('href="/search">Search inside content</a>', c.get(path).text, path)
+            self.assertIn('href="/search">Search by meaning or content</a>', c.get(path).text, path)
         body = self.hits(c, "conflict deaths per year")
         self.assertEqual(body["steps"], ["meaning", "rerank", "highlight"])
         self.assertEqual([h["member"] for h in body["passages"]][:2], ["method.txt", "notes/method.md"])
@@ -568,7 +733,7 @@ class TestSearchPage(SearchBase):
         self.assertIn("4 passages from 4 files in 2 datasets", html)
         self.assertIn('<a href="/datasets/%s/files/notes/readme.md">notes/readme.md</a>' % GREEN, html)
         self.assertIn("<b>battles</b> and <b>massacres</b>", html)
-        self.assertIn("<h1>Search inside content</h1>", html)
+        self.assertIn("<h1>Search by meaning or content</h1>", html)
         # The two-sentence passage: its closest sentence marked, the question's
         # stem bold inside it (deaths -> "death" stem matches "deaths").
         html = c.get("/search", params={"q": "conflict deaths"}).text
@@ -592,7 +757,6 @@ class TestSearchPage(SearchBase):
                     self.embed_calls.append(list(texts))
                     raise PlatformError("platform returned HTTP 503 for /embeddings")
                 return super().embed(texts, batch, instruction)
-        from crsw_web.llm import PlatformError
         body = self.hits(self.app(platform=FlakyPlatform()), "conflict deaths per year")
         self.assertEqual(body["steps"], ["meaning", "rerank"])
         self.assertIn("Highlighting is unavailable", body["notice"])
@@ -797,3 +961,65 @@ class TestSearchPage(SearchBase):
         c = self.app(platform=FakePlatform(), passages_path=os.path.join(self.tmp.name, "n.duckdb"))
         body = self.hits(c, "battles")
         self.assertEqual((body["passages"], body["stats"]["passages"]), ([], 0))
+
+
+class TestVectors(PlatformBase):
+    """The catalogue's ranking by vector, which the search page's
+    datasets group reads."""
+
+    def test_a_vector_from_another_model_is_ignored(self):
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        self.assertTrue(cat.has_vectors())
+        self.assertEqual(cat.rank([1.0] * (DIM + 1)), [])
+        ranked = cat.rank(bag("conflict deaths per year"))
+        self.assertEqual(ranked[0][0], CLEAN)
+        self.assertEqual([i for i, _ in ranked], [CLEAN, GREEN])   # amber has no vector
+        self.assertEqual([i for i, _ in cat.rank(bag("x"), within={GREEN})], [GREEN])
+        self.assertEqual(cat.rank(bag("x"), within=set()), [])
+
+    def test_only_vectors_of_the_given_fingerprint_are_ranked(self):
+        """A vector made by another model is never scored against the
+        question: rows keyed to another fingerprint stay out of the
+        ranking, and the catalogue can say how many are current."""
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        self.assertEqual((cat.vectors_for("toy"), cat.vectors_for("other")), (2, 0))
+        self.assertEqual(cat.rank(bag("conflict deaths per year"), model="other"), [])
+        self.assertEqual([i for i, _ in cat.rank(bag("conflict deaths per year"), model="toy")],
+                         [CLEAN, GREEN])
+        self.rekey(GREEN, "other")
+        cat = Catalogue(self.s3, "crsw")
+        self.assertEqual((cat.vectors_for("toy"), cat.vectors_for("other")), (1, 1))
+        self.assertEqual([i for i, _ in cat.rank(bag("x"), model="toy")], [CLEAN])
+        self.assertEqual([i for i, _ in cat.rank(bag("x"), model="other")], [GREEN])
+        self.assertEqual(len(cat.rank(bag("x"))), 2)            # no fingerprint: as before
+
+    def test_ranking_during_a_refresh_uses_the_vectors_already_loaded(self):
+        import threading
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        self.assertTrue(cat.has_vectors())
+        stop, problems = threading.Event(), []
+
+        def refresh():
+            try:
+                for _ in range(30):
+                    cat._load()
+            except Exception as e:
+                problems.append("refresh: %r" % e)
+            finally:
+                stop.set()
+
+        t = threading.Thread(target=refresh, daemon=True)
+        t.start()
+        while not stop.is_set():
+            try:
+                if [i for i, _ in cat.rank(bag("conflict deaths per year"))] != [CLEAN, GREEN]:
+                    problems.append("ranked without the loaded vectors")
+                if not cat.has_vectors():
+                    problems.append("vectors gone mid-refresh")
+            except Exception as e:
+                problems.append("rank: %r" % e)
+        t.join(30)
+        self.assertEqual(problems[:3], [])

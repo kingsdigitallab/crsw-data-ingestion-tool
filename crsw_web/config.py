@@ -66,12 +66,16 @@ class Settings:
     amber_access: str = "off"
     amber_group_template: str = "er_prj_kdl_slavery_{strand}"
     dev_groups: Tuple[str, ...] = ()       # placeholder-mode group membership
-    # The KCL LLM platform behind "ask in your own words" on the find page
-    # (finding-and-reuse.md §5). Off unless URL and key are both set, and
-    # useless without the read role. Only the question, the vocabulary
-    # lists and candidate abstracts are sent; abstracts only of the
-    # sensitivities in llm_sensitivities (green until the Centre allows
-    # amber). A blank model name switches that function off.
+    # The KCL LLM platform behind "Search by meaning or content"
+    # (finding-and-reuse.md §5 and §7). Off unless URL and key are both
+    # set, and useless without the read role. The embedding model ranks
+    # dataset descriptions and passages against the words typed; the
+    # reranker reorders the top few; the chat model answers "Why this?"
+    # on a click. Only abstracts and passages of the sensitivities in
+    # llm_sensitivities are sent (green until the Centre allows amber).
+    # A blank model name switches that function off. The chat model
+    # drove a question-to-filter step on the find page until 22 October
+    # 2026 (docs/ask-and-search-handoff.md); nothing is filtered by it now.
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_chat_model: str = "arc:lite"
@@ -103,12 +107,18 @@ class Settings:
         return bool(self.read_s3_access_key and self.read_s3_secret_key)
 
     @property
-    def ask_enabled(self) -> bool:
+    def llm_enabled(self) -> bool:
         return self.read_enabled and bool(self.llm_base_url and self.llm_api_key)
 
     @property
+    def search_enabled(self) -> bool:
+        """The search page: dataset descriptions ranked by meaning need
+        the embedding model and the read role, nothing more."""
+        return self.llm_enabled and bool(self.llm_embed_model)
+
+    @property
     def passages_enabled(self) -> bool:
-        return self.passages and self.ask_enabled and bool(self.llm_embed_model)
+        return self.passages and self.search_enabled
 
     def trusted_proxy_networks(self):
         return [ipaddress.ip_network(c, strict=False) for c in self.trusted_proxy_cidrs]

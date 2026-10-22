@@ -1,14 +1,17 @@
 """A thin client for the KCL LLM platform (OpenAI-style endpoints).
 
-Three calls, each one POST, no vendor SDK: embeddings, a chat completion
-that turns a question into search filters, and a reranker. The promoter
-uses `embed` when it builds the index; the web service uses all three
-when a user asks the store a question (finding-and-reuse.md §5).
+Each call one POST, no vendor SDK: embeddings, a reranker, and the chat
+model for one sentence on why a result matched (and, in the promoter,
+for reading a scanned page). The promoter uses `embed` when it builds
+the index and the passages; the web service uses all of them on the
+search page (finding-and-reuse.md §5 and §7). The chat model drove a
+question-to-filter step on the find page until 22 October 2026, when
+that step was retired (docs/ask-and-search-handoff.md).
 
-What is ever sent: record metadata (titles, abstracts, subject terms),
-the vocabulary lists and the user's question. Never the contents of a
-data file. Every failure is a `PlatformError` with a short message so
-callers can fall back to the ordinary search; nothing here retries.
+What is ever sent: record metadata (titles, abstracts), passages of
+files whose sensitivity allows it, and the user's words. Every failure
+is a `PlatformError` with a short message so callers can fall back to
+the ordinary search; nothing here retries.
 
 `from_settings` returns None when the platform is not configured, which
 is the off setting: the service and the promoter run without it."""
@@ -50,57 +53,8 @@ MAX_RETRY_AFTER = 60.0
 # asked again (the web passes its index cycle; the promoter asks once).
 DEFAULT_FINGERPRINT_SECONDS = 300.0
 
-# The filter a question is turned into. Each value is checked against
-# the allowed set before it is used; anything else is dropped.
-FILTER_KEYS = ("strand", "state", "sensitivity", "subject", "project", "place",
-               "words", "year_from", "year_to")
-
-FILTER_PROMPT = """You turn a researcher's question into search filters for a catalogue of datasets.
-Reply with one JSON object and nothing else. Keys, all optional:
-  "strand": one of {strands}
-  "state": one of {states}
-  "sensitivity": one of {sensitivities}
-  "subject": one of the subject terms below
-  "project": one of the project names below
-  "place": one of the place codes below
-  "words": a short phrase (at most six words) to match in titles and abstracts
-  "year_from", "year_to": four-digit years the data should cover
-Use a key only when the question clearly implies it. Do not invent values.
-Subject terms by facet; a term listed under another is a narrower kind of it, so name the broadest that fits:
-{subjects}
-Place codes (UN M49 regions and ISO countries); a place listed under another lies inside it, so name the broadest that fits:
-{places}
-Project names: {projects}
-Strands: rs1 origins and legacies of slavery, rs2 contemporary slavery and armed conflict, rs3 law and policy, rs4 culture and representation."""
-
-
-def _place_lines(places: Sequence[Dict]) -> str:
-    """The places as the chat model reads them: a place under another
-    indented two spaces more, the label in brackets."""
-    return "\n".join("  " * (int(p.get("depth") or 0) + 1) + p["code"]
-                     + " (%s)" % (p.get("label") or p["code"]) for p in places)
-
-def _subject_lines(subjects: Sequence[Dict]) -> str:
-    """The vocabulary as the chat model reads it: a facet per block, a
-    term under another indented two spaces more, the label in brackets
-    and the scope note after it where there is one."""
-    lines: List[str] = []
-    facet = None
-    for s in subjects:
-        if s.get("facet") != facet or not lines:
-            facet = s.get("facet")
-            lines.append(facet or "other")
-        line = "  " * (int(s.get("depth") or 0) + 1) + s["slug"]
-        line += " (%s)" % (s.get("label") or s["slug"])
-        if s.get("scope"):
-            line += ": " + " ".join(str(s["scope"]).split())
-        lines.append(line)
-    return "\n".join(lines)
-
-
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.S)
-_YEAR = re.compile(r"^\d{4}$")
 
 
 class PlatformError(RuntimeError):
@@ -283,62 +237,6 @@ class Platform:
         if message != self._fingerprint_said:
             log.warning(message)
             self._fingerprint_said = message
-
-    # --- question to filter -------------------------------------------------
-
-    def filter_for(self, question: str, strands: Sequence[str], states: Sequence[str],
-                   sensitivities: Sequence[str], subjects: Sequence[Dict],
-                   projects: Sequence[str], places: Sequence[Dict] = ()
-                   ) -> Dict[str, str]:
-        """The filters a question implies, each value checked against the
-        allowed set. `subjects` is the vocabulary as a tree, each term
-        {facet, slug, depth, label, scope} in order (Catalogue.subject_tree);
-        the model sees it indented with the scope notes and may answer
-        with any slug in it. `places` (r11) likewise, each {code, depth,
-        label, kind} (Catalogue.place_tree). {} when the model answers
-        with nothing usable: the caller then searches on the question's
-        words alone."""
-        prompt = FILTER_PROMPT.format(
-            strands=", ".join(strands), states=", ".join(states),
-            sensitivities=", ".join(sensitivities),
-            subjects=_subject_lines(subjects) or "(none)",
-            places=_place_lines(places) or "(none)",
-            projects=", ".join(projects) or "(none)")
-        body = self._post("/chat/completions", {
-            "model": self.chat_model, "temperature": 0,
-            "messages": [{"role": "system", "content": prompt},
-                         {"role": "user", "content": question.strip()[:1000]}],
-        })
-        raw = parse_json_object(_chat_text(body))
-        if raw is None:
-            log.info("question-to-filter reply was not JSON; searching on words only")
-            return {}
-        allowed = {"strand": set(strands), "state": set(states),
-                   "sensitivity": set(sensitivities),
-                   "subject": {s["slug"] for s in subjects},
-                   "project": set(projects),
-                   "place": {p["code"] for p in places}}
-        out: Dict[str, str] = {}
-        for k in FILTER_KEYS:
-            v = raw.get(k)
-            if v is None or v == "":
-                continue
-            if isinstance(v, list):          # a model that lists one subject
-                v = v[0] if v else None
-            if v is None:
-                continue
-            v = str(v).strip()
-            if k in allowed:
-                if v in allowed[k]:
-                    out[k] = v
-            elif k in ("year_from", "year_to"):
-                if _YEAR.match(v):
-                    out[k] = v
-            elif k == "words":
-                words = " ".join(v.split()[:6])
-                if words:
-                    out[k] = words
-        return out
 
     # --- one sentence on why a passage matched ------------------------------
 

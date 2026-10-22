@@ -3,22 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Search inside content · CRSW data deposit</title>
+<title>Search by meaning or content · CRSW data deposit</title>
 <link rel="stylesheet" href="/static/deposit.css">
 </head>
 <body>
 <header class="masthead">
   <div class="masthead-inner">
     <a class="wordmark" href="/">CRSW data deposit</a>
-    <nav class="nav"><a href="/datasets">Find data</a> <a href="/search" aria-current="page">Search inside content</a> <a href="/">Deposit</a></nav>
+    <nav class="nav"><a href="/datasets">Find data</a> <a href="/search" aria-current="page">Search by meaning or content</a> <a href="/">Deposit</a></nav>
     {% set who_verb = "Signed in as" %}{% include "_who.html" %}
   </div>
 </header>
 
 <main class="page single wide">
   <article class="find">
-    <h1>Search inside content</h1>
-    <p class="lede">What the deposited documents say, not only what their descriptions say. {{ stats.passages }} passage{% if stats.passages != 1 %}s{% endif %} from {{ stats.files }} file{% if stats.files != 1 %}s{% endif %} in {{ stats.datasets }} dataset{% if stats.datasets != 1 %}s{% endif %}.</p>
+    <h1>Search by meaning or content</h1>
+    <p class="lede">What the deposited documents say, not only what their descriptions say.{% if stats %} {{ stats.passages }} passage{% if stats.passages != 1 %}s{% endif %} from {{ stats.files }} file{% if stats.files != 1 %}s{% endif %} in {{ stats.datasets }} dataset{% if stats.datasets != 1 %}s{% endif %}.{% endif %}</p>
     {% if error %}<p class="notice">{{ error }}</p>{% endif %}
 
     <form class="ask" method="get" action="/search">

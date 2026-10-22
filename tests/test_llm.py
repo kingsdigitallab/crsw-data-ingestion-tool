@@ -134,58 +134,6 @@ class TestEmbed(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE, "web extras not installed")
-class TestFilterFor(unittest.TestCase):
-    ARGS = dict(strands=("rs1", "rs2"), states=("0_raw", "2_final"),
-                sensitivities=("green", "amber"),
-                subjects=({"facet": "practices", "slug": "forced-labour", "depth": 0,
-                           "label": "Forced labour",
-                           "scope": "Work exacted under menace of penalty."},
-                          {"facet": "contexts", "slug": "armed-conflict", "depth": 0,
-                           "label": "Armed conflict", "scope": ""},
-                          {"facet": "contexts", "slug": "interstate-war", "depth": 1,
-                           "label": "Interstate war", "scope": "War between states."}),
-                projects=("csac",))
-
-    def reply(self, content):
-        def handler(request):
-            self.request = json.loads(request.content)
-            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
-        return fake_platform(handler)
-
-    def test_values_outside_the_vocabulary_are_dropped(self):
-        p = self.reply('<think>hmm</think>```json\n{"strand": "rs2", "state": "9_x", '
-                       '"subject": ["armed-conflict"], "project": "nope", '
-                       '"words": "one two three four five six seven", '
-                       '"year_from": "1990", "year_to": "nineteen"}\n```')
-        f = p.filter_for("deaths in conflicts since 1990", **self.ARGS)
-        self.assertEqual(f, {"strand": "rs2", "subject": "armed-conflict",
-                             "words": "one two three four five six", "year_from": "1990"})
-        self.assertEqual(self.request["model"], "arc:lite")
-        self.assertEqual(self.request["temperature"], 0)
-        system = self.request["messages"][0]["content"]
-        # The tree, a facet per block, a term under another indented, the
-        # scope note after the label where there is one.
-        self.assertIn("practices\n  forced-labour (Forced labour): Work exacted under menace "
-                      "of penalty.\ncontexts\n  armed-conflict (Armed conflict)\n"
-                      "    interstate-war (Interstate war): War between states.\n", system)
-        self.assertIn("csac", system)
-        self.assertEqual(self.request["messages"][1]["content"], "deaths in conflicts since 1990")
-
-    def test_prose_around_the_object_and_no_object(self):
-        p = self.reply('Sure. Here it is: {"sensitivity": "green"} Hope that helps.')
-        self.assertEqual(p.filter_for("q", **self.ARGS), {"sensitivity": "green"})
-        p = self.reply("I do not know.")
-        self.assertEqual(p.filter_for("q", **self.ARGS), {})
-        p = self.reply("[1, 2]")
-        self.assertEqual(p.filter_for("q", **self.ARGS), {})
-
-    def test_missing_message_is_an_error(self):
-        p = fake_platform(lambda r: httpx.Response(200, json={"choices": []}))
-        with self.assertRaises(llm.PlatformError):
-            p.filter_for("q", **self.ARGS)
-
-
-@unittest.skipUnless(HAVE, "web extras not installed")
 class TestExplain(unittest.TestCase):
     def test_one_sentence_from_the_chat_model(self):
         def handler(request):
@@ -283,14 +231,6 @@ class TestMalformedReplies(unittest.TestCase):
             body = {"choices": [{"message": {"content": content}}]}
             with self.subTest(content=content):
                 self.check(lambda p: p.explain("q", "passage"), body)
-                self.check(lambda p: p.filter_for("q", ["rs1"], ["2_final"], ["green"], [], []),
-                           body)
-
-    def test_the_filter_shape_is_still_tolerant(self):
-        body = {"choices": [{"message": {"content": '{"strand": ["rs1"], "words": 5}'}}]}
-        p = fake_platform(lambda r: httpx.Response(200, json=body))
-        self.assertEqual(p.filter_for("q", ["rs1"], ["2_final"], ["green"], [], []),
-                         {"strand": "rs1", "words": "5"})
 
 
 @unittest.skipUnless(HAVE, "web extras not installed")

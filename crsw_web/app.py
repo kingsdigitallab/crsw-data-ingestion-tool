@@ -113,17 +113,19 @@ def create_app(settings: Optional[Settings] = None,
                            settings.index_refresh_seconds, vocabulary=vocab_cache.current,
                            places=places_cache.current)
                  if read_client is not None else None)
-    # Asking in plain words: the KCL LLM platform, only with the read role.
-    if platform is None and catalogue is not None and settings.ask_enabled:
+    # Search by meaning: the KCL LLM platform, only with the read role.
+    if platform is None and catalogue is not None and settings.llm_enabled:
         platform = Platform.from_settings(settings)
     if catalogue is None:
         platform = None
-    # The VM's copy of the passages, for search inside documents.
-    if passage_index is None and platform is not None and settings.passages_enabled:
+    # The search page needs the embedding model; a blank name is off.
+    search_enabled = platform is not None and bool(platform.embed_model)
+    # The VM's copy of the passages, the page's second group.
+    if passage_index is None and search_enabled and settings.passages_enabled:
         passage_index = open_index(read_client, settings.s3_bucket, settings.index_prefix,
                                    settings.passages_path, settings.index_refresh_seconds,
                                    settings.llm_embed_dims or None)
-    if platform is None:
+    if not search_enabled:
         passage_index = None
     store = DepositStore(client, settings.s3_bucket, settings.staging_prefix)
 
@@ -136,10 +138,10 @@ def create_app(settings: Optional[Settings] = None,
     app.state.platform = platform
     app.state.passage_index = passage_index
     read_enabled = catalogue is not None
-    ask_enabled = platform is not None
     passages_enabled = passage_index is not None
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(HERE / "templates"))
+    templates.env.globals["search_enabled"] = search_enabled
     templates.env.globals["passages_enabled"] = passages_enabled
     # The release the image was built from (deploy/Dockerfile's
     # CRSW_VERSION), in every masthead and /health, so a deploy shows.
@@ -346,21 +348,6 @@ def create_app(settings: Optional[Settings] = None,
             groups[-1][1].append(t)
         return groups
 
-    def asked(cat: Catalogue, user: User, ask: str, limit: Optional[int] = None):
-        """Rows for a question in plain words, or None when asking is off
-        or the question is blank (the ordinary search then applies)."""
-        ask = " ".join((ask or "").split())
-        if not ask or not ask_enabled:
-            return None
-        ans = cat.ask(ask, platform, limit=limit, sensitivities=settings.llm_sensitivities,
-                      query_instruction=settings.llm_query_instruction)
-        # The question itself is not logged: it may say what someone is
-        # working on. Its length and the steps that ran are enough.
-        log.info("ask user=%s chars=%d steps=%s results=%d notice=%s",
-                 user.username, len(ask), "+".join(ans.steps) or "-", len(ans.rows),
-                 "yes" if ans.notice else "no")
-        return ans
-
     PER_COOKIE = "crsw_per"
 
     def per_from(per: Optional[int], request: Request) -> Tuple[int, bool]:
@@ -378,25 +365,12 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/datasets", response_class=HTMLResponse)
     def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
                       sensitivity: str = "", subject: str = "", project: str = "",
-                      place: str = "", ask: str = "", page: int = 1,
+                      place: str = "", page: int = 1,
                       per: Optional[int] = None, user: User = Depends(current_user)):
         cat = need_read()
-        ask = " ".join(ask.split())
         per, remember = per_from(per, request)
-        ans = asked(cat, user, ask)
-        if ans is not None:
-            results = ans.rows
-            # The filter the question became is shown as the filled-in form,
-            # so the user can adjust it and press Search.
-            f = ans.filter
-            q, strand, state = f.get("words", ""), f.get("strand", ""), f.get("state", "")
-            sensitivity, subject, project = (f.get("sensitivity", ""), f.get("subject", ""),
-                                             f.get("project", ""))
-            place = f.get("place", "")
-        else:
-            ask = ""
-            results = cat.search(**search_args(q, strand, state, sensitivity, subject,
-                                               project, place))
+        results = cat.search(**search_args(q, strand, state, sensitivity, subject,
+                                           project, place))
         view = subject_view(cat, subject, results)
         # Projects first (r11 find page): the list folds into projects,
         # ten a page, closed while browsing and open once something
@@ -407,7 +381,7 @@ def create_app(settings: Optional[Settings] = None,
             g["size"] = record.human_bytes(g["bytes"])
         query = [(k, v) for k, v in (("q", q), ("strand", strand), ("state", state),
                                      ("sensitivity", sensitivity), ("subject", subject),
-                                     ("project", project), ("place", place), ("ask", ask)) if v]
+                                     ("project", project), ("place", place)) if v]
 
         def pager_url(to_page: int, to_per: int) -> str:
             return "/datasets?" + urlencode(query + [("page", to_page), ("per", to_per)])
@@ -421,16 +395,12 @@ def create_app(settings: Optional[Settings] = None,
             "place": place, "place_groups": group_places(cat.place_options()),
             "place_filter": place_view(cat, place),
             "results": results, "groups": shown,
-            "opened": bool(ask or q or strand or state or sensitivity or subject
-                           or project or place),
+            "opened": bool(q or strand or state or sensitivity or subject or project or place),
             "n_projects": len(groups), "page": page, "pages": pages, "per": per,
             "per_choices": PER_CHOICES, "per_default": PER_DEFAULT, "pager_url": pager_url,
             "first": (page - 1) * per + 1, "last": min(page * per, len(groups)),
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},
             "built_at": cat.built_at(), "error": cat.error,
-            "ask_enabled": ask_enabled, "ask": ask,
-            "understood": ans.understood() if ans is not None else "",
-            "ask_notice": ans.notice if ans is not None else None,
         })
         if remember:
             response.set_cookie(PER_COOKIE, str(per), max_age=365 * 86400, httponly=True,
@@ -440,21 +410,9 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/datasets.json")
     def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",
                       subject: str = "", project: str = "", place: str = "", limit: int = 50,
-                      ask: str = "", user: User = Depends(current_user)):
+                      user: User = Depends(current_user)):
         cat = need_read()
         limit = max(1, min(limit, 500))
-        ans = asked(cat, user, ask, limit=limit)
-        if ans is not None:
-            out = {"datasets": [public_row(r) for r in ans.rows], "built_at": cat.built_at(),
-                   "understood": ans.understood(), "filter": ans.filter,
-                   "steps": ans.steps, "notice": ans.notice}
-            view = subject_view(cat, ans.filter.get("subject", ""), ans.rows)
-            if view:
-                out["subject_filter"] = subject_public(view)
-            pview = place_view(cat, ans.filter.get("place", ""))
-            if pview:
-                out["place_filter"] = place_public(pview)
-            return out
         rows = cat.search(limit=limit,
                           **search_args(q, strand, state, sensitivity, subject, project, place))
         out = {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
@@ -472,6 +430,10 @@ def create_app(settings: Optional[Settings] = None,
 
     SEARCH_TOP = 20          # passages the reranker reads
 
+    def need_search():
+        if not search_enabled:
+            raise HTTPException(status_code=404, detail="Not Found")
+
     def need_passages():
         if passage_index is None:
             raise HTTPException(status_code=404, detail="Not Found")
@@ -483,7 +445,8 @@ def create_app(settings: Optional[Settings] = None,
         """Closest passages of files this user may download, best first.
         The question is embedded, the copy searched, the download rule
         applied to each hit, then the reranker reads the top few."""
-        index = need_passages()
+        need_search()
+        index = passage_index
         cat = need_read()
         q = " ".join((q or "").split())[:500]
         sort = sort if sort in SORTS else "words"
@@ -492,9 +455,9 @@ def create_app(settings: Optional[Settings] = None,
         # rewrites the rest; until then they wait, and the page says so.
         model = platform.embed_fingerprint()
         out = {"q": q, "results": [], "notice": None, "steps": [],
-               "stats": index.stats(model=model), "sort": sort,
-               "can_explain": bool(platform.chat_model)}
-        if not q:
+               "stats": index.stats(model=model) if index is not None else None,
+               "sort": sort, "can_explain": bool(platform.chat_model)}
+        if not q or index is None:
             return out
         if out["stats"]["passages"] and not out["stats"]["current"]:
             out["notice"] = ("These passages were made with a different embedding model; "
@@ -611,7 +574,8 @@ def create_app(settings: Optional[Settings] = None,
                     user: User = Depends(current_user)):
         found = search_passages(user, q, limit=20, sort=sort)
         return templates.TemplateResponse(request, "search.html", {
-            "user": user, **found, "error": passage_index.error,
+            "user": user, **found,
+            "error": passage_index.error if passage_index is not None else None,
             "sensitivities": settings.llm_sensitivities,
         })
 
