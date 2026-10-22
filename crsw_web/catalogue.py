@@ -16,6 +16,7 @@ platform down, and the answer is the ordinary search with a notice."""
 import io
 import json
 import logging
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -400,6 +401,40 @@ class Catalogue:
             if within is None or ident in within:
                 out.append((ident, float(scores[int(i)])))
         return out
+
+    def rank_datasets(self, q: str, vector: Optional[Sequence[float]] = None,
+                      model: Optional[str] = None, stems: Sequence[str] = (),
+                      by_meaning: bool = False, limit: Optional[int] = None) -> List[Dict]:
+        """Datasets for the search page, each row a copy of the index row
+        plus `why` and `score`, in the order passages use: rows whose
+        name or abstract contains the words as typed (`phrase`), then
+        rows holding every stem (`words`), then the rest by the cosine
+        of `vector` against their own (`meaning`), which needs a vector
+        made with `model`. A row found by its words needs no vector and
+        then has no score. By meaning alone, one list by score, so a
+        row with no vector cannot be placed and is left out."""
+        q_low = (q or "").lower()
+        pats = [re.compile(r"\b" + re.escape(s), re.IGNORECASE) for s in stems]
+        scores = dict(self.rank(vector, model=model)) if vector is not None else {}
+        tier = {"phrase": 0, "words": 1, "meaning": 2}
+        out = []
+        for r in self.rows():
+            text = (r.get("dataset") or "") + " " + (r.get("abstract") or "")
+            if q_low and q_low in text.lower():
+                why = "phrase"
+            elif pats and all(pat.search(text) for pat in pats):
+                why = "words"
+            else:
+                why = "meaning"
+            score = scores.get(r["identifier"])
+            if score is None and (why == "meaning" or by_meaning):
+                continue
+            out.append(dict(r, why=why, score=score))
+        if by_meaning:
+            out.sort(key=lambda r: -r["score"])
+        else:
+            out.sort(key=lambda r: (tier[r["why"]], -(r["score"] if r["score"] is not None else -2.0)))
+        return out[:limit] if limit else out
 
     # --- live reads -----------------------------------------------------
 

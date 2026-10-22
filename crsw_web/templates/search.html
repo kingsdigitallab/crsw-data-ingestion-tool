@@ -18,14 +18,14 @@
 <main class="page single wide">
   <article class="find">
     <h1>Search by meaning or content</h1>
-    <p class="lede">What the deposited documents say, not only what their descriptions say.{% if stats %} {{ stats.passages }} passage{% if stats.passages != 1 %}s{% endif %} from {{ stats.files }} file{% if stats.files != 1 %}s{% endif %} in {{ stats.datasets }} dataset{% if stats.datasets != 1 %}s{% endif %}.{% endif %}</p>
+    <p class="lede">What the deposited datasets are about, and what their documents say. {{ stats.described }} dataset description{% if stats.described != 1 %}s{% endif %} can be ranked by meaning{% if passages_enabled %}; {{ stats.passages }} passage{% if stats.passages != 1 %}s{% endif %} from {{ stats.files }} file{% if stats.files != 1 %}s{% endif %} in {{ stats.datasets }} dataset{% if stats.datasets != 1 %}s{% endif %}{% endif %}.</p>
     {% if error %}<p class="notice">{{ error }}</p>{% endif %}
 
     <form class="ask" method="get" action="/search">
       <div class="field">
         <label for="q">What are you looking for?</label>
         <input id="q" name="q" type="search" value="{{ q }}" placeholder="a phrase, a name, a question in your own words" maxlength="500">
-        <p class="hint">Passages containing your exact words come first, then passages containing all of them, then those closest in meaning. Your words and those passages are read by KCL's own AI service; you only see passages from files you could download. In each passage the sentence that holds <mark class="phrase">your words</mark> or comes <mark class="meaning">closest in meaning</mark> is marked, and your own words are in <b>bold</b>.</p>
+        <p class="hint">Datasets whose description comes closest{% if passages_enabled %}, then passages from inside their documents{% endif %}. In each group, results containing your exact words come first, then those containing all of them, then those closest in meaning. Your words, those descriptions{% if passages_enabled %} and those passages{% endif %} are read by KCL's own AI service. A dataset whose description has not yet been read that way is found on <a href="/datasets">Find data</a> by its words{% if passages_enabled %}; you only see passages from files you could download{% endif %}. The sentence that holds <mark class="phrase">your words</mark> or comes <mark class="meaning">closest in meaning</mark> is marked, and your own words are in <b>bold</b>.</p>
       </div>
       <div class="actions">
         <button class="primary" type="submit">Search</button>
@@ -37,15 +37,55 @@
     </form>
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
+    {% macro why_of(h) %}<span class="why">{% if h.why == "phrase" %}contains your exact words{% elif h.why == "words" %}contains all your words{% else %}closest in meaning{% endif %}</span>{% if h.score is not none %}<span class="score">{{ h.score }}</span>{% endif %}{% endmacro %}
+
+    {% macro quote(h) %}<blockquote>{% for s in h.sentences %}{% if s.marked %}<mark class="{{ s.how }}" title="{% if s.how == 'meaning' %}closest in meaning to what you asked{% elif s.how == 'phrase' %}contains your exact words{% else %}contains all your words{% endif %}">{{ s.text|emphasise(q) }}</mark>{% else %}{{ s.text|emphasise(q) }}{% endif %} {% endfor %}</blockquote>{% endmacro %}
+
+    {% macro dataset_hit(d) %}
+      <li>
+        <p class="where"><a href="/datasets/{{ d.identifier }}">{{ d.dataset }}</a><span class="tag strand">{{ d.strand }}</span><span class="sens {{ d.sensitivity }} tag">{{ d.sensitivity }}</span> in {{ d.project }}{% if d.provider %}, from {% for s in d.provider %}{% set entry = providers.get(s) %}{{ entry.name if entry else s }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{% if d.spatial %}, covering {% for c in d.spatial %}{{ place_labels.get(c, c) }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{{ why_of(d) }}{% if can_explain and d.sensitivity in sensitivities %} <button type="button" class="link why-ask" data-identifier="{{ d.identifier }}">Why this?</button>{% endif %}</p>
+        {{ quote(d) }}
+        <p class="why-said" hidden aria-live="polite"></p>
+      </li>
+    {% endmacro %}
+
     {% macro hit(h) %}
       <li>
-        <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}<span class="why">{% if h.why == "phrase" %}contains your exact words{% elif h.why == "words" %}contains all your words{% else %}closest in meaning{% endif %}</span><span class="score">{{ h.score }}</span>{% if can_explain and h.sensitivity in sensitivities %} <button type="button" class="link why-ask" data-identifier="{{ h.identifier }}" data-member="{{ h.member }}" data-position="{{ h.position }}">Why this?</button>{% endif %}</p>
-        <blockquote>{% for s in h.sentences %}{% if s.marked %}<mark class="{{ s.how }}" title="{% if s.how == 'meaning' %}closest in meaning to what you asked{% elif s.how == 'phrase' %}contains your exact words{% else %}contains all your words{% endif %}">{{ s.text|emphasise(q) }}</mark>{% else %}{{ s.text|emphasise(q) }}{% endif %} {% endfor %}</blockquote>
+        <p class="where"><a href="/datasets/{{ h.identifier }}">{{ h.dataset }}</a><span class="sens {{ h.sensitivity }} tag">{{ h.sensitivity }}</span> in <a href="/datasets/{{ h.identifier }}/files/{{ h.member }}">{{ h.member }}</a>{% if h.page %}, page {{ h.page }}{% endif %}{{ why_of(h) }}{% if can_explain and h.sensitivity in sensitivities %} <button type="button" class="link why-ask" data-identifier="{{ h.identifier }}" data-member="{{ h.member }}" data-position="{{ h.position }}">Why this?</button>{% endif %}</p>
+        {{ quote(h) }}
         <p class="why-said" hidden aria-live="polite"></p>
       </li>
     {% endmacro %}
 
     {% if q %}
+    <h2>Datasets</h2>
+    <p class="count">{{ datasets|length }} dataset{% if datasets|length != 1 %}s{% endif %}</p>
+    {% if datasets_strong %}
+    <ol class="hits">
+      {% for d in datasets_strong %}{{ dataset_hit(d) }}{% endfor %}
+    </ol>
+    {% if datasets_weak %}
+    <details class="weak">
+      <summary>{{ datasets_weak|length }} more dataset{% if datasets_weak|length != 1 %}s{% endif %}, close in meaning only</summary>
+      <ol class="hits">
+        {% for d in datasets_weak %}{{ dataset_hit(d) }}{% endfor %}
+      </ol>
+    </details>
+    {% endif %}
+    {% elif datasets_weak %}
+    <p class="notice">No description contains your words, and none is close in meaning.</p>
+    <details class="weak">
+      <summary>{{ datasets_weak|length }} dataset{% if datasets_weak|length != 1 %}s{% endif %}, the closest in meaning</summary>
+      <ol class="hits">
+        {% for d in datasets_weak %}{{ dataset_hit(d) }}{% endfor %}
+      </ol>
+    </details>
+    {% else %}
+    <p class="empty">No description is close enough.</p>
+    {% endif %}
+
+    {% if passages_enabled %}
+    <h2>Passages</h2>
     <p class="count">{{ results|length }} passage{% if results|length != 1 %}s{% endif %}</p>
     {% if strong %}
     <ol class="hits">
@@ -69,6 +109,7 @@
     </details>
     {% else %}
     <p class="empty">Nothing close enough.</p>
+    {% endif %}
     {% endif %}
     {% endif %}
   </article>

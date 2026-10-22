@@ -426,9 +426,9 @@ def create_app(settings: Optional[Settings] = None,
             out["place_filter"] = place_public(pview)
         return out
 
-    # --- search inside documents (finding-and-reuse.md §7) ------------------
+    # --- search by meaning or content (finding-and-reuse.md §5 and §7) ------
 
-    SEARCH_TOP = 20          # passages the reranker reads
+    SEARCH_TOP = 20          # results the reranker reads, in each group
 
     def need_search():
         if not search_enabled:
@@ -441,81 +441,124 @@ def create_app(settings: Optional[Settings] = None,
 
     SORTS = ("words", "meaning")   # words first (the default), or by meaning alone
 
-    def search_passages(user: User, q: str, limit: int, sort: str = "words") -> Dict:
-        """Closest passages of files this user may download, best first.
-        The question is embedded, the copy searched, the download rule
-        applied to each hit, then the reranker reads the top few."""
+    def search_all(user: User, q: str, limit: int, sort: str = "words") -> Dict:
+        """Two groups, each best first: dataset descriptions, and (with
+        the passages copy) passages of files this user may download.
+        The words are embedded once; each group is matched on the words
+        as typed, then on every telling word, then by meaning; the
+        reranker reads the top few of each; the sentence closest in
+        meaning is marked in one more call for both."""
         need_search()
-        index = passage_index
         cat = need_read()
+        index = passage_index
         q = " ".join((q or "").split())[:500]
         sort = sort if sort in SORTS else "words"
-        # Only passages whose vector was made with what the alias resolves
-        # to today can be scored against the question's. The promoter
-        # rewrites the rest; until then they wait, and the page says so.
+        by_meaning = sort == "meaning"
+        # Only vectors made with what the alias resolves to today can be
+        # scored against the question's. The promoter rewrites the rest;
+        # until then they wait, and the page says so.
         model = platform.embed_fingerprint()
-        out = {"q": q, "results": [], "notice": None, "steps": [],
-               "stats": index.stats(model=model) if index is not None else None,
-               "sort": sort, "can_explain": bool(platform.chat_model)}
-        if not q or index is None:
+        stats = {"described": cat.vectors_for(model)}
+        if index is not None:
+            stats.update(index.stats(model=model))
+        out = {"q": q, "results": [], "strong": [], "weak": [],
+               "datasets": [], "datasets_strong": [], "datasets_weak": [],
+               "notice": None, "steps": [], "stats": stats, "sort": sort,
+               "can_explain": bool(platform.chat_model)}
+        if not q:
             return out
-        if out["stats"]["passages"] and not out["stats"]["current"]:
-            out["notice"] = ("These passages were made with a different embedding model; "
-                             "search inside documents is off until the promoter rewrites them.")
-            return out
-        try:
-            # The question is a query: it carries the model's instruction.
-            # The passages it is scored against were embedded bare.
-            vec = platform.embed([q], instruction=settings.llm_query_instruction)[0]
-        except PlatformError as e:
-            out["notice"] = "Search inside documents is unavailable (%s)." % e
-            return out
-        out["steps"].append("meaning")
-        # With amber served to nobody, do not even pull amber rows.
-        sens = ("green",) if settings.amber_access == "off" else None
+        notices: List[str] = []
+
+        def step(name: str):
+            if name not in out["steps"]:
+                out["steps"].append(name)
+
+        def note(text: str):
+            if text not in notices:
+                notices.append(text)
+
+        described = stats["described"] > 0
+        if not described:
+            note("Ranking of descriptions by meaning is off until the index is rebuilt "
+                 "for the current embedding model.")
+        passages_live = index is not None and bool(stats["passages"]) and bool(stats["current"])
+        if index is not None and stats["passages"] and not stats["current"]:
+            note("These passages were made with a different embedding model; "
+                 "search inside documents is off until the promoter rewrites them.")
+        vec = None
+        if described or passages_live:
+            try:
+                # The words are a query: they carry the model's instruction.
+                # What they are scored against was embedded bare.
+                vec = platform.embed([q], instruction=settings.llm_query_instruction)[0]
+                step("meaning")
+            except PlatformError as e:
+                note("Search by meaning is unavailable (%s)." % e)
         stems = question_stems(q)
-        hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems,
-                            by_meaning=(sort == "meaning"), model=model)
-        allowed = []
-        for h in hits:
-            strand = (h["identifier"] or "").split("/", 1)[0]
-            if may_download(user, h["sensitivity"], strand, settings) is None:
-                allowed.append(h)
-        # Passages that contain the words asked stay in front; the reranker
-        # orders only those found by meaning. Sorting by meaning alone puts
-        # everything in one list by similarity, the order the copy already
-        # returned (each still says why), and the reranker, which would
-        # reorder it, is not asked.
-        if sort == "meaning":
-            pinned, rest = [], allowed
-        else:
-            pinned = [h for h in allowed if h["why"] != "meaning"]
-            rest = [h for h in allowed if h["why"] == "meaning"]
-        room = max(0, SEARCH_TOP - len(pinned))
-        top, tail = rest[:room], rest[room:]
-        if sort != "meaning" and platform.rerank_model and len(top) > 1:
-            sendable = [i for i, h in enumerate(top)
-                        if h["sensitivity"] in settings.llm_sensitivities]
-            if len(sendable) > 1:
-                try:
-                    order = platform.rerank(q, [top[i]["text"] for i in sendable])
-                    held = [top[i] for i in range(len(top)) if i not in sendable]
-                    top = [top[sendable[j]] for j in order] + held
-                    out["steps"].append("rerank")
-                except PlatformError as e:
-                    out["notice"] = "The reranker is unavailable (%s)." % e
-        results = (pinned + top + tail)[:limit]
+
+        def rerank_top(pinned: List[Dict], rest: List[Dict], text_of) -> List[Dict]:
+            """One group's order: results found by the words stay in front;
+            the reranker reads the top of those found by meaning, words
+            first only (by meaning alone is one list by similarity, and
+            the reranker, which would reorder it, is not asked). Only
+            texts of the sensitivities that may be sent go to it; the
+            rest keep their place after them."""
+            room = max(0, SEARCH_TOP - len(pinned))
+            top, tail = rest[:room], rest[room:]
+            if not by_meaning and platform.rerank_model and len(top) > 1:
+                sendable = [i for i, h in enumerate(top)
+                            if h["sensitivity"] in settings.llm_sensitivities]
+                if len(sendable) > 1:
+                    try:
+                        order = platform.rerank(q, [text_of(top[i]) for i in sendable])
+                        held = [top[i] for i in range(len(top)) if i not in sendable]
+                        top = [top[sendable[j]] for j in order] + held
+                        step("rerank")
+                    except PlatformError as e:
+                        note("The reranker is unavailable (%s)." % e)
+            return (pinned + top + tail)[:limit]
+
+        def split(items: List[Dict]):
+            if by_meaning:
+                return [], items
+            return ([h for h in items if h["why"] != "meaning"],
+                    [h for h in items if h["why"] == "meaning"])
+
+        # Datasets: name and abstract on the words, the rest by vector. A
+        # dataset without a current vector is found by its words only.
+        rows = cat.rank_datasets(q, vec if described else None, model=model, stems=stems,
+                                 by_meaning=by_meaning)
+        datasets = rerank_top(*split(rows), lambda r: (r.get("dataset") or "") + ". "
+                              + (r.get("abstract") or ""))
+        for r in datasets:
+            r["score"] = round(float(r["score"]), 3) if r["score"] is not None else None
+        # Passages: the copy searched, the download rule applied to each hit.
+        hits: List[Dict] = []
+        results: List[Dict] = []
+        if passages_live and vec is not None:
+            # With amber served to nobody, do not even pull amber rows.
+            sens = ("green",) if settings.amber_access == "off" else None
+            hits = index.search(vec, limit=limit * 5, sensitivities=sens, phrase=q, stems=stems,
+                                by_meaning=by_meaning, model=model)
+            allowed = []
+            for h in hits:
+                strand = (h["identifier"] or "").split("/", 1)[0]
+                if may_download(user, h["sensitivity"], strand, settings) is None:
+                    allowed.append(h)
+            results = rerank_top(*split(allowed), lambda h: h["text"])
+            for h in results:
+                row = cat.get(h["identifier"]) or {}
+                h["dataset"] = row.get("dataset") or h["identifier"].rsplit("/", 1)[-1]
+                h["score"] = round(float(h["score"]), 3)
         pat = word_pattern(q)
-        phrase_re = re.compile(re.escape(q), re.IGNORECASE) if q else None
-        for h in results:
-            row = cat.get(h["identifier"]) or {}
-            h["dataset"] = row.get("dataset") or h["identifier"].rsplit("/", 1)[-1]
-            h["score"] = round(float(h["score"]), 3)
+        phrase_re = re.compile(re.escape(q), re.IGNORECASE)
+
+        def sentences_of(h: Dict, text: str):
+            """A result found by its words is marked by its words: the
+            sentences holding the phrase, else every telling word. No
+            call to the platform needed to say why."""
             h["sentences"] = [{"text": s, "marked": False, "how": None}
-                              for s in split_sentences(h["text"])]
-            # A passage found by its words is marked by its words: the
-            # sentences holding the phrase, else every telling word. No
-            # call to the platform needed to say why.
+                              for s in split_sentences(text)]
             if h["why"] == "phrase":
                 for s in h["sentences"]:
                     if phrase_re.search(s["text"]):
@@ -526,17 +569,21 @@ def create_app(settings: Optional[Settings] = None,
                     found = {m.group(1).lower() for m in pat.finditer(s["text"])} if pat else set()
                     if stems and found.issuperset(stems):
                         s["marked"], s["how"] = True, "words"
-        # Which sentence of each passage found by meaning is closest: one
-        # call for them all. A one-sentence passage has nothing to choose.
-        todo = [h for h in results if h["why"] == "meaning" and len(h["sentences"]) > 1
-                and not any(s["marked"] for s in h["sentences"])]
-        if todo:
+
+        for r in datasets:
+            sentences_of(r, r.get("abstract") or "")
+        for h in results:
+            sentences_of(h, h["text"])
+        # Which sentence of each result found by meaning is closest: one
+        # call for both groups. A one-sentence text has nothing to choose.
+        todo = [h for h in datasets + results if h["why"] == "meaning"
+                and len(h["sentences"]) > 1 and not any(s["marked"] for s in h["sentences"])]
+        if todo and vec is not None:
             texts = [s["text"] for h in todo for s in h["sentences"]]
             try:
                 vectors = platform.embed(texts)
             except PlatformError as e:
-                out["notice"] = ((out["notice"] + " ") if out["notice"] else "") + \
-                    "Highlighting is unavailable (%s)." % e
+                note("Highlighting is unavailable (%s)." % e)
             else:
                 i = 0
                 for h in todo:
@@ -544,75 +591,109 @@ def create_app(settings: Optional[Settings] = None,
                     for s, marked in zip(h["sentences"], mark_closest(vectors[i:i + n], vec)):
                         s["marked"], s["how"] = marked, ("meaning" if marked else None)
                     i += n
-                out["steps"].append("highlight")
-        # A meaning-only result is strong when it is within the band of
-        # the best and at least the floor (both settings;
-        # weak-band-handoff.md): the band keeps a good best's neighbours,
-        # the floor stops a poor best, as on a query the corpus has
-        # nothing for, from showing noise as strong. Weak results are
-        # folded on the page, never dropped. Words first: the best is the
-        # best meaning score, and with word matches present every
-        # meaning-only result is weak by comparison. By meaning: one list
-        # by similarity, so the best is its top whatever found it, the
-        # band and floor alone decide, and a word match is never weak.
-        by_meaning = sort == "meaning"
-        has_words = not by_meaning and any(h["why"] != "meaning" for h in results)
-        best = max((float(h["score"]) for h in results
-                    if by_meaning or h["why"] == "meaning"), default=0.0)
-        cut = max(best - settings.search_weak_band, settings.search_weak_floor)
-        for h in results:
-            h["weak"] = h["why"] == "meaning" and (has_words or float(h["score"]) < cut)
+                step("highlight")
+
+        def mark_weak(items: List[Dict]):
+            """A meaning-only result is strong when it is within the band
+            of the group's best and at least the floor (both settings;
+            weak-band-handoff.md): the band keeps a good best's
+            neighbours, the floor stops a poor best, as on a query the
+            corpus has nothing for, from showing noise as strong. Weak
+            results are folded on the page, never dropped. Words first:
+            the best is the best meaning score, and with word matches
+            present every meaning-only result is weak by comparison. By
+            meaning: one list by similarity, so the best is its top
+            whatever found it, the band and floor alone decide, and a
+            word match is never weak."""
+            has_words = not by_meaning and any(h["why"] != "meaning" for h in items)
+            best = max((float(h["score"]) for h in items if h["score"] is not None
+                        and (by_meaning or h["why"] == "meaning")), default=0.0)
+            cut = max(best - settings.search_weak_band, settings.search_weak_floor)
+            for h in items:
+                h["weak"] = h["why"] == "meaning" and (has_words or float(h["score"]) < cut)
+
+        mark_weak(datasets)
+        mark_weak(results)
+        out["datasets"] = datasets
+        out["datasets_strong"] = [r for r in datasets if not r["weak"]]
+        out["datasets_weak"] = [r for r in datasets if r["weak"]]
         out["results"] = results
         out["strong"] = [h for h in results if not h["weak"]]
         out["weak"] = [h for h in results if h["weak"]]
-        log.info("search user=%s chars=%d steps=%s hits=%d shown=%d",
-                 user.username, len(q), "+".join(out["steps"]) or "-", len(hits), len(results))
+        out["notice"] = " ".join(notices) or None
+        # The words themselves are not logged: they may say what someone
+        # is working on. Their length and the steps that ran are enough.
+        log.info("search user=%s chars=%d steps=%s datasets=%d hits=%d shown=%d",
+                 user.username, len(q), "+".join(out["steps"]) or "-", len(datasets),
+                 len(hits), len(results))
         return out
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, q: str = "", sort: str = "words",
                     user: User = Depends(current_user)):
-        found = search_passages(user, q, limit=20, sort=sort)
+        found = search_all(user, q, limit=SEARCH_TOP, sort=sort)
+        v = vocab_views(vocab_cache.current())
         return templates.TemplateResponse(request, "search.html", {
             "user": user, **found,
             "error": passage_index.error if passage_index is not None else None,
             "sensitivities": settings.llm_sensitivities,
+            # r11: provider entries by slug (name, url) and place labels.
+            "providers": {p["slug"]: p for p in v["providers"]},
+            "place_labels": place_views(places_cache.current())["labels"],
         })
 
     @app.get("/search/why")
     def search_why(q: str = "", identifier: str = "", member: str = "", position: int = 0,
                    user: User = Depends(current_user)):
-        """The chat model's one sentence on what connects a passage to the
-        question, fetched when a reader asks. The passage text goes to
-        the platform, so only for the sensitivities that may be sent, and
-        only for a passage this reader could download."""
-        index = need_passages()
+        """The chat model's one sentence on what connects a result to the
+        question, fetched when a reader asks. With `member`, a passage:
+        its text goes to the platform, so only for the sensitivities that
+        may be sent, and only for a passage this reader could download.
+        Without, a dataset: its abstract, under the sensitivity rule
+        alone, since descriptions are listed for everyone."""
+        need_search()
         q = " ".join((q or "").split())[:500]
         if not q or not platform.chat_model:
             raise HTTPException(status_code=404, detail="Not Found")
-        h = index.get(identifier, member, position)
-        if h is None:
-            raise HTTPException(status_code=404, detail="no such passage")
-        strand = (h["identifier"] or "").split("/", 1)[0]
-        if may_download(user, h["sensitivity"], strand, settings) is not None:
-            raise HTTPException(status_code=403, detail="not yours to read")
-        if h["sensitivity"] not in settings.llm_sensitivities:
-            raise HTTPException(status_code=403,
-                                detail="this passage's sensitivity may not be sent to the platform")
+        if member:
+            h = need_passages().get(identifier, member, position)
+            if h is None:
+                raise HTTPException(status_code=404, detail="no such passage")
+            strand = (h["identifier"] or "").split("/", 1)[0]
+            if may_download(user, h["sensitivity"], strand, settings) is not None:
+                raise HTTPException(status_code=403, detail="not yours to read")
+            if h["sensitivity"] not in settings.llm_sensitivities:
+                raise HTTPException(status_code=403,
+                                    detail="this passage's sensitivity may not be sent to the platform")
+            text = h["text"]
+        else:
+            row = need_read().get(identifier)
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such dataset")
+            if row.get("sensitivity") not in settings.llm_sensitivities:
+                raise HTTPException(status_code=403,
+                                    detail="this dataset's sensitivity may not be sent to the platform")
+            text = row.get("abstract") or ""
         try:
-            why = platform.explain(q, h["text"])
+            why = platform.explain(q, text)
         except PlatformError as e:
             return JSONResponse({"why": None, "notice": "No explanation just now (%s)." % e},
                                 status_code=503)
-        log.info("search-why user=%s dataset=%s member=%s", user.username, identifier, member)
+        log.info("search-why user=%s dataset=%s member=%s", user.username, identifier,
+                 member or "-")
         return {"why": why, "notice": None}
 
     @app.get("/search.json")
     def search_json(q: str = "", limit: int = 20, sort: str = "words",
                     user: User = Depends(current_user)):
-        found = search_passages(user, q, limit=max(1, min(limit, 100)), sort=sort)
+        found = search_all(user, q, limit=max(1, min(limit, 100)), sort=sort)
         return {"q": found["q"], "notice": found["notice"], "steps": found["steps"],
                 "stats": found["stats"], "sort": found["sort"],
+                "datasets": [{k: r.get(k) for k in ("identifier", "dataset", "strand", "project",
+                                                     "sensitivity", "provider", "spatial",
+                                                     "abstract", "score", "why", "weak",
+                                                     "sentences")}
+                             for r in found["datasets"]],
                 "passages": [{k: h.get(k) for k in ("identifier", "dataset", "member", "page",
                                                      "position", "text", "score", "sensitivity",
                                                      "why", "weak", "sentences")}

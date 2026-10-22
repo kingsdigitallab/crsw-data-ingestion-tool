@@ -1,6 +1,7 @@
 // "Why this?" on a search result: ask the service for the chat model's
-// one-sentence reading of what connects the passage to the question.
-// Fetched only when clicked, so an ordinary search costs nothing extra.
+// one-sentence reading of what connects the passage, or the dataset's
+// description, to the question. Fetched only when clicked, so an
+// ordinary search costs nothing extra.
 (function () {
   "use strict";
   var q = document.getElementById("q");
@@ -10,10 +11,11 @@
       var li = btn.closest("li"), said = li.querySelector(".why-said");
       btn.disabled = true;
       btn.textContent = "Asking\u2026";
-      var params = new URLSearchParams({
-        q: q.value, identifier: btn.dataset.identifier,
-        member: btn.dataset.member, position: btn.dataset.position
-      });
+      var params = new URLSearchParams({ q: q.value, identifier: btn.dataset.identifier });
+      if (btn.dataset.member !== undefined) {   // a passage; a dataset row has none
+        params.set("member", btn.dataset.member);
+        params.set("position", btn.dataset.position);
+      }
       fetch("/search/why?" + params.toString(), { credentials: "same-origin" })
         .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
         .then(function (res) {

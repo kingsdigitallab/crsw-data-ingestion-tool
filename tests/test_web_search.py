@@ -186,6 +186,7 @@ class SearchBase(PlatformBase):
                         b"Dates were checked against the archive.\n")
         self.put_member(GREEN, "tiny.txt", b"test data\n")
         self.rows_by_id = {r["identifier"]: r for r in index_mod.rows(self.s3, "crsw")}
+        self.embed_store()
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, "copy", "passages.duckdb")
 
@@ -228,6 +229,11 @@ class SearchBase(PlatformBase):
         r = client.get("/search.json", params=dict(q=q, **params))
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
+
+    @staticmethod
+    def passages_part(html):
+        """The page from the Passages heading on."""
+        return html.split("<h2>Passages</h2>", 1)[1]
 
 
 class TestOff(SearchBase):
@@ -699,9 +705,14 @@ class TestSearchPage(SearchBase):
         self.assertIn("different embedding model", body["notice"])
         self.assertEqual(p.embed_calls, [])
         self.assertIn("different embedding model", c.get("/search", params={"q": "x"}).text)
-        # One dataset rebuilt under the new fingerprint, seen on the next cycle.
+        # The dataset vectors are from the old backend too: both notices.
+        self.assertIn("Ranking of descriptions by meaning is off", body["notice"])
+        # One dataset rebuilt under the new fingerprint, seen on the next
+        # cycle; the dataset vectors rebuilt too (a fresh catalogue reads them).
         self.write_passages((CLEAN,), model="other")
+        self.embed_store(model="other")
         clock["now"] = 61
+        c = self.app(platform=p, index=ix)
         body = self.hits(c, "conflict deaths per year")
         self.assertIsNone(body["notice"])
         self.assertEqual({h["identifier"] for h in body["passages"]}, {CLEAN})
@@ -788,6 +799,7 @@ class TestSearchPage(SearchBase):
         """No strong result: the page says so and folds everything, so a
         question the corpus has nothing for looks like one (the all-weak
         list was shown open until v0.15.1)."""
+        html = self.passages_part(html)
         self.assertIn("Nothing contains your words, and nothing is close in meaning.", html)
         self.assertIn("<summary>%d passage%s, the closest in meaning</summary>"
                       % (n, "" if n == 1 else "s"), html)
@@ -812,7 +824,7 @@ class TestSearchPage(SearchBase):
         body = self.hits(c, "populate automatically where possible")
         self.assertEqual([h["weak"] for h in body["passages"] if h["why"] != "meaning"], [False])
         self.assertTrue(all(h["weak"] for h in body["passages"] if h["why"] == "meaning"))
-        html = c.get("/search", params={"q": "populate automatically where possible"}).text
+        html = self.passages_part(c.get("/search", params={"q": "populate automatically where possible"}).text)
         self.assertIn("<summary>2 more passages, close in meaning only</summary>", html)
         self.assertLess(html.index("contains your exact words"), html.index("<details"))
         self.assertNotIn("Nothing contains your words", html)
@@ -857,8 +869,8 @@ class TestSearchPage(SearchBase):
         body = self.hits(wide, "populate automatically where possible", sort="meaning")
         self.assertIn("phrase", [h["why"] for h in body["passages"]])
         self.assertFalse(any(h["weak"] for h in body["passages"]))
-        html = wide.get("/search", params={"q": "populate automatically where possible",
-                                           "sort": "meaning"}).text
+        html = self.passages_part(wide.get("/search", params={"q": "populate automatically where possible",
+                                                              "sort": "meaning"}).text)
         self.assertNotIn("<details", html)
         self.assertNotIn("Nothing contains your words", html)
         # Under the default order the words rule stands whatever the band.
@@ -1023,3 +1035,171 @@ class TestVectors(PlatformBase):
                 problems.append("rank: %r" % e)
         t.join(30)
         self.assertEqual(problems[:3], [])
+
+
+class TestRankDatasets(PlatformBase):
+    """`Catalogue.rank_datasets`: the three tiers passages have (exact
+    words, all the words, meaning), over a dataset's name and abstract,
+    with the vector's cosine where there is one."""
+
+    def test_tiers_and_order(self):
+        self.embed_store()
+        cat = Catalogue(self.s3, "crsw")
+        q = "conflict deaths per year"
+        rows = cat.rank_datasets(q, bag(q), model="toy", stems=question_stems(q))
+        self.assertEqual([(r["identifier"], r["why"]) for r in rows],
+                         [(CLEAN, "phrase"), (GREEN, "meaning")])
+        self.assertTrue(all(isinstance(r["score"], float) for r in rows))
+        # A name typed finds the dataset, no vector needed; the score is then none.
+        rows = cat.rank_datasets("interviews", None, model="toy",
+                                 stems=question_stems("interviews"))
+        self.assertEqual([(r["identifier"], r["why"], r["score"]) for r in rows],
+                         [(AMBER, "phrase", None)])
+        # Every telling word, in any order, is the second tier.
+        rows = cat.rank_datasets("database CSAC", None, stems=question_stems("database CSAC"))
+        self.assertEqual([(r["identifier"], r["why"]) for r in rows], [(CLEAN, "words")])
+        # Nothing in the words: by meaning, and only rows with a current vector.
+        rows = cat.rank_datasets("zzzz", bag("zzzz"), model="toy", stems=[])
+        self.assertEqual(sorted(r["identifier"] for r in rows), sorted([CLEAN, GREEN]))
+        self.assertTrue(all(r["why"] == "meaning" for r in rows))
+        self.assertEqual(cat.rank_datasets("zzzz", bag("zzzz"), model="other", stems=[]), [])
+        self.assertEqual(len(cat.rank_datasets("zzzz", bag("zzzz"), model="toy", stems=[], limit=1)), 1)
+        # By meaning alone: one list by score; a row with no vector cannot be placed.
+        q = "cleaned CSAC"
+        rows = cat.rank_datasets(q, bag("x"), model="toy", stems=question_stems(q), by_meaning=True)
+        self.assertNotIn(AMBER, [r["identifier"] for r in rows])
+        self.assertEqual([r["why"] for r in rows], ["words", "words"])
+        self.assertEqual([r["score"] for r in rows], sorted((r["score"] for r in rows), reverse=True))
+
+
+class TestDatasetsGroup(SearchBase):
+    def test_datasets_ranked_beside_passages(self):
+        self.write_passages((CLEAN, GREEN))
+        p = FakePlatform()
+        c = self.app(platform=p)
+        body = self.hits(c, "conflict deaths per year")
+        self.assertEqual([(d["identifier"], d["why"], d["weak"]) for d in body["datasets"]],
+                         [(CLEAN, "phrase", False), (GREEN, "meaning", True)])
+        d = body["datasets"][0]
+        self.assertEqual((d["dataset"], d["strand"], d["project"], d["sensitivity"]),
+                         ("csac-clean", "rs2", "csac", "green"))
+        self.assertIn("Conflict deaths per year", d["abstract"])
+        self.assertTrue(all(s["how"] == "phrase" for s in d["sentences"]))
+        self.assertIsInstance(d["score"], float)
+        # The meaning-only dataset's sentences went to the platform in the
+        # one highlighting call with the passages', and one is marked.
+        self.assertEqual(len(p.embed_calls), 2)
+        self.assertIn("Events from the CSAC extract, cleaned.", p.embed_calls[-1])
+        self.assertTrue(any(s["how"] == "meaning" for s in body["datasets"][1]["sentences"]))
+        self.assertEqual(body["stats"]["described"], 2)
+        self.assertTrue(body["passages"])
+        html = c.get("/search", params={"q": "conflict deaths per year"}).text
+        self.assertIn("2 dataset descriptions", html)
+        self.assertLess(html.index("<h2>Datasets</h2>"), html.index("<h2>Passages</h2>"))
+        self.assertIn('<a href="/datasets/%s">csac-clean</a><span class="tag strand">rs2</span>' % CLEAN, html)
+        self.assertIn('<button type="button" class="link why-ask" data-identifier="%s">Why this?</button>' % CLEAN, html)
+        self.assertIn("<summary>1 more dataset, close in meaning only</summary>", html)
+        self.assertIn('<mark class="phrase" title="contains your exact words"><b>Conflict</b> <b>deaths</b> per <b>year</b>, cleaned from the CSAC database.</mark>', html)
+        # Without passages the group is the whole page.
+        c = TestClient(create_app(Settings(**LLM), s3_client=self.s3, vocab_dict=VOCAB,
+                                  read_client=s3mod.ReadOnly(self.s3), platform=FakePlatform()))
+        body = self.hits(c, "conflict deaths per year")
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [CLEAN, GREEN])
+        self.assertEqual(body["passages"], [])
+        self.assertNotIn("passages", body["stats"])
+        html = c.get("/search", params={"q": "conflict deaths per year"}).text
+        self.assertIn("<h2>Datasets</h2>", html)
+        self.assertNotIn("<h2>Passages</h2>", html)
+
+    def test_meaning_only_datasets_are_reranked_and_amber_sent_only_when_allowed(self):
+        self.embed_store(include_amber=True)
+        p = FakePlatform()
+        c = self.app(platform=p)
+        body = self.hits(c, "zzzz")
+        ids = [d["identifier"] for d in body["datasets"]]
+        self.assertEqual(sorted(ids), sorted([CLEAN, GREEN, AMBER]))   # listed for everyone
+        self.assertIn("rerank", body["steps"])
+        docs = [d for _, docs in p.rerank_calls for d in docs]
+        self.assertTrue(any(d.startswith("csac-clean. Conflict deaths") for d in docs))
+        self.assertFalse(any("Interview" in d for d in docs))
+        p2 = FakePlatform()
+        self.app(platform=p2, llm_sensitivities=("green", "amber")).get("/search.json", params={"q": "zzzz"})
+        self.assertTrue(any("Interview" in d for _, docs in p2.rerank_calls for d in docs))
+        # The reranker's order wins among what it was sent; the amber row,
+        # not sent, keeps its place after them.
+        rev = [d["identifier"] for d in self.hits(self.app(platform=FakePlatform(reverse=True)), "zzzz")["datasets"]]
+        green = [i for i in ids if i != AMBER]
+        self.assertEqual([i for i in rev if i != AMBER], green[::-1])
+        self.assertEqual(rev.index(AMBER), ids.index(AMBER))
+        # By meaning alone: one list by score, the reranker not asked.
+        p3 = FakePlatform(reverse=True)
+        body = self.hits(self.app(platform=p3), "zzzz", sort="meaning")
+        scores = [d["score"] for d in body["datasets"]]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertEqual(p3.rerank_calls, [])
+
+    def test_without_current_vectors_descriptions_match_by_words_only(self):
+        # The alias repointed: nothing ranked by meaning, the words still
+        # match, the question is not embedded, and the page says why.
+        c = self.app(platform=FakePlatform(fingerprint="other"))
+        body = self.hits(c, "conflict deaths")
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [CLEAN])
+        self.assertEqual(body["steps"], [])
+        self.assertIn("Ranking of descriptions by meaning is off until the index is rebuilt "
+                      "for the current embedding model", body["notice"])
+        self.assertEqual(body["stats"]["described"], 0)
+        html = c.get("/search", params={"q": "qqqq"}).text
+        self.assertIn("Ranking of descriptions by meaning is off", html)
+        self.assertIn("No description is close enough.", html)
+        # Half way through a rebuild: what is current ranks, the rest waits.
+        self.rekey(GREEN, "other")
+        body = self.hits(self.app(platform=FakePlatform()), "zzzz")
+        self.assertEqual([d["identifier"] for d in body["datasets"]], [CLEAN])
+        self.assertIsNone(body["notice"])
+        self.assertEqual(body["steps"], ["meaning", "highlight"])
+
+    def test_embedding_down_leaves_the_words(self):
+        self.write_passages()
+        body = self.hits(self.app(platform=FakePlatform(fail=("embed",))), "conflict deaths")
+        self.assertEqual([(d["identifier"], d["why"]) for d in body["datasets"]], [(CLEAN, "phrase")])
+        self.assertEqual(body["passages"], [])
+        self.assertIn("unavailable", body["notice"])
+
+    def test_why_this_for_a_dataset(self):
+        p = FakePlatform()
+        c = self.app(platform=p)
+        r = c.get("/search/why", params={"q": "conflict deaths", "identifier": CLEAN})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json(), {"why": "It mentions Conflict.", "notice": None})
+        self.assertEqual(p.explain_calls[0][0], "conflict deaths")
+        self.assertIn("Conflict deaths per year", p.explain_calls[0][1])
+        # Amber: its abstract may not be sent until amber is allowed.
+        self.assertEqual(c.get("/search/why", params={"q": "x", "identifier": AMBER}).status_code, 403)
+        c2 = self.app(platform=FakePlatform(), llm_sensitivities=("green", "amber"))
+        self.assertEqual(c2.get("/search/why", params={"q": "x", "identifier": AMBER}).status_code, 200)
+        self.assertEqual(c.get("/search/why", params={"q": "x", "identifier": "rs9/no/green/0_raw/none"}).status_code, 404)
+        # The button follows the same rule.
+        self.embed_store(include_amber=True)
+        html = self.app(platform=FakePlatform()).get("/search", params={"q": "zzzz"}).text
+        self.assertNotIn('data-identifier="%s"' % AMBER, html)
+        html = self.app(platform=FakePlatform(), llm_sensitivities=("green", "amber")).get(
+            "/search", params={"q": "zzzz"}).text
+        self.assertIn('class="link why-ask" data-identifier="%s">Why this?' % AMBER, html)
+        # Without passages the route still answers for a dataset.
+        c3 = TestClient(create_app(Settings(**LLM), s3_client=self.s3, vocab_dict=VOCAB,
+                                   read_client=s3mod.ReadOnly(self.s3), platform=FakePlatform()))
+        self.assertEqual(c3.get("/search/why", params={"q": "x", "identifier": CLEAN}).status_code, 200)
+
+    def test_weak_descriptions_fold_on_their_own(self):
+        c = self.app(platform=FakePlatform(), search_weak_band=1.0, search_weak_floor=2.0)
+        body = self.hits(c, "zzzz")
+        self.assertTrue(body["datasets"])
+        self.assertTrue(all(d["weak"] for d in body["datasets"]))
+        html = c.get("/search", params={"q": "zzzz"}).text
+        self.assertIn("No description contains your words, and none is close in meaning.", html)
+        self.assertIn("<summary>2 datasets, the closest in meaning</summary>", html)
+        wide = self.app(platform=FakePlatform(), search_weak_band=1.0, search_weak_floor=0.0)
+        self.assertFalse(any(d["weak"] for d in self.hits(wide, "zzzz")["datasets"]))
+        html = wide.get("/search", params={"q": "zzzz"}).text
+        self.assertNotIn("No description contains your words", html)
+        self.assertIn("<p class=\"count\">2 datasets</p>", html)
