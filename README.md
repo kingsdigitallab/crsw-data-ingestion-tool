@@ -219,16 +219,16 @@ index), a page per dataset (description, what it was derived from and
 what was derived from it, how it was made, files), and the record as
 stored. Green files download through the service, resumably, without
 the VPN; amber is described for everyone and served according to the
-Centre's decision. With the KCL LLM platform configured the page also
-takes a question in plain words: the question becomes filters the
-researcher can see and adjust, and datasets are ranked by meaning.
-Every step, and every sensitivity whose metadata may be sent, is a
-switch in the environment (`docs/web-deposit/finding-and-reuse.md`
-§5). With `CRSW_PASSAGES=1` it also keeps a copy of the promoter's
-passages on the VM and offers "Search inside content": what the
-deposited documents say, shown only for files the reader could
-download, with the closest sentence of each passage marked (§7).
-Runbook, section 7.
+Centre's decision. With the KCL LLM platform configured the service
+also offers "Search by meaning or content": the datasets whose
+descriptions come closest to the words typed, ranked by meaning, each
+with its closest sentence marked. Every step, and every sensitivity
+whose metadata may be sent, is a switch in the environment
+(`docs/web-deposit/finding-and-reuse.md` §5). With `CRSW_PASSAGES=1` it
+also keeps a copy of the promoter's passages on the VM and the same
+page shows what the deposited documents say, only for files the
+reader could download, with the closest sentence of each passage
+marked (§7). Runbook, section 7.
 
 The vocabulary lives at
 [kingsdigitallab/crsw-vocabulary](https://github.com/kingsdigitallab/crsw-vocabulary),

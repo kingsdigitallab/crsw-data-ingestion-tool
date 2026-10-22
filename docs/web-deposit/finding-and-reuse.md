@@ -224,7 +224,7 @@ abstracts) be sent to a KCL-hosted model? It does not leave KCL, so likely
 yes, but it is theirs to answer.
 
 *For the builder (built 26 September, A and B; C not yet):* `crsw_web/llm.py`
-is the thin `httpx` client (embed, question-to-filter, rerank; every failure
+is the thin `httpx` client (embed, question-to-filter until 22 October 2026, rerank; every failure
 one error type so callers fall back). `promoter/embed.py` writes one vector
 per dataset to `index/embeddings.parquet`, a file of its own beside the index
 so it can be dropped or rebuilt alone, incremental by identifier, modified
@@ -235,8 +235,9 @@ vectors made with the backend of the day (9 October; the handoff note
 `embedding-model-fingerprint-handoff.md` has the reasoning). Vectors are
 cut to their first 1,024 numbers and stored at half precision
 (`PROMOTER_LLM_EMBED_DIMS`), a quarter of the storage.
-`Catalogue.ask` runs filter, meaning and rerank in turn, each degrading on its
-own; the page shows "Understood as" with the filter as the filled-in form. Two
+`Catalogue.ask` ran filter, meaning and rerank in turn, each degrading on its
+own; the page showed "Understood as" with the filter as the filled-in form
+(retired 22 October 2026, see the end of this section). Two
 rules from the first live run: a dataset named in the question comes first,
 and a filter that matches nothing relaxes to the closest datasets with a
 notice. Ranking is in memory (NumPy), which is right for one vector per
@@ -333,6 +334,31 @@ the list. Ten projects a page (`page`, `per` of 10, 25 or 50; a size
 chosen in the address is remembered in a cookie, so no script is
 needed). `/datasets.json` stays unpaged: the form's pickers read every
 row of a strand from it.
+
+**22 October 2026, the question-to-filter step retired.** The first
+meaning-search test against two real amber deposits showed the step
+working against the reader: *Court cases about women moved abroad and
+forced to work in brothels* was "understood as" a strand, a sensitivity
+and a subject the question never implied, applied as hard filters, so
+nothing matched and the page fell back to the one dataset with a
+vector; and the strand legend in the prompt described another centre
+(`docs/ask-and-search-handoff.md`). Decision: Find data is filters plus
+a words box, and everything by meaning lives on one page, **Search by
+meaning or content** (§7's page, renamed), which ranks dataset
+descriptions and passages together. `Catalogue.rank_datasets` gives a
+dataset's name and abstract the three tiers passages have (the words
+as typed, every telling word, the cosine of the question's vector
+against the dataset's), the reranker reads the top of each group's
+meaning tier, the closest sentence of an abstract is marked as a
+passage's is, the weak band folds each group from its own best, and
+"Why this?" works on a dataset row against its abstract under the
+sensitivity rule alone. `Catalogue.ask`, `Platform.filter_for` and the
+"Understood as" line are gone; the chat model is now asked only on a
+click. The page is on whenever the embedding model is (a blank
+`CRSW_PASSAGES` only drops the passages group), so the runbook's
+"Ranking by meaning is off" notice is the search page's. Soft-boosting
+by an inferred subject or place was considered with it and dropped:
+the vector carries the subject labels and scope notes already.
 
 ## 6. Sequence
 

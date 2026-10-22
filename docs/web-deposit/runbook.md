@@ -62,7 +62,7 @@ curl -s localhost:8080/health                                   # "release": "v0
 
 The read role (section 7) stays off on the VM until eResearch issue the read-scoped key: leave `CRSW_READ_S3_ACCESS_KEY` and `CRSW_READ_S3_SECRET_KEY` blank. **Never put a personal key on the web VM**; a personal key can write anywhere, and the staging-only design depends on the VM holding nothing that can.
 
-The same goes for the LLM platform key: `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KEY` on the VM should be a key issued to the project, not a person's, so it can be rotated when people change. Blank keeps "ask in your own words" off; the find page still works.
+The same goes for the LLM platform key: `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KEY` on the VM should be a key issued to the project, not a person's, so it can be rotated when people change. Blank keeps "Search by meaning or content" off; the find page still works.
 
 `/health` is the only path nginx serves to a source outside `CRSW_TRUSTED_PROXY_CIDRS`; every other path answers 403 from the VM itself, which is the allow-list working. The same CIDR value must be in `.env` (the app's peer check) and exported in the shell (the nginx sidecar), and the export is needed again for every later `docker compose` command.
 
@@ -132,8 +132,8 @@ Until the internal VM exists, the web VM can run alone. Finalised deposits wait 
 - **Vocabulary change merged**: the web service re-fetches the vocabulary every `CRSW_VOCAB_REFRESH_SECONDS` (default 600), so a merged change is in the form within ten minutes; `docker compose -f deploy/compose.yaml restart deposit-web` makes it immediate. `GET /vocabulary` shows the version, source and load time the service is using.
 - **Scope note or other spelling edited** (`describe`, or the "Describe a term" form; no new vocabulary version): nothing to do. The form and the find pages show it after the next refresh; the next promoter run, quiet or not, re-embeds only the datasets carrying that term and logs `embed_text_changed`.
 - **Rotate a key**: edit the env file, restart the service (web) or nothing (promoter picks it up next run). Old key revoked by eResearch.
-- **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the find page says "Ranking by meaning is off until the index is rebuilt for the current embedding model" and the search page "These passages were made with a different embedding model", and word search keeps working. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias (and, from v0.11, no `text_sha`). The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
-- **"Ranking by meaning is off" stays after an upgrade**: nothing needs kicking off; the timer's quiet runs rewrite the embeddings by themselves, but only when the internal VM has `PROMOTER_LLM_BASE_URL`, `PROMOTER_LLM_API_KEY` and `PROMOTER_LLM_EMBED_MODEL` set *and* can reach the platform, and the notice clears only when the web VM resolves the same backend (both ask `GET /models` with their own key). On the internal VM: `grep -o '^PROMOTER_LLM_[A-Z_]*' .env.promoter` (names only, never the values; `BASE_URL` and `API_KEY` must both be there, `EMBED_MODEL` has a default), `systemctl list-timers --all | grep crsw` (the timer must show a next run), `journalctl -u crsw-promoter.service -n 60 --no-pager`, and `$P audit --action embed_model_resolved`, `--action embed_model_unresolved`, `--action embeddings_failed`. No `embed_*` line at all on a quiet run means the LLM settings are blank there, or the file is already current. `embed_model_unresolved` means `GET /models` failed from that VM (the route to `ai.create.kcl.ac.uk`, the key, or the URL); nothing is written until it resolves, and the datasets left without a row are embedded then (`embed_rows_missing`). `embeddings_failed` names the HTTP error. On the web VM, `grep -o '^CRSW_LLM_[A-Z_]*' .env` (`BASE_URL` and `API_KEY` both needed) and `docker compose -f deploy/compose.yaml logs deposit-web | grep -i "models\|fingerprint"`: the web logs nothing when the model resolves, so an empty grep with both settings present is good; a line naming a bare `arc:embedvl` means the web cannot reach the platform, and the notice stays however current the file is. From a laptop on the VPN, `.venv/Scripts/python -m promoter index --embed` with a key in `.env.promoter` writes the file by hand (section 6). Seen 15 October 2026: both VMs were configured and could reach the platform, but the timer and service units had never been installed on the internal VM (`Unit crsw-promoter.timer could not be found`), so the promoter had only ever run by hand, as dry runs, which never write embeddings; installing the units (section 3) fixed it on the first firing.
+- **ARC change the embedding model**: nothing to do. `arc:embedvl` is an alias; the vectors are keyed to the backend it resolves to, and every promoter run (a quiet one too) asks. The run that first sees a new backend logs `embed_model_changed` with the old and new values, re-embeds every dataset (`embeddings_written` with `embedded` ≈ all rows) and rebuilds every passages file in place, so it is a long run; until it finishes, the search page says "Ranking of descriptions by meaning is off until the index is rebuilt for the current embedding model" and "These passages were made with a different embedding model", and word search keeps working on both pages. Nothing is re-read from researchers' files through the web, only from the store. The first run after upgrading to this version does the same once, because the rows written before carried the bare alias (and, from v0.11, no `text_sha`). The other embedding alias on the platform is `arc:embed` (text only, smaller); switching to it is the same event. If ARC ever offer versioned aliases, pin to one and this check becomes belt and braces.
+- **"Ranking of descriptions by meaning is off" stays after an upgrade** (on the search page; it was the find page's notice until 22 October 2026): nothing needs kicking off; the timer's quiet runs rewrite the embeddings by themselves, but only when the internal VM has `PROMOTER_LLM_BASE_URL`, `PROMOTER_LLM_API_KEY` and `PROMOTER_LLM_EMBED_MODEL` set *and* can reach the platform, and the notice clears only when the web VM resolves the same backend (both ask `GET /models` with their own key). On the internal VM: `grep -o '^PROMOTER_LLM_[A-Z_]*' .env.promoter` (names only, never the values; `BASE_URL` and `API_KEY` must both be there, `EMBED_MODEL` has a default), `systemctl list-timers --all | grep crsw` (the timer must show a next run), `journalctl -u crsw-promoter.service -n 60 --no-pager`, and `$P audit --action embed_model_resolved`, `--action embed_model_unresolved`, `--action embeddings_failed`. No `embed_*` line at all on a quiet run means the LLM settings are blank there, or the file is already current. `embed_model_unresolved` means `GET /models` failed from that VM (the route to `ai.create.kcl.ac.uk`, the key, or the URL); nothing is written until it resolves, and the datasets left without a row are embedded then (`embed_rows_missing`). `embeddings_failed` names the HTTP error. On the web VM, `grep -o '^CRSW_LLM_[A-Z_]*' .env` (`BASE_URL` and `API_KEY` both needed) and `docker compose -f deploy/compose.yaml logs deposit-web | grep -i "models\|fingerprint"`: the web logs nothing when the model resolves, so an empty grep with both settings present is good; a line naming a bare `arc:embedvl` means the web cannot reach the platform, and the notice stays however current the file is. From a laptop on the VPN, `.venv/Scripts/python -m promoter index --embed` with a key in `.env.promoter` writes the file by hand (section 6). Seen 15 October 2026: both VMs were configured and could reach the platform, but the timer and service units had never been installed on the internal VM (`Unit crsw-promoter.timer could not be found`), so the promoter had only ever run by hand, as dry runs, which never write embeddings; installing the units (section 3) fixed it on the first firing.
 - **Reading the promoter's logs later**: there are two copies and neither is a single text file. The VM's journal is systemd's binary log under `/var/log/journal/`, read only through `journalctl` and trimmed by size over time: `journalctl -u crsw-promoter.service --since "3 hours ago" --no-pager` for everything the timer logged, `journalctl -u crsw-promoter.service --no-pager | grep -v '"action": "start"\|"action": "finish"\|"action": "audit_written"\|systemd\[1\]'` to drop the quiet runs and systemd's own lines, `systemctl list-timers --all --no-pager | grep crsw` to see that the timer is still scheduled. The durable copy is the audit trail in the bucket (section 6), one small file per run under `audit/promoter/YYYY/MM/DD/`, which `$P audit --since 2026-10-15 --env-file /dev/null` (or `--action embeddings_written`, `--dataset`, `--user`) stitches together from any machine holding the promoter key; prefer it when the question is what changed rather than whether the timer ticked. For a plain file to keep or send: `journalctl -u crsw-promoter.service --no-pager > promoter-journal.txt`, or `$P audit --since 2026-10-01 --json --env-file /dev/null > promoter-audit.jsonl`.
 - **Refused deposit**: `journalctl` shows the problems. Fix at source (usually ask the researcher to re-deposit) or, for a policy refusal, adjust `PROMOTER_AUTHORISED`. A deposit is never edited in place.
 - **Clear staging**: nothing to do; the lifecycle rule expires abandoned deposits and their noncurrent versions. One that must go now: `$P remove --staging <deposit-id>` (section 5, "Removing a dataset").
@@ -489,16 +489,23 @@ To ask eResearch for, in one go: a read-scoped key for the web VM over
 the proxy can forward; whether the proxy buffers or time-limits large
 responses; HTTPS from both VMs to `ai.create.kcl.ac.uk`.
 
-**Asking in plain words.** With `CRSW_LLM_BASE_URL` and `CRSW_LLM_API_KEY`
-set (and the read role on), the find page gains "Ask in your own words".
-A question goes through three steps, each of which can fail or be switched
-off on its own without breaking the page:
+**Search by meaning or content.** With `CRSW_LLM_BASE_URL` and
+`CRSW_LLM_API_KEY` set (and the read role on), the navigation gains
+"Search by meaning or content" (`/search`), which ranks dataset
+descriptions and, with `CRSW_PASSAGES=1` (below), passages from inside
+documents. The words typed go through these steps, each of which can
+fail or be switched off on its own without breaking the page:
 
 | Step | Model | Switch | What is sent |
 |---|---|---|---|
-| filter | `CRSW_LLM_CHAT_MODEL` (`arc:lite`) | blank the name | the question, the vocabulary lists |
-| meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embed`) | blank the name | the question, prefixed with `CRSW_LLM_QUERY_INSTRUCTION` (blank = no prefix); needs `index/embeddings.parquet` |
-| rerank | `CRSW_LLM_RERANK_MODEL` (`arc:rerankvl`) | blank the name | the question and the title plus abstract of up to twenty candidates |
+| meaning | `CRSW_LLM_EMBED_MODEL` (`arc:embed`) | blank the name (the page is then off) | the words, prefixed with `CRSW_LLM_QUERY_INSTRUCTION` (blank = no prefix); needs `index/embeddings.parquet` |
+| rerank | `CRSW_LLM_RERANK_MODEL` (`arc:rerankvl`) | blank the name | the words and the title plus abstract of up to twenty datasets, and up to twenty passages |
+| highlight | `CRSW_LLM_EMBED_MODEL` | with meaning | the sentences of the abstracts and passages found by meaning, to mark the closest |
+| why this? | `CRSW_LLM_CHAT_MODEL` (`arc:lite`) | blank the name | on a click: the words and that one abstract or passage |
+
+Until 22 October 2026 the chat model also turned a question on the find
+page into filters ("Ask in your own words"); that step inferred filters
+the question never implied and was retired (`docs/ask-and-search-handoff.md`).
 
 The reranker is off on the web VM since 16 October 2026 (`CRSW_LLM_RERANK_MODEL=`,
 an explicit blank: an absent line means the built-in default, which is on). The
@@ -509,14 +516,16 @@ default) are sent to the reranker; `CRSW_LLM_EMBED_DIMS` must match the
 promoter's. To change it, set both, restart the web service (its passages
 copy empties itself and refills at the new size) and run `$P passages` and
 `$P index --embed`; until the promoter has rewritten them, the search page
-reports the files still at the old size. The page shows "Understood as: strand rs2, subject
-armed-conflict, from 1990" and fills the search form with those values so
-the researcher can adjust and press Search; a dataset named in the question
-always comes first, and a filter that matches nothing relaxes to the closest
-datasets with a notice. The log line per question records the user, the
-question's length, the steps that ran and the result count, never the
-question. Everything above is off when the two variables are blank, and the
-find page is then exactly as before.
+reports the files still at the old size. The Datasets group: a dataset
+whose name or abstract contains the words as typed comes first, then one
+holding every telling word, then the rest by meaning (only datasets with a
+vector made by the current model; the others are found by their words, on
+this page and on Find data), each row with its strand, sensitivity,
+project, provider and places, and its abstract with the matching or closest
+sentence marked. The log line per search records the user, the length of
+the words, the steps that ran and the counts, never the words. Everything
+above is off when the two variables are blank, and the find page is then
+exactly as before.
 
 **What a page costs.** On a warm cache a find page makes no network
 call: the index and the embeddings file are held in memory per worker
@@ -583,11 +592,11 @@ armed-conflict (and 1 narrower term)"), and `subject_filter.matched` in
 **Searching inside documents.** With `CRSW_PASSAGES=1` as well (and the
 promoter writing passages, section 6), the service keeps a copy of
 `index/passages/` in one DuckDB file on the `passages` volume
-(`CRSW_PASSAGES_PATH`, default `/data/passages.duckdb`) and adds
-"Search inside content" to the navigation: `/search?q=…` embeds the
-words, finds the closest passages, keeps only those whose file the
-download rule would serve this person, reranks the top twenty and shows
-dataset, file, page and passage. The search is hybrid: passages that
+(`CRSW_PASSAGES_PATH`, default `/data/passages.duckdb`) and adds a
+Passages group under the Datasets group of "Search by meaning or content":
+`/search?q=…` embeds the words once for both, finds the closest passages,
+keeps only those whose file the download rule would serve this person,
+reranks the top twenty and shows dataset, file, page and passage. The search is hybrid: passages that
 contain the words as typed come first (green mark on the sentence),
 then passages containing every telling word, then the rest by meaning,
 where the sentences of the passages shown go to the embedding model in
@@ -630,4 +639,5 @@ volume sized to the document count. The log line per search records the
 user, the length of the words, the steps that ran and the hit count,
 never the words. With `CRSW_AMBER_ACCESS=off` no amber passage is even
 queried; `CRSW_LLM_SENSITIVITIES` says whose passages may be sent to the
-reranker. Everything is off with `CRSW_PASSAGES` blank or `0`.
+reranker. The passages group is off with `CRSW_PASSAGES` blank or `0`; the
+page and its Datasets group stay.
