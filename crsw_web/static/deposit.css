@@ -76,6 +76,7 @@ ol.hits b, .hint b { font-weight: 600; }
 .pager { color: var(--muted); font-size: .92rem; display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
 .pager .show { margin-left: auto; }
 .pager .current { font-weight: 600; color: var(--ink); }
+a.explore { margin-left: .5rem; font-size: .85rem; white-space: nowrap; }
 .notice { padding: .7rem 1rem; border-left: 3px solid var(--amber); background: var(--surface); }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li { margin: .15rem 0; }

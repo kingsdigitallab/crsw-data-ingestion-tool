@@ -64,7 +64,7 @@
         <tbody>
         {% for r in g.rows %}
         <tr class="dataset">
-          <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span></td>
+          <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span>{% set explore = explore_link(r.identifier, r.dataset) %}{% if explore %} <a class="explore" href="{{ explore }}" rel="noopener">Explore this data in (CD)ISaW</a>{% endif %}</td>
           <td>{{ r.state }}</td>
           <td>{{ r.depositor or "" }}</td>
           <td class="num">{{ r.files }}</td>

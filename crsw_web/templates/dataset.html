@@ -20,6 +20,7 @@
     <h1>{{ rec.dataset }} <span class="sens {{ rec.sensitivity }} tag">{{ rec.sensitivity }}</span></h1>
     <p class="lede"><code>{{ identifier }}</code></p>
     <p>{{ rec.abstract }}</p>
+    {% set explore = explore_link(identifier, rec.dataset) %}{% if explore %}<p class="explore"><a href="{{ explore }}" rel="noopener">Explore this data in (CD)ISaW</a></p>{% endif %}
     <dl>
       <dt>Subjects</dt><dd>{% for s in subjects %}<a href="/datasets?subject={{ s.slug }}"{% if s.scope %} title="{{ s.scope }}"{% endif %}>{% if s.label %}{{ s.label }} <code>{{ s.slug }}</code>{% else %}{{ s.slug }}{% endif %}</a>{% if not loop.last %}, {% endif %}{% endfor %}</dd>
       <dt>Coverage</dt><dd>{{ rec.temporal.start }} to {{ rec.temporal.end }}</dd>

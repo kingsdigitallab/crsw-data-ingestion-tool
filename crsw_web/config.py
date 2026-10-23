@@ -101,6 +101,9 @@ class Settings:
     # for arc:embed at 1024 on 19 October 2026); floor 0 = no floor.
     search_weak_band: float = 0.10
     search_weak_floor: float = 0.35
+    # r12: the (CD)ISaW explorer, linked from centre/cdisaw datasets on
+    # the dataset page and the Find data row; blank = no link.
+    cdisaw_url: str = ""
 
     @property
     def read_enabled(self) -> bool:
@@ -259,6 +262,7 @@ class Settings:
             passages_path=get("PASSAGES_PATH", cls.passages_path),
             search_weak_band=opt_float("SEARCH_WEAK_BAND", cls.search_weak_band),
             search_weak_floor=opt_float("SEARCH_WEAK_FLOOR", cls.search_weak_floor),
+            cdisaw_url=get("CDISAW_URL").rstrip("/"),
         )
 
 

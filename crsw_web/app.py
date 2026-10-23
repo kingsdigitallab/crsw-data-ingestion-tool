@@ -157,6 +157,20 @@ def create_app(settings: Optional[Settings] = None,
         return Markup(pat.sub(lambda m: "<b>%s</b>" % escape(m.group(0)), str(safe)))
     templates.env.filters["emphasise"] = emphasise
 
+    CDISAW_PREFIX = "centre/cdisaw/"
+
+    def explore_link(identifier: str, dataset: str) -> Optional[str]:
+        """r12: where a centre/cdisaw dataset opens in the (CD)ISaW
+        explorer, filtered to it (the explorer reads #datasets=<slug>);
+        the corpus dataset opens it unfiltered. None when CRSW_CDISAW_URL
+        is blank or the dataset is not part of the corpus."""
+        if not settings.cdisaw_url or not (identifier or "").startswith(CDISAW_PREFIX):
+            return None
+        if dataset == "corpus":
+            return settings.cdisaw_url + "/"
+        return "%s/#datasets=%s" % (settings.cdisaw_url, quote(dataset or "", safe=""))
+    templates.env.globals["explore_link"] = explore_link
+
     # --- Phase 3: the browser form ----------------------------------------
     views_held: Dict[str, object] = {}
 

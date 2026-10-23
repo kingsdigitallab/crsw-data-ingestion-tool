@@ -26,6 +26,11 @@ owned by KDL on the council's behalf.
   `keys.STRANDS`.
 - `dataset.schema.json` carries `centre` in the strand enum and both
   identifier patterns.
+- **The explorer link:** with `CRSW_CDISAW_URL` set, a dataset whose
+  identifier starts `centre/cdisaw/` shows "Explore this data in
+  (CD)ISaW" on its page and its Find data row, to
+  `<url>/#datasets=<dataset>` (the `corpus` dataset opens the explorer
+  unfiltered). Blank means no link. Download is unchanged.
 
 ## 2. The bulk route
 
