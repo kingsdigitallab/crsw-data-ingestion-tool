@@ -13,6 +13,7 @@ abandoned staging deposit goes the same way with its control object
 last. Nothing here reads or writes outside the one prefix it is given;
 `__main__` logs each step and rebuilds the derived layers."""
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -129,25 +130,31 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
     return t
 
 
-# r12: the refusals (promoter.checks.check wording) that are the deposit's
-# own doing, so that removing it is the fix: a member whose stored bytes
-# or size are not the manifest's, a missing or mislabelled object, a
-# record that cannot be read or disagrees with the control object. Any
-# other refusal (status still open, a record invalid against the
-# vocabulary the promoter happened to fetch, authorisation, size caps,
-# the destination record) may be the VM's configuration or a deposit
-# still finalising, and would promote once that is right: such a
-# deposit is never removed here.
-CONTENT_REFUSALS = ("stored bytes hash to", "size mismatch at ", "no object at ",
-                    ": label ", "staged record's files manifest differs",
-                    "staged record identifier ", "staged record dataset_uuid",
-                    "staged record cannot be used", "record_key ", "member path")
+# r12: the refusals (promoter.checks.check wording, and cmd_remove's
+# "control object missing") that are the deposit's own doing, so that
+# removing it is the fix: a member whose stored bytes or size are not the
+# manifest's, a missing or mislabelled object, a record that is absent,
+# unreadable or disagrees with the control object, and a deposit that has
+# its record written but a control object that never reached complete
+# (an upload that died between the two: nothing will finish it). Any
+# other refusal (a record invalid against the vocabulary the promoter
+# happened to fetch, authorisation, size caps, the destination record)
+# may be the VM's configuration, and the deposit would promote once that
+# is right: such a deposit is never removed here.
+CONTENT_REFUSALS = (r"stored bytes hash to", r"size mismatch at ", r"no object at ",
+                    r": label ", r"staged record's files manifest differs",
+                    r"staged record identifier ", r"staged record dataset_uuid",
+                    r"staged record cannot be used", r"^staged record \S*/\S*: ",
+                    r"^record_key ", r"^member path", r"^deposit status is ",
+                    r"^deposit has no record_key", r"^deposit has no files",
+                    r"^control object missing or unreadable")
 
 
 def deposit_at_fault(problems: List[str]) -> bool:
     """True when every one of the promoter's problems with a deposit is
     about its own content (see CONTENT_REFUSALS)."""
-    return bool(problems) and all(any(m in p for m in CONTENT_REFUSALS) for p in problems)
+    return bool(problems) and all(any(re.search(m, p) for m in CONTENT_REFUSALS)
+                                  for p in problems)
 
 
 def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
@@ -200,7 +207,7 @@ def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
             t.problems.append(
                 "deposit has its record written and the promoter refuses it, but not "
                 "for its own bytes or record: the cause may be the vocabulary fetched, "
-                "the promoter's authorisation or limits, or a deposit still finalising. "
+                "the promoter's authorisation or limits, or the destination record. "
                 "Fix that and run the promoter; it is removed here only when its own "
                 "content is wrong. Refused because: %s" % "; ".join(refused_because))
             return t

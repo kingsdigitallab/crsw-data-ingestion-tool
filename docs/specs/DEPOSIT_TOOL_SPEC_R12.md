@@ -63,7 +63,13 @@ the web route leaves after finalise:
    (a `BulkError`) carries the user and deposit id and names the
    `promoter remove --staging ID --confirm ID` that clears the open
    deposit; it is never promoted, but it counts against the depositor's
-   staging until removed.
+   staging until removed. A `KeyboardInterrupt` is re-raised as itself
+   with the same `deposit_id` and `user` attributes.
+6. Refuse, writing nothing, with `AlreadyStaged` when a complete deposit
+   of the same identifier is already in staging (any user): it is
+   waiting for the promoter, and staging it again would upload and
+   promote it twice. An open deposit does not count; a dry run given no
+   store client cannot look and skips the check.
 
 `python -m crsw_web.bulk --record FILE --root DIR [--user K]
 [--copy-from PREFIX] [--dry-run]` does the same for one dataset from the
@@ -78,14 +84,16 @@ in staging, re-checked and refused on every run. `promoter remove
 --staging ID --confirm ID` now removes a finished deposit when, and only
 when, the promoter's checks refuse it for its own content: stored bytes
 or sizes that are not the manifest's, a missing or mislabelled object, a
-record that cannot be read or disagrees with the control object
+record that is absent, unreadable or disagrees with the control object,
+or a record written while the control object never reached complete (an
+upload that died between the two; nothing finishes it)
 (`remove.CONTENT_REFUSALS`). The problems go on the trail as
 `refused_because`. A finished deposit that passes is still refused:
-promote it. One refused for anything else (status still open, a record
-invalid against the vocabulary the promoter fetched, authorisation, a
-size cap, the destination record) is refused too, with the problems: it
-would promote once the configuration is right, so the remedy is that,
-not deleting the upload.
+promote it. One refused for anything else (a record invalid against the
+vocabulary the promoter fetched, authorisation, a size cap, the
+destination record) is refused too, with the problems: it would promote
+once the configuration is right, so the remedy is that, not deleting
+the upload.
 
 ## 3. The uploader may download
 

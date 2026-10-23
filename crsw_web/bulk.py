@@ -44,12 +44,27 @@ class BulkError(ValueError):
     from the checks; the message says what to fix."""
 
 
+class AlreadyStaged(BulkError):
+    """A complete deposit of the same dataset is already in staging,
+    waiting for the promoter: staging it again would upload it twice and
+    promote it twice. `deposit_id` and `user` name the one that is there."""
+
+    def __init__(self, prefix: str, user: str, deposit_id: str):
+        self.prefix, self.user, self.deposit_id = prefix, user, deposit_id
+        super().__init__(
+            "%s is already staged as deposit %s by %s, complete and waiting for the "
+            "promoter: let it promote (or remove it) before staging it again"
+            % (prefix, deposit_id, user))
+
+
 class StagingInterrupted(BulkError):
     """The deposit was created but could not be finished (the network, a
     file that vanished): it is open in staging, under `user`, as
     `deposit_id`. It is not promoted; it counts against the depositor's
     staging until `promoter remove --staging ID --confirm ID` takes it
-    away, so the id travels with the error."""
+    away, so the id travels with the error. A KeyboardInterrupt is not
+    wrapped (it must still stop the caller) but gets the same
+    `deposit_id` and `user` attributes."""
 
     def __init__(self, user: str, deposit_id: str, cause: BaseException):
         self.user, self.deposit_id, self.cause = user, deposit_id, cause
@@ -134,6 +149,10 @@ def stage_dataset(store: DepositStore, user: str, rec: Dict, files: Dict[str, Pa
         raise BulkError("%s is not among the record's depositors %s; the labels and the "
                         "record must name the same person" % (user, rec.get("depositors")))
     check_files(rec, files)
+    if store.client is not None:  # a dry run without a store cannot look
+        for other in store.deposits_for(prefix):
+            if other.status == STATUS_COMPLETE:
+                raise AlreadyStaged(prefix, other.user, other.id)
     entries = sorted(rec["files"], key=lambda e: e["path"])
     finals = dict(deposit_logic.plan_keys(meta, [e["path"] for e in entries]))
     client, bucket = store.client, store.bucket
@@ -181,6 +200,9 @@ def stage_dataset(store: DepositStore, user: str, rec: Dict, files: Dict[str, Pa
         store.save(dep)
     except Exception as e:  # the deposit exists now: say so, with its id
         raise StagingInterrupted(user, dep.id, e) from e
+    except BaseException as e:  # Ctrl-C: the deposit is open all the same; name it
+        e.deposit_id, e.user = dep.id, user
+        raise
     out.record_key = record_key
     return out
 

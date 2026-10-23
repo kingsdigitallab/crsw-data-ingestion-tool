@@ -513,6 +513,30 @@ class TestStaging(RemoveBase):
         self.assertEqual(code, 1, lines)
         self.assertNotEqual(self.versions(root), [])
 
+    def test_a_deposit_that_died_between_record_and_complete_can_be_removed(self):
+        # bulk.stage_dataset writes the record, then marks the control object
+        # complete; a drop between the two leaves a record with status open.
+        # Nothing finishes it, so StagingInterrupted's remove command must work.
+        dep = self.stage()
+        dep.status = "open"
+        self.store.save(dep)
+        root = self.store.root("k1078591", dep.id)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn("deposit status is 'open', not complete", done["refused_because"][0])
+        self.assertEqual(self.versions(root), [])
+
+    def test_a_finished_deposit_whose_record_object_is_gone_can_be_removed(self):
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        self.s3.delete_object(Bucket="crsw", Key=dep.record_key)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn(": absent", done["refused_because"][0])
+        self.assertEqual(self.versions(root), [])
+
     def test_an_unknown_id_is_refused(self):
         code, lines = self.cli(["remove", "--staging", "nope", "--confirm", "nope"])
         self.assertEqual(code, 1)
