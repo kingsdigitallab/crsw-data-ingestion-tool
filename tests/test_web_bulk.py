@@ -90,6 +90,15 @@ class TestStageDataset(unittest.TestCase):
         self.assertEqual([e["path"] for e in control["entries"]], sorted(self.data))
         self.assertEqual({a for _, a, _ in out.members}, {UPLOADED})
 
+    def test_the_promoter_rebuilds_the_same_record_from_the_control_object(self):
+        # promoter/promote.py assembles the record from dep.meta and dep.entries;
+        # it must come out as the record that was staged.
+        from crsw_deposit import deposit_logic
+        dep = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW).deposit
+        rebuilt, _, _, _ = deposit_logic.assemble_record(
+            dep.meta, None, dep.entries, dep.user, NOW, dep.dataset_uuid, created=NOW)
+        self.assertEqual(rebuilt, self.rec)
+
     def test_path_mismatch_refused_before_any_write(self):
         files = dict(self.files)
         files.pop("wide/status/demo.json")

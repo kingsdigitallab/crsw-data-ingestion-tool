@@ -35,7 +35,7 @@ COPIED = "copied"
 
 # The record fields that are not part of the deposit's metadata.
 _NOT_META = ("files", "schema_version", "dataset_uuid", "created", "modified",
-             "depositors")
+             "depositors", "identifier", "temporal")
 
 
 class BulkError(ValueError):
@@ -62,10 +62,14 @@ class Staged:
 
 
 def meta_from_record(rec: Dict) -> Dict:
-    """The deposit metadata the record already carries; the control
-    object holds it as the web route's does, so the record stays the one
-    copy of the description."""
-    return {k: v for k, v in rec.items() if k not in _NOT_META}
+    """The deposit metadata the record already carries, in the shape the
+    web form's metadata has (validate_meta): the control object holds it,
+    and the promoter rebuilds the record from it with
+    deposit_logic.assemble_record, so the coverage travels as
+    coverage_start/coverage_end, not as the record's `temporal`."""
+    meta = {k: v for k, v in rec.items() if k not in _NOT_META}
+    meta["coverage_start"], meta["coverage_end"] = record.temporal_pair(rec.get("temporal"))
+    return meta
 
 
 def check_files(rec: Dict, files: Dict[str, Path]) -> None:
