@@ -105,6 +105,15 @@ class TestMayDownload(unittest.TestCase):
         self.assertIsNone(may_download(User("k1", ("er_prj_kdl_slavery_rs2",)), "amber", "rs2", s))
         self.assertIsNotNone(may_download(User("k1", ("er_prj_kdl_slavery_rs2",)), "amber", "rs3", s))
 
+    def test_depositor_downloads_their_own_amber(self):
+        s = Settings(**dict(BASE, amber_access="off"))
+        self.assertIsNone(may_download(User("k1"), "amber", "rs2", s, ["k0", "k1"]))
+
+    def test_non_depositor_refused_amber_when_off(self):
+        s = Settings(**dict(BASE, amber_access="off"))
+        self.assertIn("steward", may_download(User("k2"), "amber", "rs2", s, ["k1"]))
+        self.assertIn("not served", may_download(User("k1"), "red", "rs2", s, ["k1"]))
+
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestPeer(unittest.TestCase):

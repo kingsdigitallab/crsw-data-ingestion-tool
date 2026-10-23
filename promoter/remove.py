@@ -13,6 +13,7 @@ abandoned staging deposit goes the same way with its control object
 last. Nothing here reads or writes outside the one prefix it is given;
 `__main__` logs each step and rebuilds the derived layers."""
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -129,11 +130,42 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
     return t
 
 
-def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str) -> Target:
-    """An abandoned deposit under staging/<user>/<id>/: the id is looked
-    for under every user (the operator has the id from a log, not the
-    user). One whose record was written, or whose control object says
-    complete, is not abandoned: it is promoted or left to expire."""
+# r12: the refusals (promoter.checks.check wording, and cmd_remove's
+# "control object missing") that are the deposit's own doing, so that
+# removing it is the fix: a member whose stored bytes or size are not the
+# manifest's, a missing or mislabelled object, a record that is absent,
+# unreadable or disagrees with the control object, and a deposit that has
+# its record written but a control object that never reached complete
+# (an upload that died between the two: nothing will finish it). Any
+# other refusal (a record invalid against the vocabulary the promoter
+# happened to fetch, authorisation, size caps, the destination record)
+# may be the VM's configuration, and the deposit would promote once that
+# is right: such a deposit is never removed here.
+CONTENT_REFUSALS = (r"stored bytes hash to", r"size mismatch at ", r"no object at ",
+                    r": label ", r"staged record's files manifest differs",
+                    r"staged record identifier ", r"staged record dataset_uuid",
+                    r"staged record cannot be used", r"^staged record \S*/\S*: ",
+                    r"^record_key ", r"^member path", r"^deposit status is ",
+                    r"^deposit has no record_key", r"^deposit has no files",
+                    r"^control object missing or unreadable")
+
+
+def deposit_at_fault(problems: List[str]) -> bool:
+    """True when every one of the promoter's problems with a deposit is
+    about its own content (see CONTENT_REFUSALS)."""
+    return bool(problems) and all(any(re.search(m, p) for m in CONTENT_REFUSALS)
+                                  for p in problems)
+
+
+def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
+                    refusal=None) -> Target:
+    """An abandoned or refused deposit under staging/<user>/<id>/: the
+    id is looked for under every user (the operator has the id from a
+    log, not the user). One whose record was written, or whose control
+    object says complete, is finished: it may go only when the
+    promoter's own checks refuse it (r12), which `refusal(user, id)`
+    answers with the problems (an empty list: it passes, so promote it).
+    Without `refusal` a finished deposit is never removed here."""
     sp = staging_prefix.strip("/")
     t = Target(prefix="", last_key="")
     users, record_seen = set(), False
@@ -163,11 +195,26 @@ def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str) -
             status = json.loads(text).get("status")
         except (ValueError, AttributeError):
             status = "unreadable"
+    refused_because = None
     if record_seen or status == STATUS_COMPLETE:
-        t.problems.append("deposit has its record written: promote or let it expire")
-        return t
+        refused_because = refusal(user, deposit_id) if refusal else []
+        if not refused_because:
+            t.problems.append("deposit has its record written and passes the promoter's "
+                              "checks: promote it" if refusal else
+                              "deposit has its record written: promote or let it expire")
+            return t
+        if not deposit_at_fault(refused_because):
+            t.problems.append(
+                "deposit has its record written and the promoter refuses it, but not "
+                "for its own bytes or record: the cause may be the vocabulary fetched, "
+                "the promoter's authorisation or limits, or the destination record. "
+                "Fix that and run the promoter; it is removed here only when its own "
+                "content is wrong. Refused because: %s" % "; ".join(refused_because))
+            return t
     t.listing = list_versions(client, bucket, t.prefix)
     t.detail = {"user": user, "status": status}
+    if refused_because:
+        t.detail["refused_because"] = refused_because
     t.detail.update(t.listing.counts())
     return t
 

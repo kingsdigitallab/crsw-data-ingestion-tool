@@ -22,8 +22,8 @@ class DatasetRef:
 
 
 def list_datasets(client, bucket: str) -> Iterator[DatasetRef]:
-    """Every dataset record in place, by walking the four strand
-    prefixes. The bucket is the index: no register to keep in step.
+    """Every dataset record in place, by walking every strand
+    prefix (keys.STRANDS). The bucket is the index: no register to keep in step.
     Sorted by prefix so runs are repeatable."""
     paginator = client.get_paginator("list_objects_v2")
     found = []

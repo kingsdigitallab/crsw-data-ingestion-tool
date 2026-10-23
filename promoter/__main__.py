@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     ds = sub.add_parser("datasets", help="every dataset record in place")
     ds.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
-    ds.add_argument("--strand", help="only this strand (rs1-rs4)")
+    ds.add_argument("--strand", help="only this strand")
     ds.add_argument("--json", action="store_true", help="one JSON object per line")
 
     ix = sub.add_parser("index", help="rebuild the index of every record in place")
@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
     ps.add_argument("--dataset", help="only this dataset identifier")
-    ps.add_argument("--strand", help="only this strand (rs1-rs4)")
+    ps.add_argument("--strand", help="only this strand")
 
     rm = sub.add_parser("remove", help="remove a dataset (every object version under its "
                                        "prefix) or an abandoned staging deposit; the plan "
@@ -575,9 +575,21 @@ def cmd_remove(args) -> int:
                     log.write("passages_removed", prefix=identifier, key=key,
                               reason="no record in place")
     else:
+        store = DepositStore(client, cfg.s3_bucket, cfg.staging_prefix)
+        terms, codes = vocab.all_terms(vocab_dict), vocab.domain_codes(vocab_dict)
+        provider_slugs, place_codes, _ = _lists(vocab_dict)
+
+        def refusal(user, deposit_id):
+            """r12: the problems `run` would refuse this deposit for."""
+            dep = store.load(user, deposit_id)
+            if dep is None:
+                return ["control object missing or unreadable"]
+            return check(dep, store, cfg, terms, codes, vocab_doc=vocab_dict,
+                         provider_slugs=provider_slugs, place_codes=place_codes).problems
+
         for deposit_id in targets:
             t = remove_mod.inspect_staging(client, cfg.s3_bucket, cfg.staging_prefix,
-                                           deposit_id)
+                                           deposit_id, refusal=refusal)
             do(t, deposit_id, "would_remove_staging", "staging_removed", deposit=deposit_id)
 
     log.write("finish", command="remove", targets=len(targets), removed=removed,

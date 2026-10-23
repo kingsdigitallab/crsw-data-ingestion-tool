@@ -39,6 +39,9 @@ MESSAGES = {
         "This deposit is marked 'red'. Red data never enters shared storage -\n"
         "it belongs in the Trusted Research Environment (TRE). See the Data\n"
         "Governance Handbook, sections 3 and 7.3, or contact your domain steward."),
+    "centre_refused": (
+        "The 'centre' strand is Centre-curated: it is written only by the bulk route "
+        "(python -m crsw_web.bulk)."),
     "no_rclone": (
         "Could not find rclone.\n"
         "Looked on your PATH, then for ./rclone and ./rclone.exe next to\n"
@@ -241,7 +244,7 @@ def ask_select(title, entries):
         say("Enter a number or value from the list.")
 
 
-STRAND_ENTRIES = [(str(i), s, "") for i, s in enumerate(keys.STRANDS, 1)]
+STRAND_ENTRIES = [(str(i), s, "") for i, s in enumerate(keys.DEPOSIT_STRANDS, 1)]
 STATE_ENTRIES = [(v.split("_")[0], v, h) for v, h in
                  zip(keys.STATES, ("raw, as received", "in progress",
                                    "released or shared"))]
@@ -1587,6 +1590,8 @@ def main(argv=None) -> int:
 
     if args.sensitivity == "red":
         return fail(MESSAGES["red_refused"], 2)
+    if args.strand and args.strand not in keys.DEPOSIT_STRANDS:
+        return fail(MESSAGES["centre_refused"], 2)
     if args.sensitivity and args.sensitivity not in keys.SENSITIVITIES:
         return fail("sensitivity must be green or amber, got %r" % args.sensitivity)
 

@@ -51,6 +51,7 @@ class TestForm(unittest.TestCase):
         html = r.text
         for s in ("rs1", "rs2", "rs3", "rs4"):
             self.assertIn('value="%s"' % s, html)
+        self.assertNotIn('value="centre"', html)          # r12: curated, not deposited
         self.assertIn("Kevin Fahey", html)                 # steward on the domain option
         self.assertIn('value="forced-labour"', html)       # a subject checkbox
         self.assertIn("Depositing as <strong>k1078591", html)

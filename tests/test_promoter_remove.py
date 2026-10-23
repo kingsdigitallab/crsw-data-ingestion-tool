@@ -459,7 +459,7 @@ class TestStaging(RemoveBase):
         self.assertEqual(set(calls[-1]), {self.store.control_key("k1078591", dep.id)})
         self.assertEqual(self.only(lines, "index_written"), [])
 
-    def test_a_deposit_with_its_record_written_is_refused(self):
+    def test_a_finished_deposit_that_passes_its_checks_is_refused(self):
         dep = self.stage()
         root = self.store.root("k1078591", dep.id)
         before = self.versions(root)
@@ -467,8 +467,75 @@ class TestStaging(RemoveBase):
         self.assertEqual(code, 1)
         [refused] = self.only(lines, "remove_refused")
         self.assertEqual(refused["deposit"], dep.id)
-        self.assertIn("promote or let it expire", refused["problems"][0])
+        self.assertIn("passes the promoter's checks: promote it", refused["problems"][0])
         self.assertEqual(self.versions(root), before)
+
+    def test_a_finished_deposit_the_promoter_refuses_can_be_removed(self):
+        # r12: a stale copy of the same size is refused by the re-hash; without
+        # this it would sit in staging, re-checked and refused on every run.
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
+        self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n",   # same size, other bytes
+                           Metadata=labels)
+        code, lines = self.cli(["remove", "--staging", dep.id])
+        self.assertEqual(code, 0, lines)
+        [plan] = self.only(lines, "would_remove_staging")
+        self.assertIn("stored bytes hash to", plan["refused_because"][0])
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn("refused_because", done)
+        self.assertEqual(self.versions(root), [])
+
+    def test_a_finished_deposit_refused_for_the_promoters_configuration_is_kept(self):
+        # The authorisation map, a size cap or a vocabulary fetched without the
+        # record's provider would all refuse a deposit that promotes once the
+        # VM is set right: removal is for the deposit's own content only.
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        before = self.versions(root)
+        for env in ({"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'},
+                    {"PROMOTER_MAX_OBJECT_BYTES": "3"}):
+            code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id], env=env)
+            self.assertEqual(code, 1, lines)
+            [refused] = self.only(lines, "remove_refused")
+            self.assertIn("not for its own bytes or record", refused["problems"][0])
+            self.assertIn("Refused because:", refused["problems"][0])
+            self.assertEqual(self.versions(root), before)
+        # Both at once: the content problem does not outweigh the configuration one.
+        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
+        self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n", Metadata=labels)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id],
+                               env={"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'})
+        self.assertEqual(code, 1, lines)
+        self.assertNotEqual(self.versions(root), [])
+
+    def test_a_deposit_that_died_between_record_and_complete_can_be_removed(self):
+        # bulk.stage_dataset writes the record, then marks the control object
+        # complete; a drop between the two leaves a record with status open.
+        # Nothing finishes it, so StagingInterrupted's remove command must work.
+        dep = self.stage()
+        dep.status = "open"
+        self.store.save(dep)
+        root = self.store.root("k1078591", dep.id)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn("deposit status is 'open', not complete", done["refused_because"][0])
+        self.assertEqual(self.versions(root), [])
+
+    def test_a_finished_deposit_whose_record_object_is_gone_can_be_removed(self):
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        self.s3.delete_object(Bucket="crsw", Key=dep.record_key)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn(": absent", done["refused_because"][0])
+        self.assertEqual(self.versions(root), [])
 
     def test_an_unknown_id_is_refused(self):
         code, lines = self.cli(["remove", "--staging", "nope", "--confirm", "nope"])

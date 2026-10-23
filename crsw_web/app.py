@@ -5,6 +5,7 @@ call into crsw_deposit. Run with:
 
     uvicorn --factory crsw_web.app:create_app
 """
+import calendar
 import hashlib
 import json
 import logging
@@ -67,6 +68,26 @@ def client_rules() -> Dict:
         "reserved_record_pattern": keys.RESERVED_RECORD_RE.pattern,
         "problem_chars": keys.PROBLEM_CHARS,
     }
+
+
+_DAY_RE = re.compile(r"^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?")
+
+
+def explorer_day(value: Optional[str], end: bool) -> Optional[str]:
+    """A record date (YYYY, YYYY-MM or YYYY-MM-DD, possibly with a time)
+    as the whole day the explorer's date fields want: a bare year or
+    month widens to its first day, or with `end` to its last. None when
+    the value is missing or not a date."""
+    m = _DAY_RE.match(value or "")
+    if not m:
+        return None
+    year, month, day = m.group(1), m.group(2), m.group(3)
+    if day:
+        return "%s-%s-%s" % (year, month, day)
+    if month:
+        last = calendar.monthrange(int(year), int(month))[1] if end else 1
+        return "%s-%s-%02d" % (year, month, last)
+    return "%s-12-31" % year if end else "%s-01-01" % year
 
 
 def create_app(settings: Optional[Settings] = None,
@@ -157,6 +178,30 @@ def create_app(settings: Optional[Settings] = None,
         return Markup(pat.sub(lambda m: "<b>%s</b>" % escape(m.group(0)), str(safe)))
     templates.env.filters["emphasise"] = emphasise
 
+    CDISAW_PREFIX = "centre/cdisaw/"
+
+    def explore_link(identifier: str, dataset: str, start: Optional[str] = None,
+                     end: Optional[str] = None) -> Optional[str]:
+        """r12: where a centre/cdisaw dataset opens in the (CD)ISaW
+        explorer: on the scope rail, the whole corpus in space, the
+        dataset's own years, filtered to it, and run (the explorer reads
+        its state from the hash and runs when the screen is not the
+        landing page). The corpus dataset opens the explorer's start page.
+        None when CRSW_CDISAW_URL is blank or the dataset is not part of
+        the corpus."""
+        if not settings.cdisaw_url or not (identifier or "").startswith(CDISAW_PREFIX):
+            return None
+        if dataset == "corpus":
+            return settings.cdisaw_url + "/"
+        state = [("screen", "rail"), ("spatial", "corpus")]
+        first, last = explorer_day(start, False), explorer_day(end, True)
+        if first and last:
+            # edited=1: the explorer keeps these dates instead of its default window
+            state += [("from", first), ("to", last), ("edited", "1")]
+        state.append(("datasets", dataset or ""))
+        return "%s/#%s" % (settings.cdisaw_url, urlencode(state))
+    templates.env.globals["explore_link"] = explore_link
+
     # --- Phase 3: the browser form ----------------------------------------
     views_held: Dict[str, object] = {}
 
@@ -234,7 +279,7 @@ def create_app(settings: Optional[Settings] = None,
         return templates.TemplateResponse(request, "index.html", {
             "user": user,
             "read_enabled": read_enabled,
-            "strands": keys.STRANDS,
+            "strands": keys.DEPOSIT_STRANDS,
             "domains": v["domains"],
             "facets": v["facets"],
             "facet_tree": v["facet_tree"],
@@ -543,7 +588,9 @@ def create_app(settings: Optional[Settings] = None,
             allowed = []
             for h in hits:
                 strand = (h["identifier"] or "").split("/", 1)[0]
-                if may_download(user, h["sensitivity"], strand, settings) is None:
+                depositors = ((cat.get(h["identifier"]) or {}).get("depositors") or ()
+                              if h["sensitivity"] == "amber" else ())
+                if may_download(user, h["sensitivity"], strand, settings, depositors) is None:
                     allowed.append(h)
             results = rerank_top(*split(allowed), lambda h: h["text"])
             for h in results:
@@ -660,7 +707,8 @@ def create_app(settings: Optional[Settings] = None,
             if h is None:
                 raise HTTPException(status_code=404, detail="no such passage")
             strand = (h["identifier"] or "").split("/", 1)[0]
-            if may_download(user, h["sensitivity"], strand, settings) is not None:
+            depositors = (need_read().get(identifier) or {}).get("depositors") or ()
+            if may_download(user, h["sensitivity"], strand, settings, depositors) is not None:
                 raise HTTPException(status_code=403, detail="not yours to read")
             if h["sensitivity"] not in settings.llm_sensitivities:
                 raise HTTPException(status_code=403,
@@ -728,7 +776,8 @@ def create_app(settings: Optional[Settings] = None,
         through so a large download can resume."""
         cat = need_read()
         rec = load_record_or_404(cat, identifier)
-        refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings)
+        refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings,
+                               rec.get("depositors") or ())
         if refusal:
             raise HTTPException(status_code=403, detail=refusal)
         entry = next((f for f in rec.get("files") or [] if f.get("path") == member), None)
@@ -807,7 +856,8 @@ def create_app(settings: Optional[Settings] = None,
             # r11: provider entries by slug (name, url) and place labels.
             "providers": {p["slug"]: p for p in v["providers"]},
             "place_labels": place_views(places_cache.current())["labels"],
-            "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings),
+            "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings,
+                                    rec.get("depositors") or ()),
             "sizes": {f["path"]: record.human_bytes(f.get("bytes") or 0) for f in files},
             "total": record.human_bytes(sum(int(f.get("bytes") or 0) for f in files)),
         })
@@ -881,7 +931,7 @@ def create_app(settings: Optional[Settings] = None,
                 "providers": vocab.providers(vocab_dict),
                 "places_version": places_cache.current().get("places_version"),
                 "places_source": places_cache.source,
-                "strands": list(keys.STRANDS), "states": list(keys.STATES),
+                "strands": list(keys.DEPOSIT_STRANDS), "states": list(keys.STATES),
                 "sensitivities": list(keys.SENSITIVITIES)}
 
     # --- depositing to a dataset that exists (read role) ------------------

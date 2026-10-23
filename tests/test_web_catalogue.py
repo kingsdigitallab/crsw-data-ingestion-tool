@@ -253,6 +253,45 @@ class TestGrouping(unittest.TestCase):
         self.assertEqual(page_of([], 1, 10), ([], 1, 1, 10))
 
 
+class TestExploreLink(CatalogueBase):
+    """r12: centre/cdisaw datasets link to the (CD)ISaW explorer when
+    CRSW_CDISAW_URL is set; nothing else does, and blank means no link."""
+    CENTRE = "centre/cdisaw/green/2_final/ucdp-ged-251"
+    URL = "https://cdisaw.example/"
+    LINK = ('href="https://cdisaw.example/#screen=rail&amp;spatial=corpus&amp;from=2020-01-01'
+            '&amp;to=2021-12-31&amp;edited=1&amp;datasets=ucdp-ged-251"')
+
+    def seed(self):
+        meta = dict(META, strand="centre", project="cdisaw", state="2_final",
+                    dataset="ucdp-ged-251", subject=["armed-conflict"])
+        self.put_record(self.CENTRE, meta, [record.manifest_entry("wide/events/ucdp-ged-251.parquet",
+                                                                  "d" * 64, 10)],
+                        "k1078591", "33333333-3333-4333-8333-333333333333")
+        super().seed()
+
+    def test_dataset_page_and_find_row_link_centre_cdisaw_only(self):
+        c = self.app(cdisaw_url=self.URL.rstrip("/"))
+        page = c.get("/datasets/" + self.CENTRE).text
+        self.assertIn(self.LINK, page)
+        self.assertIn("Explore this data in (CD)ISaW", page)
+        self.assertIn('href="/datasets/%s/files/wide/events/ucdp-ged-251.parquet"' % self.CENTRE,
+                      page)                                         # download unchanged
+        self.assertNotIn("cdisaw.example", c.get("/datasets/" + GREEN).text)
+        find = c.get("/datasets", params={"strand": "centre"}).text
+        self.assertIn(self.LINK, find)
+        self.assertNotIn("cdisaw.example", c.get("/datasets", params={"strand": "rs2"}).text)
+        self.assertNotIn("Explore this data", self.app().get("/datasets/" + self.CENTRE).text)
+
+    def test_explorer_days_widen_years_and_months(self):
+        from crsw_web.app import explorer_day
+        self.assertEqual(explorer_day("1643", False), "1643-01-01")
+        self.assertEqual(explorer_day("1982", True), "1982-12-31")
+        self.assertEqual(explorer_day("2024-02", True), "2024-02-29")
+        self.assertEqual(explorer_day("1643-05-19", True), "1643-05-19")
+        self.assertIsNone(explorer_day(None, True))
+        self.assertIsNone(explorer_day("c. 1800", False))
+
+
 class TestProjectAccordion(CatalogueBase):
     """The find page groups datasets under their project, closed while
     browsing and open once a search narrowed the list, ten projects a
