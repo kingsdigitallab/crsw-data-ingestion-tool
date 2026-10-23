@@ -30,6 +30,10 @@ class TestValidateMeta(unittest.TestCase):
         self.assertEqual(meta["vocabulary_version"], VOCAB["vocabulary_version"])
         self.assertEqual(meta["subject"], ["forced-labour"])
 
+    def test_centre_strand_is_refused(self):
+        _, errors, _ = validate_meta(dict(GOOD, strand="centre"), VOCAB)
+        self.assertIn("strand", errors)
+
     def test_red_is_refused_with_tre_message(self):
         _, errors, _ = validate_meta(dict(GOOD, sensitivity="red"), VOCAB)
         self.assertIn("TRE", errors["sensitivity"])

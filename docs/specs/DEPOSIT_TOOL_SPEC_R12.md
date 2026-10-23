@@ -1,0 +1,69 @@
+# CRSW Deposit Tool — revision spec (r12): the Centre strand, the bulk route, the uploader clause
+
+Status: **proposal, not agreed.** Built on 23 October 2026 for the
+(CD)ISaW corpus (`docs/cdisaw-surfacing-plan.md`). Read alongside r6 §1
+(the key layout) and r10 (the store changes only through the promoter).
+Nothing here changes the record schema beyond the strand enum, the
+object labels, or the members-first-record-last rule.
+
+## 1. The `centre` strand
+
+`keys.STRANDS` gains `centre`, so identifiers may read
+`centre/<project>/<sensitivity>/<state>/<dataset>`. It holds
+Centre-curated data that belongs to no single research strand: the
+first is the harmonised (CD)ISaW corpus, `centre/cdisaw/green/2_final/<slug>`,
+owned by KDL on the council's behalf.
+
+- **Who writes it:** the bulk route (§2) only, through staging and the
+  promoter like every other deposit. `PROMOTER_AUTHORISED`, when it is
+  a map, names who may stage to it.
+- **Who does not:** the deposit form and the CLI. `keys.DEPOSIT_STRANDS`
+  (rs1–rs4) is what they offer; the form's metadata check refuses
+  `centre`, and `deposit.py --strand centre` stops with a message naming
+  the bulk route.
+- **Who reads it:** everything that reads a strand. Find data's strand
+  filter, the promoter's scan, `audit`, `datasets` and the index all use
+  `keys.STRANDS`.
+- `dataset.schema.json` carries `centre` in the strand enum and both
+  identifier patterns.
+
+## 2. The bulk route
+
+`crsw_web/bulk.py`, boto3 only, so a harvest script can import it from a
+sibling checkout. `stage_dataset(store, user, rec, files, now,
+copy_from=None, dry_run=False)` takes a record already built and
+validated with `crsw_deposit.record` and the local file for each
+manifest path, and leaves in `staging/<user>/<deposit-id>/` exactly what
+the web route leaves after finalise:
+
+1. Refuse, writing nothing, if the identifier does not match the
+   record's fields, `user` is not among its `depositors`, or the local
+   paths or sizes differ from the manifest.
+2. Create the control object (open), put each member with the four
+   labels (`upload_file`, which handles multipart), put the record last
+   with its own labels, read it back, mark the control object complete.
+3. `copy_from` (an existing prefix in the same bucket): a member found
+   there at the same size is copied server-side with
+   `MetadataDirective=REPLACE` and the new labels instead of uploaded.
+   The promoter re-hashes every member against the manifest, so a
+   stale copy is reported and left in staging, never promoted.
+4. `dry_run`: no writes; the member list with what would be copied.
+
+`python -m crsw_web.bulk --record FILE --root DIR [--user K]
+[--copy-from PREFIX] [--dry-run]` does the same for one dataset from the
+shell, validating the record against the vocabulary first and reading
+`CRSW_S3_*` and `CRSW_STAGING_PREFIX` as the service does.
+
+The promoter needs no new command: a bulk deposit is a complete deposit.
+
+## 3. The uploader may download
+
+`access.may_download(user, sensitivity, strand, settings, depositors=())`
+allows amber to anyone named in the record's `depositors`, before the
+`CRSW_AMBER_ACCESS` rule. A person may always download what they
+deposited. Red is still never served. The dataset page and the download
+route pass the record's list; search passages and "Why this?" pass the
+index row's (`depositors` is already an index column, so no rebuild).
+With `CRSW_AMBER_ACCESS=off` the passage search still does not pull
+amber rows at all, so a depositor's amber passages are not searched;
+the dataset page and download are where the clause applies.

@@ -8,7 +8,11 @@ import re
 import unicodedata
 from typing import List, Optional
 
-STRANDS = ("rs1", "rs2", "rs3", "rs4")
+STRANDS = ("rs1", "rs2", "rs3", "rs4", "centre")
+# The strands a person may deposit to through the form or the CLI (r12).
+# `centre` is Centre-curated, written only by the bulk route
+# (crsw_web.bulk); search and the promoter read every strand.
+DEPOSIT_STRANDS = ("rs1", "rs2", "rs3", "rs4")
 
 # Member filenames matching this pattern are reserved for dataset
 # records (r6 §2): the record is dataset.<slug>.json, so the whole

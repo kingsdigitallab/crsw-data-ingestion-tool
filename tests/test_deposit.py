@@ -810,6 +810,18 @@ class TestMessageQuality(unittest.TestCase):
         self.assertIn("BEFORE the", deposit.MESSAGES["restricted_first"])
 
 
+class TestCentreStrandRefusal(unittest.TestCase):
+    def test_strand_centre_refused_naming_the_bulk_route(self):
+        with mock.patch("deposit.fail", side_effect=lambda m, c=1: c) as f:
+            code = deposit.main(["x", "--strand", "centre"])
+        self.assertEqual(code, 2)
+        self.assertIn("crsw_web.bulk", f.call_args[0][0])
+
+    def test_menu_offers_only_the_deposit_strands(self):
+        self.assertEqual([s for _, s, _ in deposit.STRAND_ENTRIES],
+                         list(deposit.keys.DEPOSIT_STRANDS))
+
+
 class TestReservedNameRefusal(unittest.TestCase):
     def test_depositing_the_record_name_fails_before_preflight(self):
         with tempfile.TemporaryDirectory() as d:

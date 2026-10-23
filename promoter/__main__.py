@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     ds = sub.add_parser("datasets", help="every dataset record in place")
     ds.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
-    ds.add_argument("--strand", help="only this strand (rs1-rs4)")
+    ds.add_argument("--strand", help="only this strand")
     ds.add_argument("--json", action="store_true", help="one JSON object per line")
 
     ix = sub.add_parser("index", help="rebuild the index of every record in place")
@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
     ps.add_argument("--dataset", help="only this dataset identifier")
-    ps.add_argument("--strand", help="only this strand (rs1-rs4)")
+    ps.add_argument("--strand", help="only this strand")
 
     rm = sub.add_parser("remove", help="remove a dataset (every object version under its "
                                        "prefix) or an abandoned staging deposit; the plan "

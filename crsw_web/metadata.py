@@ -52,8 +52,8 @@ def validate_meta(form: Dict, vocab_dict: Dict, places_doc: Optional[Dict] = Non
     meta: Dict = {}
 
     strand = _text(form, "strand")
-    if strand not in keys.STRANDS:
-        errors["strand"] = "choose one of %s" % ", ".join(keys.STRANDS)
+    if strand not in keys.DEPOSIT_STRANDS:
+        errors["strand"] = "choose one of %s" % ", ".join(keys.DEPOSIT_STRANDS)
     meta["strand"] = strand
 
     sensitivity = _text(form, "sensitivity")

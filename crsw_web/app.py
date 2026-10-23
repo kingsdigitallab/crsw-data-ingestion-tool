@@ -234,7 +234,7 @@ def create_app(settings: Optional[Settings] = None,
         return templates.TemplateResponse(request, "index.html", {
             "user": user,
             "read_enabled": read_enabled,
-            "strands": keys.STRANDS,
+            "strands": keys.DEPOSIT_STRANDS,
             "domains": v["domains"],
             "facets": v["facets"],
             "facet_tree": v["facet_tree"],
@@ -543,7 +543,9 @@ def create_app(settings: Optional[Settings] = None,
             allowed = []
             for h in hits:
                 strand = (h["identifier"] or "").split("/", 1)[0]
-                if may_download(user, h["sensitivity"], strand, settings) is None:
+                depositors = ((cat.get(h["identifier"]) or {}).get("depositors") or ()
+                              if h["sensitivity"] == "amber" else ())
+                if may_download(user, h["sensitivity"], strand, settings, depositors) is None:
                     allowed.append(h)
             results = rerank_top(*split(allowed), lambda h: h["text"])
             for h in results:
@@ -660,7 +662,8 @@ def create_app(settings: Optional[Settings] = None,
             if h is None:
                 raise HTTPException(status_code=404, detail="no such passage")
             strand = (h["identifier"] or "").split("/", 1)[0]
-            if may_download(user, h["sensitivity"], strand, settings) is not None:
+            depositors = (need_read().get(identifier) or {}).get("depositors") or ()
+            if may_download(user, h["sensitivity"], strand, settings, depositors) is not None:
                 raise HTTPException(status_code=403, detail="not yours to read")
             if h["sensitivity"] not in settings.llm_sensitivities:
                 raise HTTPException(status_code=403,
@@ -728,7 +731,8 @@ def create_app(settings: Optional[Settings] = None,
         through so a large download can resume."""
         cat = need_read()
         rec = load_record_or_404(cat, identifier)
-        refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings)
+        refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings,
+                               rec.get("depositors") or ())
         if refusal:
             raise HTTPException(status_code=403, detail=refusal)
         entry = next((f for f in rec.get("files") or [] if f.get("path") == member), None)
@@ -807,7 +811,8 @@ def create_app(settings: Optional[Settings] = None,
             # r11: provider entries by slug (name, url) and place labels.
             "providers": {p["slug"]: p for p in v["providers"]},
             "place_labels": place_views(places_cache.current())["labels"],
-            "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings),
+            "refusal": may_download(user, rec.get("sensitivity"), rec.get("strand"), settings,
+                                    rec.get("depositors") or ()),
             "sizes": {f["path"]: record.human_bytes(f.get("bytes") or 0) for f in files},
             "total": record.human_bytes(sum(int(f.get("bytes") or 0) for f in files)),
         })
@@ -881,7 +886,7 @@ def create_app(settings: Optional[Settings] = None,
                 "providers": vocab.providers(vocab_dict),
                 "places_version": places_cache.current().get("places_version"),
                 "places_source": places_cache.source,
-                "strands": list(keys.STRANDS), "states": list(keys.STATES),
+                "strands": list(keys.DEPOSIT_STRANDS), "states": list(keys.STATES),
                 "sensitivities": list(keys.SENSITIVITIES)}
 
     # --- depositing to a dataset that exists (read role) ------------------
