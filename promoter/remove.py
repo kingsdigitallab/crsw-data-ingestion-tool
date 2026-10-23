@@ -129,6 +129,27 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
     return t
 
 
+# r12: the refusals (promoter.checks.check wording) that are the deposit's
+# own doing, so that removing it is the fix: a member whose stored bytes
+# or size are not the manifest's, a missing or mislabelled object, a
+# record that cannot be read or disagrees with the control object. Any
+# other refusal (status still open, a record invalid against the
+# vocabulary the promoter happened to fetch, authorisation, size caps,
+# the destination record) may be the VM's configuration or a deposit
+# still finalising, and would promote once that is right: such a
+# deposit is never removed here.
+CONTENT_REFUSALS = ("stored bytes hash to", "size mismatch at ", "no object at ",
+                    ": label ", "staged record's files manifest differs",
+                    "staged record identifier ", "staged record dataset_uuid",
+                    "staged record cannot be used", "record_key ", "member path")
+
+
+def deposit_at_fault(problems: List[str]) -> bool:
+    """True when every one of the promoter's problems with a deposit is
+    about its own content (see CONTENT_REFUSALS)."""
+    return bool(problems) and all(any(m in p for m in CONTENT_REFUSALS) for p in problems)
+
+
 def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
                     refusal=None) -> Target:
     """An abandoned or refused deposit under staging/<user>/<id>/: the
@@ -174,6 +195,14 @@ def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
             t.problems.append("deposit has its record written and passes the promoter's "
                               "checks: promote it" if refusal else
                               "deposit has its record written: promote or let it expire")
+            return t
+        if not deposit_at_fault(refused_because):
+            t.problems.append(
+                "deposit has its record written and the promoter refuses it, but not "
+                "for its own bytes or record: the cause may be the vocabulary fetched, "
+                "the promoter's authorisation or limits, or a deposit still finalising. "
+                "Fix that and run the promoter; it is removed here only when its own "
+                "content is wrong. Refused because: %s" % "; ".join(refused_because))
             return t
     t.listing = list_versions(client, bucket, t.prefix)
     t.detail = {"user": user, "status": status}

@@ -47,7 +47,8 @@ the web route leaves after finalise:
 
 1. Refuse, writing nothing, if the identifier does not match the
    record's fields, `user` is not among its `depositors`, or the local
-   paths or sizes differ from the manifest.
+   paths or sizes differ from the manifest (a path the manifest names
+   that is not a file on disk counts as missing).
 2. Create the control object (open), put each member with the four
    labels (`upload_file`, which handles multipart), put the record last
    with its own labels, read it back, mark the control object complete.
@@ -57,6 +58,12 @@ the web route leaves after finalise:
    The promoter re-hashes every member against the manifest, so a
    stale copy is reported and left in staging, never promoted.
 4. `dry_run`: no writes; the member list with what would be copied.
+5. The control object is created before the first member. If anything
+   fails after that (the network, a file gone), `StagingInterrupted`
+   (a `BulkError`) carries the user and deposit id and names the
+   `promoter remove --staging ID --confirm ID` that clears the open
+   deposit; it is never promoted, but it counts against the depositor's
+   staging until removed.
 
 `python -m crsw_web.bulk --record FILE --root DIR [--user K]
 [--copy-from PREFIX] [--dry-run]` does the same for one dataset from the
@@ -69,9 +76,16 @@ A finished deposit the promoter refuses (a stale `copy_from` member that
 fails the re-hash, a provider the vocabulary lacks) would otherwise sit
 in staging, re-checked and refused on every run. `promoter remove
 --staging ID --confirm ID` now removes a finished deposit when, and only
-when, the promoter's own checks refuse it; the problems go on the trail
-as `refused_because`. A finished deposit that passes is still refused:
-promote it.
+when, the promoter's checks refuse it for its own content: stored bytes
+or sizes that are not the manifest's, a missing or mislabelled object, a
+record that cannot be read or disagrees with the control object
+(`remove.CONTENT_REFUSALS`). The problems go on the trail as
+`refused_because`. A finished deposit that passes is still refused:
+promote it. One refused for anything else (status still open, a record
+invalid against the vocabulary the promoter fetched, authorisation, a
+size cap, the destination record) is refused too, with the problems: it
+would promote once the configuration is right, so the remedy is that,
+not deleting the upload.
 
 ## 3. The uploader may download
 

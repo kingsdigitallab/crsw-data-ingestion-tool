@@ -489,6 +489,30 @@ class TestStaging(RemoveBase):
         self.assertIn("refused_because", done)
         self.assertEqual(self.versions(root), [])
 
+    def test_a_finished_deposit_refused_for_the_promoters_configuration_is_kept(self):
+        # The authorisation map, a size cap or a vocabulary fetched without the
+        # record's provider would all refuse a deposit that promotes once the
+        # VM is set right: removal is for the deposit's own content only.
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        before = self.versions(root)
+        for env in ({"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'},
+                    {"PROMOTER_MAX_OBJECT_BYTES": "3"}):
+            code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id], env=env)
+            self.assertEqual(code, 1, lines)
+            [refused] = self.only(lines, "remove_refused")
+            self.assertIn("not for its own bytes or record", refused["problems"][0])
+            self.assertIn("Refused because:", refused["problems"][0])
+            self.assertEqual(self.versions(root), before)
+        # Both at once: the content problem does not outweigh the configuration one.
+        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
+        self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n", Metadata=labels)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id],
+                               env={"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'})
+        self.assertEqual(code, 1, lines)
+        self.assertNotEqual(self.versions(root), [])
+
     def test_an_unknown_id_is_refused(self):
         code, lines = self.cli(["remove", "--staging", "nope", "--confirm", "nope"])
         self.assertEqual(code, 1)

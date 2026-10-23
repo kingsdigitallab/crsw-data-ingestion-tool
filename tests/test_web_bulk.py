@@ -11,7 +11,7 @@ from unittest import mock
 try:
     import boto3
     from moto import mock_aws
-    from crsw_web.bulk import COPIED, UPLOADED, BulkError, stage_dataset
+    from crsw_web.bulk import COPIED, UPLOADED, BulkError, StagingInterrupted, stage_dataset
     from crsw_web.deposits import CONTROL_NAME, STATUS_COMPLETE, DepositStore
     HAVE_WEB = True
 except ImportError:
@@ -110,6 +110,38 @@ class TestStageDataset(unittest.TestCase):
         self.files["wide/events/demo.parquet"].write_bytes(b"different length")
         with self.assertRaises(BulkError):
             stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+
+    def test_a_file_absent_on_disk_is_reported_as_missing_not_a_traceback(self):
+        self.files["wide/status/demo.json"].unlink()
+        with self.assertRaises(BulkError) as cm:
+            stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+        self.assertIn("missing locally ['wide/status/demo.json']", str(cm.exception))
+        self.assertEqual(self.keys_under("staging/"), [])
+
+    def test_an_interrupted_upload_names_the_open_deposit(self):
+        # The control object is created before the first member; if the
+        # network drops after that, the operator must learn the id of the
+        # open deposit to remove it (it is never promoted).
+        calls = []
+
+        def drop(Filename, Bucket, Key, ExtraArgs=None):
+            calls.append(Key)
+            if len(calls) == 2:
+                raise ConnectionError("VPN dropped")
+            self.s3.put_object(Bucket=Bucket, Key=Key, Body=Path(Filename).read_bytes(),
+                               Metadata=ExtraArgs["Metadata"])
+        with mock.patch.object(self.s3, "upload_file", side_effect=drop):
+            with self.assertRaises(StagingInterrupted) as cm:
+                stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+        err = cm.exception
+        [dep_id] = [k.split("/")[2] for k in self.keys_under("staging/") if k.endswith(CONTROL_NAME)]
+        self.assertEqual((err.user, err.deposit_id), ("k1078591", dep_id))
+        self.assertIsInstance(err.cause, ConnectionError)
+        self.assertIn("remove --staging %s --confirm %s" % (dep_id, dep_id), str(err))
+        self.assertIsInstance(err, BulkError)
+        control = json.loads(self.s3.get_object(
+            Bucket="crsw", Key="staging/k1078591/%s/%s" % (dep_id, CONTROL_NAME))["Body"].read())
+        self.assertNotEqual(control["status"], STATUS_COMPLETE)
 
     def test_user_must_be_a_depositor(self):
         with self.assertRaises(BulkError):

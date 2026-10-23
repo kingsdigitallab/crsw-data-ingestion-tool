@@ -44,6 +44,21 @@ class BulkError(ValueError):
     from the checks; the message says what to fix."""
 
 
+class StagingInterrupted(BulkError):
+    """The deposit was created but could not be finished (the network, a
+    file that vanished): it is open in staging, under `user`, as
+    `deposit_id`. It is not promoted; it counts against the depositor's
+    staging until `promoter remove --staging ID --confirm ID` takes it
+    away, so the id travels with the error."""
+
+    def __init__(self, user: str, deposit_id: str, cause: BaseException):
+        self.user, self.deposit_id, self.cause = user, deposit_id, cause
+        super().__init__(
+            "deposit %s left open in staging under %s after %s: %s; it will not be "
+            "promoted: python -m promoter remove --staging %s --confirm %s, then stage again"
+            % (deposit_id, user, type(cause).__name__, cause, deposit_id, deposit_id))
+
+
 @dataclass
 class Staged:
     """What stage_dataset did, or with dry_run would do."""
@@ -79,7 +94,7 @@ def check_files(rec: Dict, files: Dict[str, Path]) -> None:
     manifest = {e["path"]: e for e in rec.get("files") or []}
     if not manifest:
         raise BulkError("the record's files manifest is empty")
-    missing = sorted(set(manifest) - set(files))
+    missing = sorted(p for p in manifest if p not in files or not Path(files[p]).is_file())
     extra = sorted(set(files) - set(manifest))
     if missing or extra:
         raise BulkError("local files and the manifest differ: missing locally %s; "
@@ -137,32 +152,35 @@ def stage_dataset(store: DepositStore, user: str, rec: Dict, files: Dict[str, Pa
     sensitivity = rec["sensitivity"]
     dep = store.create(user, meta, prefix, dataset_uuid, now)
     out.deposit = dep
-    for (path, action, _), e in zip(out.members, entries):
-        labels = labels_mod.object_labels(dataset_uuid, e["checksum_sha256"], sensitivity, user)
-        staged = store.staged_key(user, dep.id, finals[path])
-        if action == COPIED:
-            client.copy_object(Bucket=bucket, Key=staged,
-                               CopySource={"Bucket": bucket, "Key": copy_from + "/" + path},
-                               Metadata=labels, MetadataDirective="REPLACE")
-        else:
-            client.upload_file(str(files[path]), bucket, staged,
-                               ExtraArgs={"Metadata": labels})
-        dep.put_entry(dict(e))
-    store.save(dep)
+    try:
+        for (path, action, _), e in zip(out.members, entries):
+            labels = labels_mod.object_labels(dataset_uuid, e["checksum_sha256"], sensitivity, user)
+            staged = store.staged_key(user, dep.id, finals[path])
+            if action == COPIED:
+                client.copy_object(Bucket=bucket, Key=staged,
+                                   CopySource={"Bucket": bucket, "Key": copy_from + "/" + path},
+                                   Metadata=labels, MetadataDirective="REPLACE")
+            else:
+                client.upload_file(str(files[path]), bucket, staged,
+                                   ExtraArgs={"Metadata": labels})
+            dep.put_entry(dict(e))
+        store.save(dep)
 
-    data = deposit_logic.record_bytes(rec)
-    checksum = hashlib.sha256(data).hexdigest()
-    record_key = store.staged_key(user, dep.id, prefix) + "/" + keys.record_filename(meta["dataset"])
-    client.put_object(Bucket=bucket, Key=record_key, Body=data,
-                      ContentType="application/json",
-                      Metadata=labels_mod.object_labels(dataset_uuid, checksum, sensitivity, user))
-    back = client.get_object(Bucket=bucket, Key=record_key)
-    record.parse_record(back["Body"].read().decode("utf-8"))
+        data = deposit_logic.record_bytes(rec)
+        checksum = hashlib.sha256(data).hexdigest()
+        record_key = store.staged_key(user, dep.id, prefix) + "/" + keys.record_filename(meta["dataset"])
+        client.put_object(Bucket=bucket, Key=record_key, Body=data,
+                          ContentType="application/json",
+                          Metadata=labels_mod.object_labels(dataset_uuid, checksum, sensitivity, user))
+        back = client.get_object(Bucket=bucket, Key=record_key)
+        record.parse_record(back["Body"].read().decode("utf-8"))
 
-    dep.status = STATUS_COMPLETE
-    dep.record_key = record_key
-    dep.finalised = rec["modified"]
-    store.save(dep)
+        dep.status = STATUS_COMPLETE
+        dep.record_key = record_key
+        dep.finalised = rec["modified"]
+        store.save(dep)
+    except Exception as e:  # the deposit exists now: say so, with its id
+        raise StagingInterrupted(user, dep.id, e) from e
     out.record_key = record_key
     return out
 
