@@ -129,11 +129,15 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
     return t
 
 
-def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str) -> Target:
-    """An abandoned deposit under staging/<user>/<id>/: the id is looked
-    for under every user (the operator has the id from a log, not the
-    user). One whose record was written, or whose control object says
-    complete, is not abandoned: it is promoted or left to expire."""
+def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
+                    refusal=None) -> Target:
+    """An abandoned or refused deposit under staging/<user>/<id>/: the
+    id is looked for under every user (the operator has the id from a
+    log, not the user). One whose record was written, or whose control
+    object says complete, is finished: it may go only when the
+    promoter's own checks refuse it (r12), which `refusal(user, id)`
+    answers with the problems (an empty list: it passes, so promote it).
+    Without `refusal` a finished deposit is never removed here."""
     sp = staging_prefix.strip("/")
     t = Target(prefix="", last_key="")
     users, record_seen = set(), False
@@ -163,11 +167,18 @@ def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str) -
             status = json.loads(text).get("status")
         except (ValueError, AttributeError):
             status = "unreadable"
+    refused_because = None
     if record_seen or status == STATUS_COMPLETE:
-        t.problems.append("deposit has its record written: promote or let it expire")
-        return t
+        refused_because = refusal(user, deposit_id) if refusal else []
+        if not refused_because:
+            t.problems.append("deposit has its record written and passes the promoter's "
+                              "checks: promote it" if refusal else
+                              "deposit has its record written: promote or let it expire")
+            return t
     t.listing = list_versions(client, bucket, t.prefix)
     t.detail = {"user": user, "status": status}
+    if refused_because:
+        t.detail["refused_because"] = refused_because
     t.detail.update(t.listing.counts())
     return t
 

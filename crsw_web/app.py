@@ -5,6 +5,7 @@ call into crsw_deposit. Run with:
 
     uvicorn --factory crsw_web.app:create_app
 """
+import calendar
 import hashlib
 import json
 import logging
@@ -67,6 +68,26 @@ def client_rules() -> Dict:
         "reserved_record_pattern": keys.RESERVED_RECORD_RE.pattern,
         "problem_chars": keys.PROBLEM_CHARS,
     }
+
+
+_DAY_RE = re.compile(r"^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?")
+
+
+def explorer_day(value: Optional[str], end: bool) -> Optional[str]:
+    """A record date (YYYY, YYYY-MM or YYYY-MM-DD, possibly with a time)
+    as the whole day the explorer's date fields want: a bare year or
+    month widens to its first day, or with `end` to its last. None when
+    the value is missing or not a date."""
+    m = _DAY_RE.match(value or "")
+    if not m:
+        return None
+    year, month, day = m.group(1), m.group(2), m.group(3)
+    if day:
+        return "%s-%s-%s" % (year, month, day)
+    if month:
+        last = calendar.monthrange(int(year), int(month))[1] if end else 1
+        return "%s-%s-%02d" % (year, month, last)
+    return "%s-12-31" % year if end else "%s-01-01" % year
 
 
 def create_app(settings: Optional[Settings] = None,
@@ -159,16 +180,26 @@ def create_app(settings: Optional[Settings] = None,
 
     CDISAW_PREFIX = "centre/cdisaw/"
 
-    def explore_link(identifier: str, dataset: str) -> Optional[str]:
+    def explore_link(identifier: str, dataset: str, start: Optional[str] = None,
+                     end: Optional[str] = None) -> Optional[str]:
         """r12: where a centre/cdisaw dataset opens in the (CD)ISaW
-        explorer, filtered to it (the explorer reads #datasets=<slug>);
-        the corpus dataset opens it unfiltered. None when CRSW_CDISAW_URL
-        is blank or the dataset is not part of the corpus."""
+        explorer: on the scope rail, the whole corpus in space, the
+        dataset's own years, filtered to it, and run (the explorer reads
+        its state from the hash and runs when the screen is not the
+        landing page). The corpus dataset opens the explorer's start page.
+        None when CRSW_CDISAW_URL is blank or the dataset is not part of
+        the corpus."""
         if not settings.cdisaw_url or not (identifier or "").startswith(CDISAW_PREFIX):
             return None
         if dataset == "corpus":
             return settings.cdisaw_url + "/"
-        return "%s/#datasets=%s" % (settings.cdisaw_url, quote(dataset or "", safe=""))
+        state = [("screen", "rail"), ("spatial", "corpus")]
+        first, last = explorer_day(start, False), explorer_day(end, True)
+        if first and last:
+            # edited=1: the explorer keeps these dates instead of its default window
+            state += [("from", first), ("to", last), ("edited", "1")]
+        state.append(("datasets", dataset or ""))
+        return "%s/#%s" % (settings.cdisaw_url, urlencode(state))
     templates.env.globals["explore_link"] = explore_link
 
     # --- Phase 3: the browser form ----------------------------------------

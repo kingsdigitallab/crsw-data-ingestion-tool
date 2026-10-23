@@ -459,7 +459,7 @@ class TestStaging(RemoveBase):
         self.assertEqual(set(calls[-1]), {self.store.control_key("k1078591", dep.id)})
         self.assertEqual(self.only(lines, "index_written"), [])
 
-    def test_a_deposit_with_its_record_written_is_refused(self):
+    def test_a_finished_deposit_that_passes_its_checks_is_refused(self):
         dep = self.stage()
         root = self.store.root("k1078591", dep.id)
         before = self.versions(root)
@@ -467,8 +467,27 @@ class TestStaging(RemoveBase):
         self.assertEqual(code, 1)
         [refused] = self.only(lines, "remove_refused")
         self.assertEqual(refused["deposit"], dep.id)
-        self.assertIn("promote or let it expire", refused["problems"][0])
+        self.assertIn("passes the promoter's checks: promote it", refused["problems"][0])
         self.assertEqual(self.versions(root), before)
+
+    def test_a_finished_deposit_the_promoter_refuses_can_be_removed(self):
+        # r12: a stale copy of the same size is refused by the re-hash; without
+        # this it would sit in staging, re-checked and refused on every run.
+        dep = self.stage()
+        root = self.store.root("k1078591", dep.id)
+        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
+        self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n",   # same size, other bytes
+                           Metadata=labels)
+        code, lines = self.cli(["remove", "--staging", dep.id])
+        self.assertEqual(code, 0, lines)
+        [plan] = self.only(lines, "would_remove_staging")
+        self.assertIn("stored bytes hash to", plan["refused_because"][0])
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
+        self.assertEqual(code, 0, lines)
+        [done] = self.only(lines, "staging_removed")
+        self.assertIn("refused_because", done)
+        self.assertEqual(self.versions(root), [])
 
     def test_an_unknown_id_is_refused(self):
         code, lines = self.cli(["remove", "--staging", "nope", "--confirm", "nope"])

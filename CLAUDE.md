@@ -31,7 +31,7 @@ python -m crsw_web.bulk --record dataset.x.json --root DIR [--user K] [--copy-fr
 python -m promoter recategorise --dry-run [--changes FILE] [--dataset ID]   # r9: bring records up to the vocabulary; r11: a change's `set` writes descriptive fields in place
 python -m promoter audit [--since DATE] [--dataset ID] [--user K] [--action A] [--json]   # the trail, read back from the bucket
 python -m promoter datasets [--strand rsN] [--json]                          # every record in place
-python -m promoter remove --dataset ID [--confirm ID] [--reason TEXT]        # r10: the plan, or with --confirm every version under the prefix gone and the derived layers rebuilt; --staging DEPOSIT_ID for an abandoned deposit
+python -m promoter remove --dataset ID [--confirm ID] [--reason TEXT]        # r10: the plan, or with --confirm every version under the prefix gone and the derived layers rebuilt; --staging DEPOSIT_ID for an abandoned deposit, or (r12) a finished one the checks refuse
 pandoc docs/how-to-deposit.md -o docs/how-to-deposit.docx --reference-doc docs/style/kdl-reference.docx   # rebuild the researcher guide's Word copy after editing the Markdown
 python -m promoter index [--embed]                                           # rebuild index/datasets.{jsonl,parquet} (+ embeddings.parquet via the LLM platform); run/recategorise do it after a change
 python -m promoter passages [--dataset ID | --strand rsN]                    # passages of text-bearing files under index/passages/ (PROMOTER_PASSAGES=1); run does it for what it promoted

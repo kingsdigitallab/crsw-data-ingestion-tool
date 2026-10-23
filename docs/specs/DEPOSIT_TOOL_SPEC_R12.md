@@ -28,9 +28,13 @@ owned by KDL on the council's behalf.
   identifier patterns.
 - **The explorer link:** with `CRSW_CDISAW_URL` set, a dataset whose
   identifier starts `centre/cdisaw/` shows "Explore this data in
-  (CD)ISaW" on its page and its Find data row, to
-  `<url>/#datasets=<dataset>` (the `corpus` dataset opens the explorer
-  unfiltered). Blank means no link. Download is unchanged.
+  (CD)ISaW" on its page and its Find data row. The link opens the
+  explorer's scope rail on the whole corpus, the dataset's own years and
+  that dataset, and runs it:
+  `<url>/#screen=rail&spatial=corpus&from=<start>&to=<end>&edited=1&datasets=<dataset>`
+  (a year or month is widened to whole days; `edited=1` keeps the dates
+  over the explorer's default window). The `corpus` dataset opens the
+  explorer's start page. Blank means no link. Download is unchanged.
 
 ## 2. The bulk route
 
@@ -60,6 +64,14 @@ shell, validating the record against the vocabulary first and reading
 `CRSW_S3_*` and `CRSW_STAGING_PREFIX` as the service does.
 
 The promoter needs no new command: a bulk deposit is a complete deposit.
+
+A finished deposit the promoter refuses (a stale `copy_from` member that
+fails the re-hash, a provider the vocabulary lacks) would otherwise sit
+in staging, re-checked and refused on every run. `promoter remove
+--staging ID --confirm ID` now removes a finished deposit when, and only
+when, the promoter's own checks refuse it; the problems go on the trail
+as `refused_because`. A finished deposit that passes is still refused:
+promote it.
 
 ## 3. The uploader may download
 

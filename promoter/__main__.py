@@ -575,9 +575,21 @@ def cmd_remove(args) -> int:
                     log.write("passages_removed", prefix=identifier, key=key,
                               reason="no record in place")
     else:
+        store = DepositStore(client, cfg.s3_bucket, cfg.staging_prefix)
+        terms, codes = vocab.all_terms(vocab_dict), vocab.domain_codes(vocab_dict)
+        provider_slugs, place_codes, _ = _lists(vocab_dict)
+
+        def refusal(user, deposit_id):
+            """r12: the problems `run` would refuse this deposit for."""
+            dep = store.load(user, deposit_id)
+            if dep is None:
+                return ["control object missing or unreadable"]
+            return check(dep, store, cfg, terms, codes, vocab_doc=vocab_dict,
+                         provider_slugs=provider_slugs, place_codes=place_codes).problems
+
         for deposit_id in targets:
             t = remove_mod.inspect_staging(client, cfg.s3_bucket, cfg.staging_prefix,
-                                           deposit_id)
+                                           deposit_id, refusal=refusal)
             do(t, deposit_id, "would_remove_staging", "staging_removed", deposit=deposit_id)
 
     log.write("finish", command="remove", targets=len(targets), removed=removed,

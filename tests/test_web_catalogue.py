@@ -258,7 +258,8 @@ class TestExploreLink(CatalogueBase):
     CRSW_CDISAW_URL is set; nothing else does, and blank means no link."""
     CENTRE = "centre/cdisaw/green/2_final/ucdp-ged-251"
     URL = "https://cdisaw.example/"
-    LINK = 'href="https://cdisaw.example/#datasets=ucdp-ged-251"'
+    LINK = ('href="https://cdisaw.example/#screen=rail&amp;spatial=corpus&amp;from=2020-01-01'
+            '&amp;to=2021-12-31&amp;edited=1&amp;datasets=ucdp-ged-251"')
 
     def seed(self):
         meta = dict(META, strand="centre", project="cdisaw", state="2_final",
@@ -280,6 +281,15 @@ class TestExploreLink(CatalogueBase):
         self.assertIn(self.LINK, find)
         self.assertNotIn("cdisaw.example", c.get("/datasets", params={"strand": "rs2"}).text)
         self.assertNotIn("Explore this data", self.app().get("/datasets/" + self.CENTRE).text)
+
+    def test_explorer_days_widen_years_and_months(self):
+        from crsw_web.app import explorer_day
+        self.assertEqual(explorer_day("1643", False), "1643-01-01")
+        self.assertEqual(explorer_day("1982", True), "1982-12-31")
+        self.assertEqual(explorer_day("2024-02", True), "2024-02-29")
+        self.assertEqual(explorer_day("1643-05-19", True), "1643-05-19")
+        self.assertIsNone(explorer_day(None, True))
+        self.assertIsNone(explorer_day("c. 1800", False))
 
 
 class TestProjectAccordion(CatalogueBase):

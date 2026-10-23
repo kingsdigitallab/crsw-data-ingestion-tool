@@ -40,8 +40,8 @@ MESSAGES = {
         "it belongs in the Trusted Research Environment (TRE). See the Data\n"
         "Governance Handbook, sections 3 and 7.3, or contact your domain steward."),
     "centre_refused": (
-        "The 'centre' strand is Centre-curated and is not deposited to by hand;\n"
-        "it is written only by the bulk route (python -m crsw_web.bulk)."),
+        "The 'centre' strand is Centre-curated: it is written only by the bulk route "
+        "(python -m crsw_web.bulk)."),
     "no_rclone": (
         "Could not find rclone.\n"
         "Looked on your PATH, then for ./rclone and ./rclone.exe next to\n"
