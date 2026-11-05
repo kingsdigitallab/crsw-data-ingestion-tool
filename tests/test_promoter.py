@@ -614,19 +614,227 @@ class TestRecategorise(PromoterBase):
     def read(self, key):
         return json.loads(self.s3.get_object(Bucket="crsw", Key=key)["Body"].read())
 
-    def run_cli(self, command, vocab_doc, *extra):
+    def run_cli(self, command, vocab_doc, *extra, source="remote", env_extra=None):
         env = {"PROMOTER_S3_ENDPOINT": "https://rgw.example", "PROMOTER_S3_ACCESS_KEY": "t",
                "PROMOTER_S3_SECRET_KEY": "t", "PROMOTER_S3_BUCKET": "crsw",
                "PROMOTER_STAGING_PREFIX": "staging/_test", "PROMOTER_LOG_PATH": ""}
+        env.update(env_extra or {})
         with mock.patch.dict(os.environ, env), \
              mock.patch("promoter.__main__.s3mod.make_client", return_value=self.s3), \
              mock.patch("promoter.__main__.vocab.load_vocabulary",
-                        return_value=(vocab_doc, "remote")), \
+                        return_value=(vocab_doc, source)), \
              mock.patch("builtins.print") as printed:
             code = cli.main([command, "--env-file", os.devnull] + list(extra))
         lines = [json.loads(c.args[0]) for c in printed.call_args_list
                  if c.args and isinstance(c.args[0], str) and c.args[0].startswith("{")]
         return code, lines
+
+    # --- vocabulary changes replayed on the timer ---------------------------
+
+    MARKER = "index/vocabulary-applied.json"
+
+    def marker(self):
+        try:
+            body = self.s3.get_object(Bucket="crsw", Key=self.MARKER)["Body"].read()
+        except self.s3.exceptions.NoSuchKey:
+            return None
+        return json.loads(body)
+
+    def set_marker(self, version, changes):
+        self.s3.put_object(Bucket="crsw", Key=self.MARKER, Body=json.dumps(
+            {"vocabulary_version": version, "changes": changes,
+             "applied": self.NOW, "run_id": "earlier"}).encode("utf-8"))
+
+    def actions(self, lines, action):
+        return [l for l in lines if l["action"] == action]
+
+    def body(self, key):
+        return self.s3.get_object(Bucket="crsw", Key=key)["Body"].read()
+
+    def test_run_replays_when_no_marker(self):
+        doc = self.evolved()
+        k1, _, _ = self.place("one", ["debt-bondage", "armed-conflict"])
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        one = self.read(k1)
+        self.assertEqual(one["subject"], ["forced-labour", "armed-conflict"])
+        self.assertEqual(one["category_history"][-1]["by"], "vocabulary")
+        m = self.marker()
+        self.assertEqual(m["vocabulary_version"], doc["vocabulary_version"])
+        self.assertEqual(m["changes"], len(doc["changes"]))
+        self.assertTrue(m["applied"] and m["run_id"])
+        replayed = self.actions(lines, "vocabulary_replayed")
+        self.assertEqual(len(replayed), 1)
+        self.assertIsNone(replayed[0]["from_version"])
+        self.assertEqual(replayed[0]["to_version"], doc["vocabulary_version"])
+        self.assertEqual(replayed[0]["rewritten"], 1)
+        self.assertEqual(finish(lines)["vocabulary"], "replayed")
+
+    def test_run_skips_replay_when_marker_current(self):
+        doc = self.evolved()
+        k1, d1, _ = self.place("one", ["debt-bondage"])
+        self.set_marker(doc["vocabulary_version"], len(doc["changes"]))
+        before = self.body(self.MARKER)
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.body(k1), d1)
+        self.assertEqual(self.body(self.MARKER), before)
+        self.assertEqual(self.actions(lines, "vocabulary_replayed"), [])
+        self.assertEqual(finish(lines)["vocabulary"], "current")
+
+    def test_run_replays_when_marker_older(self):
+        doc = self.evolved()
+        k1, _, _ = self.place("one", ["debt-bondage"])
+        self.set_marker("2026-01-01", 0)
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        entry = self.read(k1)["category_history"][-1]
+        self.assertEqual(entry["by"], "vocabulary")
+        self.assertEqual(entry["vocabulary_version"], doc["vocabulary_version"])
+        self.assertEqual(self.actions(lines, "vocabulary_replayed")[0]["from_version"],
+                         "2026-01-01")
+        self.assertEqual(self.marker()["vocabulary_version"], doc["vocabulary_version"])
+
+    def test_same_version_more_changes_replays(self):
+        # vocabulary_version is a date: two changes on one day share it.
+        doc = self.evolved()
+        k1, _, _ = self.place("one", ["debt-bondage"])
+        self.set_marker(doc["vocabulary_version"], len(doc["changes"]) - 1)
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.read(k1)["subject"], ["forced-labour"])
+        self.assertEqual(self.marker()["changes"], len(doc["changes"]))
+
+    def test_failed_replay_keeps_promotion_and_index(self):
+        self.stage()
+        with mock.patch("promoter.__main__.recat.plan", side_effect=RuntimeError("no walk")):
+            code, lines = self.run_cli("run", VOCAB)
+        self.assertEqual(code, 1)
+        self.assertEqual(finish(lines)["promoted"], 1)
+        self.assertEqual(len(self.actions(lines, "index_written")), 1)
+        self.assertIsNone(self.marker())
+        failed = self.actions(lines, "vocabulary_replay_failed")
+        self.assertEqual(len(failed), 1)
+        self.assertIn("no walk", failed[0]["reason"])
+        self.assertEqual(finish(lines)["vocabulary"], "failed")
+
+    def test_refused_record_holds_marker_back(self):
+        doc = self.evolved()
+        k1, _, _ = self.place("one", ["debt-bondage"])
+        k2, _, rec = self.place("two", ["debt-bondage"])
+        rec["identifier"] = "rs2/csac/green/2_final/elsewhere"
+        self.s3.put_object(Bucket="crsw", Key=k2, Body=deposit_logic.record_bytes(rec))
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.read(k1)["subject"], ["forced-labour"])
+        self.assertIsNone(self.marker())
+        self.assertEqual(len(self.actions(lines, "vocabulary_replay_failed")), 1)
+        self.assertEqual(len(self.actions(lines, "index_written")), 1)
+        # the next run tries again and still says so
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.actions(lines, "vocabulary_replay_failed")), 1)
+
+    def test_stale_source_does_not_replay(self):
+        doc = self.evolved()
+        k1, d1, _ = self.place("one", ["debt-bondage"])
+        for source in ("cache", "bundled"):
+            code, lines = self.run_cli("run", doc, source=source)
+            self.assertEqual(code, 0, lines)
+            self.assertEqual(self.body(k1), d1)
+            self.assertIsNone(self.marker())
+            self.assertEqual(self.actions(lines, "vocabulary_replay_failed"), [])
+            self.assertEqual(finish(lines)["vocabulary"], "not_remote")
+
+    def test_run_dry_run_reports_replay_and_writes_nothing(self):
+        doc = self.evolved()
+        k1, d1, _ = self.place("one", ["debt-bondage"])
+        code, lines = self.run_cli("run", doc, "--dry-run")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.body(k1), d1)
+        self.assertIsNone(self.marker())
+        would = self.actions(lines, "vocabulary_would_replay")
+        self.assertEqual(len(would), 1)
+        self.assertEqual(would[0]["would_rewrite"], 1)
+        self.assertEqual(len(self.actions(lines, "recategorise_planned")), 1)
+        self.assertEqual(self.actions(lines, "record_rewritten"), [])
+        self.assertEqual(finish(lines)["vocabulary"], "would_replay")
+
+    def test_filtered_run_does_not_replay(self):
+        doc = self.evolved()
+        k1, d1, _ = self.place("one", ["debt-bondage"])
+        for extra in (("--deposit", "nothing"), ("--user", "nobody")):
+            code, lines = self.run_cli("run", doc, *extra)
+            self.assertEqual(code, 0, lines)
+            self.assertEqual(self.body(k1), d1)
+            self.assertIsNone(self.marker())
+
+    def test_promotion_and_replay_write_index_once(self):
+        doc = self.evolved()
+        self.place("one", ["debt-bondage"])
+        self.stage()
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(finish(lines)["promoted"], 1)
+        self.assertEqual(len(self.actions(lines, "vocabulary_replayed")), 1)
+        self.assertEqual(len(self.actions(lines, "index_written")), 1)
+
+    def test_replay_alone_rebuilds_the_index(self):
+        doc = self.evolved()
+        self.place("one", ["debt-bondage"])
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(len(self.actions(lines, "index_written")), 1)
+        rows = index_mod.read_rows(self.s3, "crsw", "index")
+        self.assertEqual(rows[0]["subject"], ["forced-labour"])
+
+    def test_blank_index_prefix_turns_replay_off(self):
+        doc = self.evolved()
+        k1, d1, _ = self.place("one", ["debt-bondage"])
+        code, lines = self.run_cli("run", doc, env_extra={"PROMOTER_INDEX_PREFIX": ""})
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.body(k1), d1)
+        self.assertEqual(self.actions(lines, "vocabulary_replay_failed"), [])
+        self.assertEqual(finish(lines)["vocabulary"], "off")
+
+    def test_manual_recategorise_writes_marker(self):
+        doc = self.evolved()
+        self.place("one", ["debt-bondage"])
+        code, lines = self.run_cli("recategorise", doc, "--by", "k1078591")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.marker()["vocabulary_version"], doc["vocabulary_version"])
+        self.assertEqual(len(self.actions(lines, "vocabulary_replayed")), 1)
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(finish(lines)["vocabulary"], "current")
+
+    def test_recategorise_dataset_or_dry_run_writes_no_marker(self):
+        doc = self.evolved()
+        self.place("one", ["debt-bondage"])
+        self.place("two", ["debt-bondage"])
+        code, _ = self.run_cli("recategorise", doc, "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIsNone(self.marker())
+        code, _ = self.run_cli("recategorise", doc, "--dataset",
+                               "rs2/csac/green/2_final/one", "--by", "k1078591")
+        self.assertEqual(code, 0)
+        self.assertIsNone(self.marker())
+
+    def test_recategorise_from_a_stale_source_writes_no_marker(self):
+        doc = self.evolved()
+        self.place("one", ["debt-bondage"])
+        code, _ = self.run_cli("recategorise", doc, "--by", "k1078591", source="cache")
+        self.assertEqual(code, 0)
+        self.assertIsNone(self.marker())
+
+    def test_unreadable_marker_counts_as_never_applied(self):
+        doc = self.evolved()
+        k1, _, _ = self.place("one", ["debt-bondage"])
+        self.s3.put_object(Bucket="crsw", Key=self.MARKER, Body=b"not json")
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.read(k1)["subject"], ["forced-labour"])
+        self.assertEqual(self.marker()["vocabulary_version"], doc["vocabulary_version"])
 
     def test_list_datasets_walks_strand_prefixes_only(self):
         from promoter.scan import list_datasets

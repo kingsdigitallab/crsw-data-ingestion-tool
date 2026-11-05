@@ -40,6 +40,13 @@ Every run, recategorise and remove writes its log lines as one object
 under PROMOTER_AUDIT_PREFIX before it exits (dry runs too, marked as
 such).
 
+After promotion, `run` also brings every record up to the vocabulary's
+own changes when the vocabulary fetched from its repository has moved
+since the marker in the bucket (recategorise.read_marker). A record the
+replay refuses or cannot write holds the marker back, so the next run
+tries again; promotion and the index carry on regardless. A vocabulary
+from the cache or the bundled copy may be older and is never replayed.
+
 Exit codes: 0 everything promoted, rewritten or removed (or nothing to
 do); 1 at least one deposit or dataset was refused or failed; 2
 configuration error, unusable change file, a --confirm that does not
@@ -49,7 +56,7 @@ import argparse
 import getpass
 import json
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 
 from crsw_deposit import keys, places as places_mod, record, vocab
 from crsw_web import s3 as s3mod
@@ -382,6 +389,77 @@ def _print_line(action: str, **detail) -> None:
     print(json.dumps({"action": action, **detail}, ensure_ascii=False))
 
 
+def _apply_plan(client, cfg, log, plan, who: str, dry_run: bool) -> Tuple[int, int]:
+    """Log a recategorise plan and, unless a dry run, write it. Returns
+    (rewritten, failed)."""
+    for problem in plan.problems:
+        log.write("recategorise_refused", problem=problem)
+    for item in plan.refused:
+        log.write("recategorise_refused", prefix=item.prefix, problems=item.problems)
+    rewritten = 0
+    failed = 0
+    for item in plan.to_write:
+        log.write("recategorise_planned", **item.summary())
+        if dry_run:
+            continue
+        if recat.apply(client, cfg.s3_bucket, item, log, who):
+            rewritten += 1
+        else:
+            failed += 1
+    return rewritten, failed
+
+
+def _mark_applied(cfg, client, log, marker, vocab_dict, rewritten: int, **detail) -> None:
+    """The whole store is now up to this vocabulary: say so in the bucket
+    and on the trail."""
+    recat.write_marker(client, cfg.s3_bucket, cfg.index_prefix, vocab_dict,
+                       record.utc_now_iso(), log.run_id)
+    log.write("vocabulary_replayed", from_version=(marker or {}).get("vocabulary_version"),
+              to_version=vocab_dict.get("vocabulary_version"),
+              changes=len(vocab_dict.get("changes") or []), rewritten=rewritten, **detail)
+
+
+def _replay_vocabulary(cfg, client, log, vocab_dict, source, provider_slugs, place_codes,
+                       dry_run: bool) -> Tuple[str, int, bool]:
+    """Bring every record up to the vocabulary's changes if it has moved
+    since the marker. Returns (state, rewritten, failed). Nothing here may
+    stop the run: promotion is done and the index still has to be written.
+    Only a vocabulary fetched from its repository counts; after a failed
+    fetch the cache or bundled copy may be older than the marker and would
+    refuse records that already carry newer terms."""
+    if not cfg.index_prefix:
+        return "off", 0, False               # nowhere to keep the marker
+    if source != "remote":
+        return "not_remote", 0, False
+    rewritten = 0
+    try:
+        marker = recat.read_marker(client, cfg.s3_bucket, cfg.index_prefix)
+        if recat.marker_is_current(marker, vocab_dict):
+            return "current", 0, False
+        plan = recat.plan(client, cfg.s3_bucket, vocab_dict, [], record.VOCABULARY_ACTOR,
+                          record.utc_now_iso(), provider_slugs=provider_slugs,
+                          place_codes=place_codes)
+        rewritten, failed = _apply_plan(client, cfg, log, plan, record.VOCABULARY_ACTOR,
+                                        dry_run)
+        trouble = len(plan.problems) + len(plan.refused) + failed
+        if dry_run:
+            log.write("vocabulary_would_replay",
+                      from_version=(marker or {}).get("vocabulary_version"),
+                      to_version=vocab_dict.get("vocabulary_version"),
+                      would_rewrite=len(plan.to_write), refused_or_failed=trouble)
+            return "would_replay", 0, bool(trouble)
+        if trouble:
+            log.write("vocabulary_replay_failed", rewritten=rewritten,
+                      reason="%d record(s) refused or failed; the next run tries again"
+                             % trouble)
+            return "failed", rewritten, True
+        _mark_applied(cfg, client, log, marker, vocab_dict, rewritten)
+    except Exception as e:
+        log.write("vocabulary_replay_failed", rewritten=rewritten, reason=str(e))
+        return "failed", rewritten, True
+    return "replayed", rewritten, False
+
+
 def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
     """Keep this run's lines in the bucket. A real run whose audit
     object cannot be written exits 2: a promotion without its trail is
@@ -446,7 +524,15 @@ def cmd_run(args) -> int:
         else:
             refused += 1
 
-    summary = _write_index(cfg, client, log, args.dry_run, promoted, vocab_doc=vocab_dict)
+    if args.user or args.deposit:
+        # A narrowed run is about those deposits, not the whole store.
+        replay_state, replayed, replay_failed = "skipped", 0, False
+    else:
+        replay_state, replayed, replay_failed = _replay_vocabulary(
+            cfg, client, log, vocab_dict, source, provider_slugs, place_codes, args.dry_run)
+    # Replay changes records, never files: the passages are not touched.
+    summary = _write_index(cfg, client, log, args.dry_run, promoted + replayed,
+                           vocab_doc=vocab_dict)
     if summary and summary.get("model_changed"):
         # Every passage in place is from the old model too: sweep them
         # all, not only what this run promoted.
@@ -454,8 +540,8 @@ def cmd_run(args) -> int:
                              index_mod.read_records(client, cfg.s3_bucket) if rec]
     _write_passages(cfg, client, log, promoted_prefixes)
     log.write("finish", seen=seen, promoted=promoted, refused_or_failed=refused,
-              dry_run=args.dry_run)
-    return _write_audit(cfg, client, log, args.dry_run, 1 if refused else 0)
+              vocabulary=replay_state, replayed=replayed, dry_run=args.dry_run)
+    return _write_audit(cfg, client, log, args.dry_run, 1 if refused or replay_failed else 0)
 
 
 def cmd_recategorise(args) -> int:
@@ -482,21 +568,19 @@ def cmd_recategorise(args) -> int:
     plan = recat.plan(client, cfg.s3_bucket, vocab_dict, changes, args.by,
                       record.utc_now_iso(), only=args.dataset,
                       provider_slugs=provider_slugs, place_codes=place_codes)
-    for problem in plan.problems:
-        log.write("recategorise_refused", problem=problem)
-    for item in plan.refused:
-        log.write("recategorise_refused", prefix=item.prefix, problems=item.problems)
-    rewritten = 0
-    failed = 0
-    for item in plan.to_write:
-        log.write("recategorise_planned", **item.summary())
-        if args.dry_run:
-            continue
-        if recat.apply(client, cfg.s3_bucket, item, log, args.by):
-            rewritten += 1
-        else:
-            failed += 1
+    rewritten, failed = _apply_plan(client, cfg, log, plan, args.by, args.dry_run)
     refused = len(plan.problems) + len(plan.refused) + failed
+    if (not args.dry_run and not args.dataset and not refused and source == "remote"
+            and cfg.index_prefix):
+        # `plan` replays the vocabulary over every record with or without a
+        # change file, so the timer need not do it again. If this fails the
+        # timer repeats a replay that finds nothing: logged, nothing lost.
+        try:
+            marker = recat.read_marker(client, cfg.s3_bucket, cfg.index_prefix)
+            if not recat.marker_is_current(marker, vocab_dict):
+                _mark_applied(cfg, client, log, marker, vocab_dict, rewritten, by=args.by)
+        except Exception as e:
+            log.write("vocabulary_replay_failed", rewritten=rewritten, reason=str(e))
     _write_index(cfg, client, log, args.dry_run, rewritten, vocab_doc=vocab_dict)
     log.write("finish", command="recategorise", seen=len(plan.items),
               would_rewrite=len(plan.to_write) if args.dry_run else None,

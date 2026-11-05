@@ -138,6 +138,11 @@ vocabulary up and for bulk work. Both exist only once the library does.
 **Decided: A.** A rewrite is a new object version and a log line, and
 both should mean something.
 
+*Addendum, 5 November 2026:* "when" is now automatic for the vocabulary's
+own changes: `promoter run` replays them after promotion whenever the
+fetched vocabulary has moved since `index/vocabulary-applied.json`. A
+change file stays a command a person runs, dry run first.
+
 ### 1.8 Can the vocabulary have sub-categories?
 
 Categories may stay valid but gain sub-categories, or move up and down

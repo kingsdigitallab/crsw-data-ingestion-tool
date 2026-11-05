@@ -156,15 +156,46 @@ version). Changes to it go through that repo's issue forms and review.
 Two sources of change:
 
 - **The vocabulary's own changes** (a term renamed, merged, split or
-  retired in the vocabulary repository). Applied to every record that
-  carries an affected term, and written into the record's
-  `category_history` by the actor `vocabulary`. A split gives the
-  dataset every successor term and marks the entry `split_review`; a
-  steward then removes the wrong ones with a change file.
-- **A change file**: a steward's decisions about particular datasets.
+  retired in the vocabulary repository). These have already been reviewed
+  through that repository, so **the promoter timer applies them with no
+  person involved**, on the first `promoter run` after the vocabulary
+  moves. Applied to every record that carries an affected term, and
+  written into the record's `category_history` by the actor `vocabulary`.
+  A split gives the dataset every successor term and marks the entry
+  `split_review`; a steward then removes the wrong ones with a change
+  file.
+- **A change file**: a steward's decisions about particular datasets, a
+  judgement being made now. A person always runs these, dry run first.
 
-Always dry-run first, on the internal VM (or from a laptop with the
-promoter key, see the interim note above):
+How the timer knows. `index/vocabulary-applied.json` in the bucket holds
+the vocabulary version and change count the whole store was last brought
+up to. A `run` that fetches a different one from the vocabulary repository
+replays it, rewrites the records it affects, rebuilds the index and
+embeddings once, and updates the marker. To see it:
+
+```
+python -m promoter audit --action vocabulary_replayed
+python -m promoter audit --action vocabulary_replay_failed
+```
+
+`vocabulary_replayed` gives the two versions and how many records were
+rewritten; the first after this feature deploys has `from_version` null.
+Every run's `finish` line says what happened in `vocabulary`: `current`,
+`replayed`, `failed`, `not_remote` (the fetch failed, so the cache or
+bundled copy was in use, which may be older: nothing is replayed until a
+fetch succeeds), `off` (blank `PROMOTER_INDEX_PREFIX`), `skipped` (a `run`
+narrowed with `--deposit` or `--user`) or `would_replay` (a dry run).
+
+A record the replay refuses or cannot write holds the marker back: the
+other records are rewritten, promotion and the index carry on, the run
+exits 1, and every following run tries again until the record is put
+right. To replay by hand, run `recategorise` with no change file. A real
+`recategorise` over the whole store (no `--dataset`) that refuses nothing
+updates the marker too, with or without `--changes`, so the timer then has
+nothing to do.
+
+Always dry-run a manual run first, on the internal VM (or from a laptop
+with the promoter key, see the interim note above):
 
 ```
 python -m promoter recategorise --dry-run
@@ -428,7 +459,8 @@ Questions and where the answer is:
 - *Who deposited what, this month?* `audit --since <date> --action
   promoted`.
 - *Which records were rewritten when the vocabulary changed?*
-  `audit --action record_rewritten`; the record's own
+  `audit --action vocabulary_replayed` for each replay and its count,
+  `audit --action record_rewritten` for the records; the record's own
   `category_history` says what changed and why.
 - *What was dataset X derived from, and did the promoter find it?*
   `audit --action resolved_reference --dataset <name>`: the parent's

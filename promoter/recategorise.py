@@ -14,11 +14,18 @@ a label or a key):
 `plan` reads every record and works out what would change; `apply`
 writes one planned record the way promotion does (validate, put, read
 back, compare). Records that would not change are never written, so a
-second run finds nothing to do."""
+second run finds nothing to do.
+
+The marker (`<index prefix>/vocabulary-applied.json`) says which
+vocabulary the whole store was last brought up to. `promoter run` replays
+when it has moved. It holds the change count beside the version because
+the version is a date: two changes on one day share one."""
 import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
+
+from botocore.exceptions import ClientError
 
 from crsw_deposit import deposit_logic, labels as labels_mod, record, vocab
 
@@ -27,6 +34,7 @@ from .log import Log
 from .scan import list_datasets
 
 CHANGE_KEYS = ("dataset", "add", "remove", "set_domain", "set", "reason")
+MARKER_NAME = "vocabulary-applied.json"
 
 
 class ChangeFileError(ValueError):
@@ -190,6 +198,44 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
                                 "or uuid%s" % (c["dataset"],
                                                " under %s" % only if only else ""))
     return out
+
+
+def _marker_key(index_prefix: str) -> str:
+    return index_prefix.strip("/") + "/" + MARKER_NAME
+
+
+def read_marker(client, bucket: str, index_prefix: str) -> Optional[Dict]:
+    """The marker in place, or None when there is none or it cannot be
+    used: a replay is safe to repeat, so an unreadable marker is the same
+    as never having applied. Any other failure to read it raises."""
+    try:
+        body = client.get_object(Bucket=bucket, Key=_marker_key(index_prefix))["Body"].read()
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code", "") in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    try:
+        marker = json.loads(body.decode("utf-8"))
+    except ValueError:
+        return None
+    return marker if isinstance(marker, dict) else None
+
+
+def marker_is_current(marker: Optional[Dict], vocab_doc: Dict) -> bool:
+    return (marker is not None
+            and marker.get("vocabulary_version") == vocab_doc.get("vocabulary_version")
+            and marker.get("changes") == len(vocab_doc.get("changes") or []))
+
+
+def write_marker(client, bucket: str, index_prefix: str, vocab_doc: Dict, now: str,
+                 run_id: str) -> str:
+    key = _marker_key(index_prefix)
+    body = json.dumps({"vocabulary_version": vocab_doc.get("vocabulary_version"),
+                       "changes": len(vocab_doc.get("changes") or []),
+                       "applied": now, "run_id": run_id}, indent=2) + "\n"
+    client.put_object(Bucket=bucket, Key=key, Body=body.encode("utf-8"),
+                      ContentType="application/json")
+    return key
 
 
 def apply(client, bucket: str, item: Item, log: Log, who: str) -> bool:
