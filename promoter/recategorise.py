@@ -143,6 +143,16 @@ def _matches(change: Dict, rec: Dict) -> bool:
     return target in (rec.get("identifier"), rec.get("dataset_uuid"))
 
 
+def _read_record_text(client, bucket: str, key: str):
+    """(text, None) or (None, why): bytes that are not UTF-8 (a record saved
+    through the mount by something else) are one record's problem, not the
+    whole walk's."""
+    try:
+        return _read_json_object(client, bucket, key)
+    except UnicodeDecodeError as e:
+        return None, "not UTF-8: %s" % e
+
+
 def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
          who: str, now: str, only: Optional[str] = None,
          provider_slugs: Optional[List[str]] = None,
@@ -157,7 +167,7 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
     version = vocab_doc.get("vocabulary_version")
     used = [False] * len(changes)
     for ref in list_datasets(client, bucket):
-        text, err = _read_json_object(client, bucket, ref.record_key)
+        text, err = _read_record_text(client, bucket, ref.record_key)
         if text is None:
             out.problems.append("%s: could not read record: %s" % (ref.prefix, err))
             continue
@@ -175,7 +185,12 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
                                  % before.get("identifier"))
             out.items.append(item)
             continue
-        after, entries = record.apply_vocabulary_mapping(before, vocab_doc, now)
+        try:
+            after, entries = record.apply_vocabulary_mapping(before, vocab_doc, now)
+        except (TypeError, AttributeError, ValueError) as e:
+            # A record parsed but holding the wrong shape; the rest still run.
+            out.problems.append("%s: record cannot be used: %s" % (ref.prefix, e))
+            continue
         for i, c in enumerate(changes):
             if not _matches(c, before):
                 continue
@@ -256,13 +271,16 @@ def apply(client, bucket: str, item: Item, log: Log, who: str) -> bool:
         raise ValueError("nothing to write for %s" % item.prefix)
     data = deposit_logic.record_bytes(item.after)
     rec = item.after
+    # The label names who deposited, and the Find data page shows it; who
+    # rewrote the record is in its category_history.
+    depositor = (rec.get("depositors") or [who])[-1]
     try:
         client.put_object(
             Bucket=bucket, Key=item.record_key, Body=data,
             ContentType="application/json",
             Metadata=labels_mod.object_labels(
                 rec["dataset_uuid"], hashlib.sha256(data).hexdigest(),
-                rec["sensitivity"], who))
+                rec["sensitivity"], depositor))
         back = client.get_object(Bucket=bucket, Key=item.record_key)["Body"].read()
         if back != data:
             raise RuntimeError("record round-trip mismatch at %s" % item.record_key)

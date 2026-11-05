@@ -735,7 +735,9 @@ def apply_vocabulary_mapping(rec: dict, vocab_doc: dict, now: str
     on every run."""
     subjects, applied = authority.map_subjects(
         list(rec.get("subject") or []), vocab_doc)
-    if not applied:
+    # Changes that end where they began are nothing to record: a rewrite
+    # here would be repeated on every walk of the store.
+    if not applied or subjects == list(rec.get("subject") or []):
         return rec, []
     version = vocab_doc.get("vocabulary_version")
     entries = [history_entry(now, VOCABULARY_ACTOR, a["kind"],

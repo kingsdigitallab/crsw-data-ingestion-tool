@@ -36,6 +36,23 @@ def change(kind, **fields):
 
 
 class TestValidate(unittest.TestCase):
+    def test_change_cannot_name_a_term_as_both_old_and_new(self):
+        d = small()
+        d["changes"] = [change("split", **{"from": ["survey"], "to": ["survey", "osint"]})]
+        self.assertTrue(any("both from and to" in e for e in authority.validate_authority(d)))
+
+    def test_change_cannot_retire_a_term_that_is_current(self):
+        # An un-retire by hand that leaves the old change in place would have
+        # replay strip a current term from every record carrying it.
+        d = small()
+        d["changes"] = [change("retire", **{"from": ["maritime"]})]
+        self.assertTrue(any("'maritime' is current" in e for e in authority.validate_authority(d)))
+
+    def test_move_of_a_current_term_is_still_valid(self):
+        d = small()
+        d["changes"] = [change("move", **{"from": ["maritime"], "broader": None})]
+        self.assertEqual(authority.validate_authority(d), [])
+
     def test_small_and_bundled_files_are_valid(self):
         self.assertEqual(authority.validate_authority(small()), [])
         bundled = json.loads(vocab.bundled_vocab_path().read_text(encoding="utf-8"))

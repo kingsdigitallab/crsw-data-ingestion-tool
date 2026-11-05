@@ -402,6 +402,17 @@ def _validate_changes(doc: dict, by_slug: Dict[str, dict]) -> List[str]:
         for slug in list(frm) + list(to):
             if isinstance(slug, str) and slug not in by_slug:
                 errors.append("%s: names unknown term %r" % (label, slug))
+        # Replay repeats every change over every record, so these two would
+        # rewrite records on each walk or strip a term that is still current.
+        if kind in ("rename", "merge", "split", "retire"):
+            for slug in frm:
+                if not isinstance(slug, str):
+                    continue
+                if slug in to:
+                    errors.append("%s: %r is in both from and to" % (label, slug))
+                elif by_slug.get(slug, {}).get("status") == "current":
+                    errors.append("%s: %r is current, but this change takes it out "
+                                  "of use" % (label, slug))
         if kind == "add" and len(to) != 1:
             errors.append("%s: add names exactly one term in to" % label)
         if kind == "rename" and (len(frm) != 1 or len(to) != 1):

@@ -110,7 +110,7 @@ journalctl -u crsw-promoter.service -f        # one JSON line per action
 
 The unit's `WorkingDirectory` must be the checkout; edit the copied unit if it is anywhere other than `/opt/crsw-data-promoter`. The timer fires within a minute of `enable --now`, then every five minutes, with a lock so runs never overlap, and it survives reboots; `systemctl list-timers --all --no-pager | grep crsw` shows the next and last firing. The first run is the long one: `embed_model_resolved`, `embed_model_changed`, `embeddings_written` with every dataset, then a `passages_written` line per dataset (about ten seconds for six datasets); later runs are quiet, a `start` and a `finish` line each. `journalctl -f` follows the log until Ctrl-C.
 
-Pasting this block on the web VM by mistake (seen 15 October 2026) installs the units there too, where the service fails at once with `status=200/CHDIR` every five minutes and never runs the promoter: harmless, since the checkout and the key are absent, but noisy. Undo it there with `sudo systemctl disable --now crsw-promoter.timer`, `sudo rm /etc/systemd/system/crsw-promoter.{timer,service}`, `sudo systemctl daemon-reload`, `sudo systemctl reset-failed crsw-promoter.service`; the list-timers line above should then print nothing. Exit code 1 means a deposit was refused and left in staging; read the `checked` line for the reasons. Exit code 2 on a real run means the run's audit object could not be written (section 6): the promotion happened, the journal has the lines, and the bucket needs looking at.
+Pasting this block on the web VM by mistake (seen 15 October 2026) installs the units there too, where the service fails at once with `status=200/CHDIR` every five minutes and never runs the promoter: harmless, since the checkout and the key are absent, but noisy. Undo it there with `sudo systemctl disable --now crsw-promoter.timer`, `sudo rm /etc/systemd/system/crsw-promoter.{timer,service}`, `sudo systemctl daemon-reload`, `sudo systemctl reset-failed crsw-promoter.service`; the list-timers line above should then print nothing. Exit code 1 means a deposit was refused and left in staging (read the `checked` line for the reasons), or a vocabulary replay was held back (section 5). The unit counts exit 1 as success, so neither shows as a failed unit. Exit code 2 on a real run means the run's audit object could not be written (section 6): the promotion happened, the journal has the lines, and the bucket needs looking at.
 
 ### Interim: promoter from a laptop
 
@@ -171,11 +171,14 @@ How the timer knows. `index/vocabulary-applied.json` in the bucket holds
 the vocabulary version and change count the whole store was last brought
 up to. A `run` that fetches a different one from the vocabulary repository
 replays it, rewrites the records it affects, rebuilds the index and
-embeddings once, and updates the marker. To see it:
+embeddings once, and updates the marker. To see it, give a date: on its
+own `audit` reads only the newest ten runs, which on the five-minute timer
+is the last fifty minutes.
 
 ```
-python -m promoter audit --action vocabulary_replayed
-python -m promoter audit --action vocabulary_replay_failed
+python -m promoter audit --since 2026-11-05 --action vocabulary_replayed
+python -m promoter audit --since 2026-11-05 --action vocabulary_replay_failed
+python -m promoter audit --since 2026-11-05 --action recategorise_refused
 ```
 
 `vocabulary_replayed` gives the two versions and how many records were
@@ -189,7 +192,13 @@ narrowed with `--deposit` or `--user`) or `would_replay` (a dry run).
 A record the replay refuses or cannot write holds the marker back: the
 other records are rewritten, promotion and the index carry on, the run
 exits 1, and every following run tries again until the record is put
-right. To replay by hand, run `recategorise` with no change file. A real
+right. **Nothing alerts anyone to this**: the unit treats exit 1 as success
+(`SuccessExitStatus=1`), and the journal filter in section 8 drops the
+`finish` line. So after a vocabulary change, run the three commands above.
+`recategorise_refused` names each record and why. To see whether fetches
+have been failing, which also stops replay:
+`python -m promoter audit --since 2026-11-05 --action finish --json | grep -c not_remote`.
+To replay by hand, run `recategorise` with no change file. A real
 `recategorise` over the whole store (no `--dataset`) that refuses nothing
 updates the marker too, with or without `--changes`, so the timer then has
 nothing to do.
@@ -461,8 +470,9 @@ Questions and where the answer is:
 - *Who deposited what, this month?* `audit --since <date> --action
   promoted`.
 - *Which records were rewritten when the vocabulary changed?*
-  `audit --action vocabulary_replayed` for each replay and its count,
-  `audit --action record_rewritten` for the records; the record's own
+  `audit --since <date> --action vocabulary_replayed` for each replay and
+  its count, `audit --since <date> --action record_rewritten` for the
+  records; the record's own
   `category_history` says what changed and why.
 - *What was dataset X derived from, and did the promoter find it?*
   `audit --action resolved_reference --dataset <name>`: the parent's

@@ -693,6 +693,91 @@ class TestRecategorise(PromoterBase):
     def body(self, key):
         return self.s3.get_object(Bucket="crsw", Key=key)["Body"].read()
 
+    def hand_edited(self, *changes):
+        """A vocabulary whose change list the validator would now refuse, as
+        one fetched before that rule, or read from a cache, could still be."""
+        doc = json.loads(json.dumps(VOCAB))
+        doc["changes"] = list(doc.get("changes") or []) + [
+            dict(c, date="2026-10-0%d" % (i + 1), by="k1") for i, c in enumerate(changes)]
+        return doc
+
+    def test_changes_that_end_where_they_began_do_not_rewrite(self):
+        doc = self.hand_edited(
+            {"kind": "rename", "from": ["armed-conflict"], "to": ["forced-labour"]},
+            {"kind": "rename", "from": ["forced-labour"], "to": ["armed-conflict"]})
+        k1, d1, _ = self.place("one", ["armed-conflict"])
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.body(k1), d1)
+        self.assertEqual(self.actions(lines, "record_rewritten"), [])
+
+    def test_held_back_marker_does_not_rewrite_a_self_succeeding_split_again(self):
+        doc = self.hand_edited({"kind": "split", "from": ["armed-conflict"],
+                                "to": ["armed-conflict", "forced-labour"]})
+        k1, _, _ = self.place("one", ["armed-conflict"])
+        k2, _, rec = self.place("two", ["armed-conflict"])
+        rec["identifier"] = "rs2/csac/green/2_final/elsewhere"
+        self.s3.put_object(Bucket="crsw", Key=k2, Body=deposit_logic.record_bytes(rec))
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.actions(lines, "record_rewritten")), 1)
+        first = self.body(k1)
+        for _ in range(2):             # the marker is held back: each run walks them all
+            code, lines = self.run_cli("run", doc)
+            self.assertEqual(code, 1)
+            self.assertEqual(self.actions(lines, "record_rewritten"), [])
+            self.assertEqual(self.body(k1), first)
+
+    def test_rewrite_keeps_the_depositor_label(self):
+        k1, _, rec = self.place("one", ["debt-bondage"])
+        code, lines = self.run_cli("run", self.evolved())
+        self.assertEqual(code, 0, lines)
+        depositor = rec["depositors"][-1]
+        self.assertEqual(self.s3.head_object(Bucket="crsw", Key=k1)["Metadata"]["depositor"],
+                         depositor)
+        row = index_mod.read_rows(self.s3, "crsw", "index")[0]
+        self.assertEqual(row["depositor"], depositor)
+        self.assertEqual(self.read(k1)["category_history"][-1]["by"], "vocabulary")
+
+    def test_steward_rewrite_keeps_the_depositor_label(self):
+        k1, _, rec = self.place("one", ["forced-labour"])
+        path = self.change_file({"dataset": "rs2/csac/green/2_final/one",
+                                 "set": {"notes": "A note."}, "reason": "r"})
+        code, lines = self.run_cli("recategorise", VOCAB, "--changes", path, "--by", "k2")
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.s3.head_object(Bucket="crsw", Key=k1)["Metadata"]["depositor"],
+                         rec["depositors"][-1])
+        self.assertEqual(self.read(k1)["category_history"][-1]["by"], "k2")
+
+    def test_malformed_record_is_named_and_the_others_still_replay(self):
+        doc = self.evolved()
+        k1, _, _ = self.place("good", ["debt-bondage"])
+        self.s3.put_object(Bucket="crsw",
+                           Key="rs2/csac/green/2_final/latin/dataset.latin.json",
+                           Body=b'{"abstract": "caf\xe9"}')
+        _, _, rec = self.place("nested", ["debt-bondage"])
+        rec["subject"] = [{"not": "a slug"}]
+        self.s3.put_object(Bucket="crsw",
+                           Key="rs2/csac/green/2_final/nested/dataset.nested.json",
+                           Body=deposit_logic.record_bytes(rec))
+        code, lines = self.run_cli("run", doc)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.read(k1)["subject"], ["forced-labour"])
+        self.assertIsNone(self.marker())
+        refused = " ".join(l.get("problem", "") for l in self.actions(lines, "recategorise_refused"))
+        self.assertIn("rs2/csac/green/2_final/latin", refused)
+        self.assertIn("rs2/csac/green/2_final/nested", refused)
+        self.assertEqual(finish(lines)["vocabulary"], "failed")
+
+    def test_manual_recategorise_names_a_malformed_record(self):
+        self.s3.put_object(Bucket="crsw",
+                           Key="rs2/csac/green/2_final/latin/dataset.latin.json",
+                           Body=b'{"abstract": "caf\xe9"}')
+        code, lines = self.run_cli("recategorise", VOCAB, "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertIn("rs2/csac/green/2_final/latin",
+                      self.actions(lines, "recategorise_refused")[0]["problem"])
+
     def test_run_replays_when_no_marker(self):
         doc = self.evolved()
         k1, _, _ = self.place("one", ["debt-bondage", "armed-conflict"])
