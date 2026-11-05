@@ -239,11 +239,13 @@ clears the field):
 ]
 ```
 
-`set` may name `creator`, `source_type`, `source_detail`, `license`,
-`steward`, `language`, `ethics_ref` or `notes` (`record.SETTABLE_FIELDS`;
-from schema 0.7 also `provider`, `spatial`, `spatial_note`). It never
-names `subject` or `domain` (use `add`/`remove`/`set_domain`), nor
-`derived_from`, `provenance`, `depositors` or any required field. Each
+`set` may name `abstract` (replaced, never cleared; under 50 words a
+`warnings` entry on the plan line, not a refusal), `creator`,
+`source_type`, `source_detail`, `license`, `steward`, `language`,
+`ethics_ref` or `notes` (`record.SETTABLE_FIELDS`; from schema 0.7 also
+`provider`, `spatial`, `spatial_note`). It never names `subject` or
+`domain` (use `add`/`remove`/`set_domain`), nor `derived_from`,
+`provenance`, `depositors` or any other required field. Each
 field set gets its own `field_set` history entry naming the field with
 the value before and after; a value the record already has is nothing
 to do.

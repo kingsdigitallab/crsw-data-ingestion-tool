@@ -67,13 +67,15 @@ SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
                 "derived", "other")
 
 # r11: the fields a change file may set in place, in record order, each
-# with its shape. Only descriptive recommended/optional fields: `subject`
-# and `domain` have their own change-file keys (add/remove/set_domain)
-# and their own history kinds; `derived_from`, `provenance`, `depositors`
-# and `category_history` accumulate through deposit and are never
-# overwritten; every required field is identity or the manifest and
-# changes only through a new deposit.
+# with its shape. Only descriptive fields: `subject` and `domain` have
+# their own change-file keys (add/remove/set_domain) and their own history
+# kinds; `derived_from`, `provenance`, `depositors` and `category_history`
+# accumulate through deposit and are never overwritten; every other
+# required field is identity or the manifest and changes only through a
+# new deposit. `abstract` is required, so it can be replaced but not
+# cleared (5 November 2026, for the Centre's review of abstracts).
 SETTABLE_FIELDS = (
+    ("abstract", "required_text"),
     ("creator", "text"), ("source_type", "source_type"),
     ("source_detail", "text"), ("provider", "provider"), ("license", "text"),
     ("steward", "text"), ("language", "list"), ("ethics_ref", "text"),
@@ -587,9 +589,11 @@ def field_set_error(field: str, value,
         return ("%r cannot be set this way; a change file may set %s "
                 "(subject by add/remove, domain by set_domain)"
                 % (field, ", ".join(name for name, _ in SETTABLE_FIELDS)))
-    if value is None:
-        return None
     kind = kinds[field]
+    if value is None:
+        if kind == "required_text":
+            return "%s is required, so it can be replaced but cannot be cleared" % field
+        return None
     if kind in ("list", "provider", "place"):
         if not (isinstance(value, list) and value
                 and all(isinstance(s, str) and s.strip() for s in value)):

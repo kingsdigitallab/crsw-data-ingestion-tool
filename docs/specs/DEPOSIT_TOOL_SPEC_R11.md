@@ -75,6 +75,11 @@ What it never writes, and why:
   all. A wrong abstract is re-deposited; a wrong location is removed
   (r10) and deposited again.
 
+*Addendum, 5 November 2026:* `abstract` is now settable, so the Centre's
+review of abstracts can correct them in place. It is required, so it can
+be replaced but not cleared (a `null` is refused when the change file is
+read). The 50-word guidance is a warning in the plan, as it is at deposit.
+
 `set_domain` does not touch `steward`: a steward who wants both names
 both in one entry (`"set_domain": "geo", "set": {"steward": "..."}`).
 

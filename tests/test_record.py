@@ -967,8 +967,10 @@ class TestCategoryHistory(unittest.TestCase):
         cases = [
             ({"set": {"subject": ["x"]}}, "cannot be set this way"),
             ({"set": {"domain": "geo"}}, "cannot be set this way"),
-            ({"set": {"abstract": "x"}}, "cannot be set this way"),
             ({"set": {"derived_from": []}}, "cannot be set this way"),
+            ({"set": {"provenance": []}}, "cannot be set this way"),
+            ({"set": {"abstract": "   "}}, "must be text"),
+            ({"set": {"abstract": None}}, "cannot be cleared"),
             ({"set": {"made_up": "x"}}, "cannot be set this way"),
             ({"set": {"license": 5}}, "must be text"),
             ({"set": {"license": "   "}}, "must be text"),
@@ -983,6 +985,28 @@ class TestCategoryHistory(unittest.TestCase):
             self.assertIn(fragment, str(cm.exception))
         self.assertIsNone(record.field_set_error("source_type", "archive"))
         self.assertIsNone(record.field_set_error("creator", None))
+
+    def test_field_set_error_allows_abstract_text(self):
+        self.assertIsNone(record.field_set_error("abstract", "text"))
+
+    def test_field_set_error_refuses_clearing_abstract(self):
+        err = record.field_set_error("abstract", None)
+        self.assertIn("abstract", err)
+        self.assertIn("cannot be cleared", err)
+
+    def test_set_abstract_records_field_set(self):
+        r = self.rec(subject=["forced-labour"], abstract="The old words.")
+        out, entries = record.apply_dataset_change(
+            r, {"set": {"abstract": "The new words."}, "reason": "rewritten for readers"},
+            "k1", self.NOW, self.VOCAB, ["quant", "geo"])
+        self.assertEqual(out["abstract"], "The new words.")
+        self.assertEqual(r["abstract"], "The old words.")   # input untouched
+        self.assertEqual(entries, [{"when": self.NOW, "by": "k1", "kind": "field_set",
+                                    "field": "abstract", "from": ["The old words."],
+                                    "to": ["The new words."],
+                                    "reason": "rewritten for readers"}])
+        errors, _ = record.validate_record(out, self.VOCAB, ["quant", "geo"])
+        self.assertEqual(errors, [])
 
     def test_set_combined_with_add_remove_domain_orders_entries(self):
         r = self.rec(subject=["forced-labour", "survey"], domain="quant")

@@ -629,6 +629,48 @@ class TestRecategorise(PromoterBase):
                  if c.args and isinstance(c.args[0], str) and c.args[0].startswith("{")]
         return code, lines
 
+    # --- abstract set in place ----------------------------------------------
+
+    def change_file(self, *changes):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        self.addCleanup(os.unlink, path)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(list(changes), f)
+        return path
+
+    def test_load_change_file_refuses_clearing_abstract(self):
+        from promoter import recategorise as recat
+        with self.assertRaises(recat.ChangeFileError) as cm:
+            recat.load_change_file(json.dumps([{"dataset": "x", "set": {"abstract": None}}]))
+        self.assertIn("cannot be cleared", str(cm.exception))
+
+    def test_short_abstract_warns_and_still_writes(self):
+        k1, _, _ = self.place("one", ["forced-labour"])
+        path = self.change_file({"dataset": "rs2/csac/green/2_final/one",
+                                 "set": {"abstract": "Too few words."}, "reason": "r"})
+        code, lines = self.run_cli("recategorise", VOCAB, "--changes", path, "--by", "k1")
+        self.assertEqual(code, 0, lines)
+        planned = self.actions(lines, "recategorise_planned")[0]
+        self.assertIn("Abstract is 3 words", planned["warnings"][0])
+        self.assertEqual(self.read(k1)["abstract"], "Too few words.")
+        self.assertEqual(self.read(k1)["category_history"][-1]["field"], "abstract")
+
+    def test_long_enough_abstract_gives_no_warning(self):
+        self.place("one", ["forced-labour"])
+        path = self.change_file({"dataset": "rs2/csac/green/2_final/one",
+                                 "set": {"abstract": " ".join(["word"] * 50)}, "reason": "r"})
+        code, lines = self.run_cli("recategorise", VOCAB, "--changes", path, "--by", "k1")
+        self.assertEqual(code, 0, lines)
+        self.assertNotIn("warnings", self.actions(lines, "recategorise_planned")[0])
+
+    def test_unrelated_rewrite_does_not_warn_about_abstract(self):
+        k1, _, rec = self.place("one", ["debt-bondage"])
+        rec["abstract"] = "Too few words."
+        self.s3.put_object(Bucket="crsw", Key=k1, Body=deposit_logic.record_bytes(rec))
+        code, lines = self.run_cli("recategorise", self.evolved(), "--by", "k1")
+        self.assertEqual(code, 0, lines)
+        self.assertNotIn("warnings", self.actions(lines, "recategorise_planned")[0])
+
     # --- vocabulary changes replayed on the timer ---------------------------
 
     MARKER = "index/vocabulary-applied.json"

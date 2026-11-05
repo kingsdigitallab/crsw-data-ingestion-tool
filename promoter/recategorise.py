@@ -105,19 +105,23 @@ class Item:
     after: Dict
     entries: List[Dict] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
 
     @property
     def changed(self) -> bool:
         return bool(self.entries)
 
     def summary(self) -> Dict:
-        return {"prefix": self.prefix,
-                "subject_before": list(self.before.get("subject") or []),
-                "subject_after": list(self.after.get("subject") or []),
-                "domain_before": self.before.get("domain"),
-                "domain_after": self.after.get("domain"),
-                "changes": [{k: v for k, v in e.items() if k != "when"}
-                            for e in self.entries]}
+        out = {"prefix": self.prefix,
+               "subject_before": list(self.before.get("subject") or []),
+               "subject_after": list(self.after.get("subject") or []),
+               "domain_before": self.before.get("domain"),
+               "domain_after": self.after.get("domain"),
+               "changes": [{k: v for k, v in e.items() if k != "when"}
+                           for e in self.entries]}
+        if self.warnings:
+            out["warnings"] = list(self.warnings)
+        return out
 
 
 @dataclass
@@ -191,6 +195,12 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
                                                place_codes=place_codes)
             for e in errors:
                 item.problems.append("would leave the record invalid: %s" % e)
+            # Guidance on the text being written now, the same posture as at
+            # deposit; an older short abstract is no concern of this rewrite.
+            if after.get("abstract") != before.get("abstract"):
+                warning = record.abstract_warning(after.get("abstract"))
+                if warning:
+                    item.warnings.append(warning)
         out.items.append(item)
     for c, hit in zip(changes, used):
         if not hit:
