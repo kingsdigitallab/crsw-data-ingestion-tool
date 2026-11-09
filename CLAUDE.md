@@ -46,6 +46,7 @@ python -m crsw_deposit.vocab_cli --file vocab.json validate|tree|add|rename|merg
 - **`crsw_web/` and `promoter/` may use Python 3.12, FastAPI, boto3.** They run on a centrally managed VM. They must never re-implement anything in `crsw_deposit/`.
 - **Cross-platform.** `pathlib` for local paths, but object keys always use `/`. Never let `os.sep` leak into a key or a manifest path.
 - **No secrets in the repo.** CLI credentials live in rclone's config. Service credentials come from `.env` (gitignored) or a mounted file at run time; never in images, compose files or source. `scripts/check-no-secrets.sh` must pass.
+- **Logs hold no personal data, and `/privacy` is the notice** (data-protection audit, 9 Nov 2026). The access line is nginx's `crsw` format only (no query string, no file name, no address or user agent; uvicorn runs `--no-access-log`; `tests/test_deploy_privacy.py` guards both). Anything that newly stores, logs or sends user-typed content or an identifier says so in its plan and changes `crsw_web/templates/privacy.html` and `docs/how-to-deposit.md` in the same commit.
 - **Every convention has one implementation.** If the CLI and the service disagree about a key, label, record field or byte, the fix goes in `crsw_deposit/`, not in either caller.
 
 ## Storage conventions (deliberate decisions, do not "fix" them)

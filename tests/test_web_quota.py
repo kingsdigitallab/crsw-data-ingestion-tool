@@ -49,7 +49,7 @@ class TestQuota(unittest.TestCase):
         b = c.post("/deposits", json=dict(FORM, dataset="q2")).json()
         c.put("/deposits/%s/files/y.bin" % b["id"], content=b"y" * 50)
         c.post("/deposits/%s/finalise" % b["id"])
-        use = quota.usage(self.store, "k1078591")
+        use = quota.usage(self.store, "k1234567")
         self.assertEqual(use.open_deposits, 1)
         self.assertEqual(use.deposits, 2)
         # 150 bytes of members plus the finalised record's bytes; control objects excluded.

@@ -91,7 +91,7 @@ Through the proxy, `/whoami` shows your k-number (and `name` once the name heade
 
 The username is lower-cased and must be a plain key segment (letters, digits, `.`, `_`, `-`, up to 64 characters), since it becomes `staging/<user>/`; anything else is refused with 403 "not a usable username". The display name is shown on pages only and never written anywhere; `x-webauth-mail` is not read.
 
-Logs: `docker compose -f deploy/compose.yaml logs -f`. The app logs one line per create, upload, removal and finalise with the username and deposit id. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second, or 401 in proxy mode since they carry no identity header): that is the proxy's web application firewall probing the backend, not an attack. In the webfarm's own logs every request appears twice, once from the front nginx and once from Apache; duplicate lines there are normal.
+Logs: `docker compose -f deploy/compose.yaml logs -f`. They hold no personal data (data-protection audit, 9 November 2026). The one access line per request is nginx's: time, status, method, path and duration, with no query string (so no search words), no file name (an upload or download path ends `files/*`), and no address or browser identity. uvicorn's own access line is off (`--no-access-log` in the Dockerfile). The app writes warnings only: its per-deposit INFO lines are not routed anywhere, and who did what is the promoter's audit trail (section 6). `tests/test_deploy_privacy.py` fails if the log format regains any of these. `/privacy` tells users the same. Whenever proxy settings are saved, the load balancer fires a burst of scanner-shaped requests (`/i.php`, `/.hg`, a dozen browser identities, all 404 within a second, or 401 in proxy mode since they carry no identity header): that is the proxy's web application firewall probing the backend, not an attack. In the webfarm's own logs every request appears twice, once from the front nginx and once from Apache; duplicate lines there are normal.
 
 ## 3. Internal VM
 
@@ -103,7 +103,9 @@ docker compose -f deploy/compose.yaml --profile internal build promoter
 docker compose -f deploy/compose.yaml --profile internal run --rm promoter python -m promoter run --dry-run --env-file /dev/null
 sudo cp deploy/promoter.service /etc/systemd/system/crsw-promoter.service   # WorkingDirectory=/opt/crsw-data-promoter
 sudo cp deploy/promoter.timer   /etc/systemd/system/crsw-promoter.timer
-sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald   # journal survives reboots
+sudo mkdir -p /var/log/journal /etc/systemd/journald.conf.d   # journal survives reboots
+printf '[Journal]\nMaxRetentionSec=90day\n' | sudo tee /etc/systemd/journald.conf.d/crsw.conf   # 90 days; the durable copy is the bucket's audit trail
+sudo systemctl restart systemd-journald
 sudo systemctl daemon-reload && sudo systemctl enable --now crsw-promoter.timer
 journalctl -u crsw-promoter.service -f        # one JSON line per action
 ```
@@ -438,9 +440,10 @@ Questions and where the answer is:
 - *What is in the store now?* `datasets`. It reads the bucket, so it is
   always current; there is no register to keep in step.
 - *Who created a deposit, or uploaded a file, before promotion?* The
-  web VM's container log (`docker compose logs deposit-web`), rotated at
-  50 MB. The promoter's `checked` line carries the depositor and the
-  deposit id, which is enough for most questions.
+  staging key says so (`staging/<user>/<deposit-id>/...`), and the
+  promoter's `checked` line carries the depositor and the deposit id.
+  The web VM's container log does not: since the audit of 9 November
+  2026 it records no username, search words or file names (section 2).
 
 Not built, recorded for the pilot: a read-only administrator page in the
 web service showing the same two views. It needs the web VM's key

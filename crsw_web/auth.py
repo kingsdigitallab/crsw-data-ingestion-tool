@@ -25,7 +25,7 @@ from .config import Settings
 
 @dataclass(frozen=True)
 class User:
-    username: str   # the KCL username, e.g. k1078591 - what the record's
+    username: str   # the KCL username, e.g. k1234567 - what the record's
                     # depositor field holds, so CLI and web deposits agree
     groups: Tuple[str, ...] = ()   # as the proxy reports them; the read
                                    # role's amber rule reads these

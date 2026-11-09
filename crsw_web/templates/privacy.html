@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How this service uses your information · CRSW data deposit</title>
+<link rel="stylesheet" href="/static/deposit.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="wordmark" href="/">CRSW data deposit</a>
+    <nav class="nav">{% if read_enabled %}<a href="/datasets">Find data</a> {% endif %}{% if search_enabled %}<a href="/search">Search by meaning or content</a> {% endif %}<a href="/">Deposit</a></nav>
+    {% set who_verb = "Signed in as" %}{% include "_who.html" %}
+  </div>
+</header>
+
+{#- Keep this page true: it is the notice for every record, label, log
+    and call the service makes about a person (audit of 9 November 2026).
+    A change that stores, logs or sends something new about a user changes
+    this page in the same commit. docs/how-to-deposit.md says the same. -#}
+<main class="page single">
+  <article class="summary privacy">
+    <h1>How this service uses your information</h1>
+
+    <h2>Signing in</h2>
+    <p>KCL sign-in tells this service your KCL username (your k-number) and your name. Your name is shown only to you, at the top of the page, and is never stored. Your email address is not read.</p>
+
+    <h2>When you deposit</h2>
+    <p>Your k-number is recorded as the depositor on every dataset you deposit, in the dataset's record and on each of its files. Other signed-in members see it on <em>Find data</em> and on the dataset's page. It stays for as long as the dataset is held.</p>
+    <p>Anything you type into the form (the description, notes, the creator's name) becomes part of the dataset's record, which signed-in members can read.</p>
+    <p>The checking step that moves a deposit into the store keeps a trail of each deposit, change and removal: who, which dataset and which files. The trail is kept for the life of the CRSW project, then reviewed by the Centre.</p>
+
+    <h2>When you search</h2>
+    <p>On <em>Search by meaning or content</em>, your words, and the descriptions and passages they are matched against, are read by KCL's own AI service to rank the results, and to answer <em>Why this?</em> when you ask. This service does not keep your words.</p>
+
+    <h2>Logs</h2>
+    <p>The service's own logs record the time, the page asked for and whether it worked. They do not record your search words, your file names or your network address, and they are overwritten as they fill. A rare error line names the page that failed.</p>
+    <p>KCL's sign-in service, which every request passes through first, keeps its own logs under KCL's policies.</p>
+
+    <h2>Cookies</h2>
+    <p>One cookie, <code>crsw_per</code>, remembers how many projects to show on a page of <em>Find data</em>. It holds nothing about you.</p>
+
+    <h2>The command-line tool</h2>
+    <p>If you deposit with <code>deposit.py</code> instead, it keeps a log of your own deposits on your own computer (<code>deposits.log</code>), which nobody else sees.</p>
+
+    <h2>Questions, corrections or removal</h2>
+    <p>Ask {{ privacy_contact or "the CRSW Centre team" }}. A dataset is corrected or removed by the Centre, through the checking step, so the trail records that too.</p>
+  </article>
+</main>
+</body>
+</html>

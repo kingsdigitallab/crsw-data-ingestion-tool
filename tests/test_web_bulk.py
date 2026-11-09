@@ -31,7 +31,7 @@ def make_record(files):
     return record.build_record(
         UUID, IDENT, "centre", ["quant"], "cdisaw", "demo", "2_final", "green",
         {"start": "1990", "end": "2020"}, "1-0", "A demo dataset.", ["armed-conflict"],
-        entries, NOW, NOW, depositors=["k1078591"])
+        entries, NOW, NOW, depositors=["k1234567"])
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
@@ -67,9 +67,9 @@ class TestStageDataset(unittest.TestCase):
             Bucket="crsw", Prefix=prefix).get("Contents", []))
 
     def test_stages_members_record_and_complete_control_object(self):
-        out = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+        out = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW)
         dep = out.deposit
-        root = "staging/k1078591/%s/" % dep.id
+        root = "staging/k1234567/%s/" % dep.id
         self.assertEqual(self.keys_under(root), sorted([
             root + CONTROL_NAME,
             root + IDENT + "/dataset.demo.json",
@@ -78,7 +78,7 @@ class TestStageDataset(unittest.TestCase):
         for p, b in self.data.items():
             head = self.s3.head_object(Bucket="crsw", Key=root + IDENT + "/" + p)
             self.assertEqual(head["Metadata"], labels.object_labels(
-                UUID, hashlib.sha256(b).hexdigest(), "green", "k1078591"))
+                UUID, hashlib.sha256(b).hexdigest(), "green", "k1234567"))
         rec_obj = self.s3.get_object(Bucket="crsw", Key=out.record_key)
         body = rec_obj["Body"].read()
         self.assertEqual(rec_obj["Metadata"][labels.CHECKSUM], hashlib.sha256(body).hexdigest())
@@ -95,7 +95,7 @@ class TestStageDataset(unittest.TestCase):
         # promoter/promote.py assembles the record from dep.meta and dep.entries;
         # it must come out as the record that was staged.
         from crsw_deposit import deposit_logic
-        dep = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW).deposit
+        dep = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW).deposit
         rebuilt, _, _, _ = deposit_logic.assemble_record(
             dep.meta, None, dep.entries, dep.user, NOW, dep.dataset_uuid, created=NOW)
         self.assertEqual(rebuilt, self.rec)
@@ -104,18 +104,18 @@ class TestStageDataset(unittest.TestCase):
         files = dict(self.files)
         files.pop("wide/status/demo.json")
         with self.assertRaises(BulkError):
-            stage_dataset(self.store, "k1078591", self.rec, files, NOW)
+            stage_dataset(self.store, "k1234567", self.rec, files, NOW)
         self.assertEqual(self.keys_under("staging/"), [])
 
     def test_size_mismatch_refused(self):
         self.files["wide/events/demo.parquet"].write_bytes(b"different length")
         with self.assertRaises(BulkError):
-            stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+            stage_dataset(self.store, "k1234567", self.rec, self.files, NOW)
 
     def test_a_file_absent_on_disk_is_reported_as_missing_not_a_traceback(self):
         self.files["wide/status/demo.json"].unlink()
         with self.assertRaises(BulkError) as cm:
-            stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+            stage_dataset(self.store, "k1234567", self.rec, self.files, NOW)
         self.assertIn("missing locally ['wide/status/demo.json']", str(cm.exception))
         self.assertEqual(self.keys_under("staging/"), [])
 
@@ -133,15 +133,15 @@ class TestStageDataset(unittest.TestCase):
                                Metadata=ExtraArgs["Metadata"])
         with mock.patch.object(self.s3, "upload_file", side_effect=drop):
             with self.assertRaises(StagingInterrupted) as cm:
-                stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+                stage_dataset(self.store, "k1234567", self.rec, self.files, NOW)
         err = cm.exception
         [dep_id] = [k.split("/")[2] for k in self.keys_under("staging/") if k.endswith(CONTROL_NAME)]
-        self.assertEqual((err.user, err.deposit_id), ("k1078591", dep_id))
+        self.assertEqual((err.user, err.deposit_id), ("k1234567", dep_id))
         self.assertIsInstance(err.cause, ConnectionError)
         self.assertIn("remove --staging %s --confirm %s" % (dep_id, dep_id), str(err))
         self.assertIsInstance(err, BulkError)
         control = json.loads(self.s3.get_object(
-            Bucket="crsw", Key="staging/k1078591/%s/%s" % (dep_id, CONTROL_NAME))["Body"].read())
+            Bucket="crsw", Key="staging/k1234567/%s/%s" % (dep_id, CONTROL_NAME))["Body"].read())
         self.assertNotEqual(control["status"], STATUS_COMPLETE)
 
     def test_ctrl_c_during_an_upload_still_names_the_open_deposit(self):
@@ -149,23 +149,23 @@ class TestStageDataset(unittest.TestCase):
             raise KeyboardInterrupt()
         with mock.patch.object(self.s3, "upload_file", side_effect=interrupt):
             with self.assertRaises(KeyboardInterrupt) as cm:
-                stage_dataset(self.store, "k1078591", self.rec, self.files, NOW)
+                stage_dataset(self.store, "k1234567", self.rec, self.files, NOW)
         [dep_id] = [k.split("/")[2] for k in self.keys_under("staging/") if k.endswith(CONTROL_NAME)]
-        self.assertEqual((cm.exception.user, cm.exception.deposit_id), ("k1078591", dep_id))
+        self.assertEqual((cm.exception.user, cm.exception.deposit_id), ("k1234567", dep_id))
 
     def test_a_dataset_already_complete_in_staging_is_not_staged_twice(self):
-        first = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW).deposit
+        first = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW).deposit
         keys = self.keys_under("staging/")
         for dry_run in (True, False):
             with self.assertRaises(AlreadyStaged) as cm:
-                stage_dataset(self.store, "k1078591", self.rec, self.files, NOW, dry_run=dry_run)
+                stage_dataset(self.store, "k1234567", self.rec, self.files, NOW, dry_run=dry_run)
             self.assertEqual((cm.exception.deposit_id, cm.exception.user, cm.exception.prefix),
-                             (first.id, "k1078591", IDENT))
+                             (first.id, "k1234567", IDENT))
         self.assertEqual(self.keys_under("staging/"), keys)
         # An open (unfinished) one does not count: it is never promoted.
         first.status = "open"
         self.store.save(first)
-        second = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW).deposit
+        second = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW).deposit
         self.assertNotEqual(second.id, first.id)
 
     def test_user_must_be_a_depositor(self):
@@ -173,7 +173,7 @@ class TestStageDataset(unittest.TestCase):
             stage_dataset(self.store, "k0000000", self.rec, self.files, NOW)
 
     def test_dry_run_writes_nothing(self):
-        out = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW, dry_run=True)
+        out = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW, dry_run=True)
         self.assertIsNone(out.deposit)
         self.assertEqual(len(out.members), 2)
         self.assertEqual(out.bytes, sum(len(b) for b in self.data.values()))
@@ -185,15 +185,15 @@ class TestStageDataset(unittest.TestCase):
                            Metadata={"stale": "label"})
         self.s3.put_object(Bucket="crsw", Key="cdisaw-test/wide/status/demo.json",
                            Body=b"wrong size")
-        dry = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW,
+        dry = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW,
                             copy_from="cdisaw-test", dry_run=True)
         self.assertEqual(dry.copied, 1)
-        out = stage_dataset(self.store, "k1078591", self.rec, self.files, NOW,
+        out = stage_dataset(self.store, "k1234567", self.rec, self.files, NOW,
                             copy_from="cdisaw-test")
         actions = {p: a for p, a, _ in out.members}
         self.assertEqual(actions, {"wide/events/demo.parquet": COPIED,
                                    "wide/status/demo.json": UPLOADED})
-        root = "staging/k1078591/%s/%s/" % (out.deposit.id, IDENT)
+        root = "staging/k1234567/%s/%s/" % (out.deposit.id, IDENT)
         head = self.s3.head_object(Bucket="crsw", Key=root + "wide/events/demo.parquet")
         self.assertNotIn("stale", head["Metadata"])
         self.assertEqual(head["Metadata"][labels.DATASET_UUID], UUID)

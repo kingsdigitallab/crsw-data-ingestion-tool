@@ -56,7 +56,7 @@ class TestLookup(ExistingBase):
 
     def test_defaults_include_provider_places_and_notes(self):
         self.put_record("rs2/csac/green/0_raw/acled", dict(META, dataset="acled"),
-                        [record.manifest_entry("a.csv", "d" * 64, 5)], "k1078591",
+                        [record.manifest_entry("a.csv", "d" * 64, 5)], "k1234567",
                         "77777777-7777-4777-8777-777777777777",
                         provider=["acled"], spatial=["m49:419"], spatial_note="admin1",
                         notes="aggregated")
@@ -87,13 +87,13 @@ class TestLookup(ExistingBase):
         store = DepositStore(self.s3, "crsw", "staging/_test")
         body = self.lookup(c, dataset="brand-new")
         self.assertFalse(body["exists"])
-        self.assertEqual([(p["id"], p["user"]) for p in body["pending"]], [(d["id"], "k1078591")])
+        self.assertEqual([(p["id"], p["user"]) for p in body["pending"]], [(d["id"], "k1234567")])
         # Finalised deposits still waiting for the promoter count too; a
         # deposit of another user is shown by its user, as in the audit.
-        dep = store.load("k1078591", d["id"])
+        dep = store.load("k1234567", d["id"])
         dep.user = "k2"
         store.save(dep)
-        self.s3.delete_object(Bucket="crsw", Key=store.control_key("k1078591", d["id"]))
+        self.s3.delete_object(Bucket="crsw", Key=store.control_key("k1234567", d["id"]))
         body = self.lookup(c, dataset="brand-new")
         self.assertEqual([p["user"] for p in body["pending"]], ["k2"])
 
@@ -111,7 +111,7 @@ class TestCreateOnExisting(ExistingBase):
         self.assertEqual(r.status_code, 201, r.text)
         body = r.json()
         self.assertEqual(body["merges_with"], GREEN)
-        dep = DepositStore(self.s3, "crsw", "staging/_test").load("k1078591", body["id"])
+        dep = DepositStore(self.s3, "crsw", "staging/_test").load("k1234567", body["id"])
         self.assertEqual((dep.merges_with, dep.existing_uuid),
                          (GREEN, "11111111-1111-4111-8111-111111111111"))
         # The staged record keeps its own fresh UUID: the promoter keeps
@@ -154,7 +154,7 @@ class TestFinaliseCounts(ExistingBase):
                                                len(same)),
                          record.manifest_entry("changed.txt", "d" * 64, 5),
                          record.manifest_entry("kept.txt", "e" * 64, 5)],
-                        "k1078591", "33333333-3333-4333-8333-333333333333")
+                        "k1234567", "33333333-3333-4333-8333-333333333333")
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
         c = self.app()
         d = c.post("/deposits", json=dict(FORM, dataset="counted", confirm_existing=True)).json()

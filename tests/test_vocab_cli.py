@@ -34,7 +34,7 @@ class TestVocabCli(unittest.TestCase):
         return json.loads(self.file.read_text(encoding="utf-8"))
 
     def common(self):
-        return ["--by", "k1078591", "--date", "2026-10-01", "--note", "issue #1"]
+        return ["--by", "k1234567", "--date", "2026-10-01", "--note", "issue #1"]
 
     def test_validate_bundled(self):
         out = self.run_cli("validate")

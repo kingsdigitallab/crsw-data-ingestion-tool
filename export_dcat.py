@@ -128,13 +128,15 @@ def _activity(act: dict) -> dict:
     return node
 
 
-def dcat_dataset(rec: dict) -> dict:
+def dcat_dataset(rec: dict, include_depositors: bool = False) -> dict:
     """The record as a dcat:Dataset (JSON-LD), terms from the mapping.
     Structured shapes (temporal, the license/rights branch, sensitivity
     value translation, combined identifiers, the provenance join, the
     derived_from references and the PROV activity graph) are keyed by
     field name; everything marked local renders under its mapped
-    crsw:* term."""
+    crsw:* term. The depositors' KCL usernames are left out unless
+    `include_depositors`: a description made for a catalogue outside
+    KCL should not carry them (audit of 9 November 2026)."""
     out = {
         "@context": dict(MAPPING["namespaces"]),
         "@type": "dcat:Dataset",
@@ -157,7 +159,7 @@ def dcat_dataset(rec: dict) -> dict:
         out[DATASET_FIELDS["license"]["term"]] = rec["license"]
     if rec.get("creator"):
         out[DATASET_FIELDS["creator"]["term"]] = rec["creator"]
-    if rec.get("depositors"):
+    if include_depositors and rec.get("depositors"):
         out[DATASET_FIELDS["depositors"]["term"]] = list(rec["depositors"])
     # Acquisition narrative is provenance. NOT dcterms:source, which
     # means derivation - do not blur them (r6 §3.2).
@@ -194,6 +196,9 @@ def main(argv=None) -> int:
     parser.add_argument("record_file", help="path to a dataset.<slug>.json")
     parser.add_argument("-o", "--output", default=None,
                         help="write here instead of stdout")
+    parser.add_argument("--include-depositors", action="store_true",
+                        help="also write the depositors' KCL usernames "
+                             "(dcterms:contributor); left out by default")
     args = parser.parse_args(argv)
 
     try:
@@ -216,7 +221,8 @@ def main(argv=None) -> int:
               "has no standard term)." % ", ".join(gaps), file=sys.stderr)
         return 2
 
-    output = json.dumps(dcat_dataset(rec), indent=2, ensure_ascii=False) + "\n"
+    output = json.dumps(dcat_dataset(rec, include_depositors=args.include_depositors),
+                        indent=2, ensure_ascii=False) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)

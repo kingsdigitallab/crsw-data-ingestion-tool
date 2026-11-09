@@ -64,7 +64,7 @@ class CatalogueBase(unittest.TestCase):
         self.green = self.put_record(
             GREEN, META, [record.manifest_entry("events.csv", "a" * 64, 1200),
                           record.manifest_entry("notes/readme.md", "b" * 64, 40)],
-            "k1078591", "11111111-1111-4111-8111-111111111111",
+            "k1234567", "11111111-1111-4111-8111-111111111111",
             provenance=[{"activity": "clean", "tool": {"name": "clean.py",
                                                        "repo": "https://x.org/r", "commit": "abc1234"}}])
         amber_meta = dict(META, strand="rs1", sensitivity="amber", state="1_interim",
@@ -266,7 +266,7 @@ class TestExploreLink(CatalogueBase):
                     dataset="ucdp-ged-251", subject=["armed-conflict"])
         self.put_record(self.CENTRE, meta, [record.manifest_entry("wide/events/ucdp-ged-251.parquet",
                                                                   "d" * 64, 10)],
-                        "k1078591", "33333333-3333-4333-8333-333333333333")
+                        "k1234567", "33333333-3333-4333-8333-333333333333")
         super().seed()
 
     def test_dataset_page_and_find_row_link_centre_cdisaw_only(self):
@@ -303,7 +303,7 @@ class TestProjectAccordion(CatalogueBase):
             self.put_record(ident, dict(META, strand="rs3", project="proj-%02d" % n, dataset="d",
                                         abstract="Project number %d. " % n * 10),
                             [record.manifest_entry("d.csv", ("%x" % n) * 64, 10)],
-                            "k1078591", "%08d-0000-4000-8000-000000000000" % n,
+                            "k1234567", "%08d-0000-4000-8000-000000000000" % n,
                             modified="2026-08-%02dT00:00:00Z" % (n + 1))
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
 
@@ -390,11 +390,11 @@ class TestHierarchy(CatalogueBase):
         self.put_record(self.WARS, dict(META, state="2_final", dataset="wars",
                                         subject=["interstate-war"]),
                         [record.manifest_entry("wars.csv", "e" * 64, 10)],
-                        "k1078591", "44444444-4444-4444-8444-444444444444")
+                        "k1234567", "44444444-4444-4444-8444-444444444444")
         self.put_record(self.DISP, dict(META, state="2_final", dataset="displaced",
                                         subject=["displacement"]),
                         [record.manifest_entry("d.csv", "f" * 64, 10)],
-                        "k1078591", "55555555-5555-4555-8555-555555555555")
+                        "k1234567", "55555555-5555-4555-8555-555555555555")
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
 
     def ids(self, client, **params):
@@ -456,7 +456,7 @@ class TestHierarchy(CatalogueBase):
         self.put_record("rs2/csac/green/2_final/old", dict(META, state="2_final", dataset="old",
                                                            subject=["zzz-old"]),
                         [record.manifest_entry("o.csv", "9" * 64, 10)],
-                        "k1078591", "66666666-6666-4666-8666-666666666666")
+                        "k1234567", "66666666-6666-4666-8666-666666666666")
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
         html = self.app(vocab=self.vocab).get("/datasets").text
         self.assertIn('<option value="zzz-old">zzz-old (zzz-old)</option>', html)
@@ -673,16 +673,16 @@ class TestPlaces(CatalogueBase):
         super().seed()
         self.put_record(self.LATAM, dict(META, state="2_final", dataset="latam"),
                         [record.manifest_entry("l.csv", "1" * 64, 10)],
-                        "k1078591", "77777777-7777-4777-8777-777777777777",
+                        "k1234567", "77777777-7777-4777-8777-777777777777",
                         provider=["acled"], spatial=["m49:419"],
                         spatial_note="50 countries, admin1 level", notes="Weekly aggregates.")
         self.put_record(self.COLOMBIA, dict(META, state="2_final", dataset="colombia"),
                         [record.manifest_entry("c.csv", "2" * 64, 10)],
-                        "k1078591", "88888888-8888-4888-8888-888888888888",
+                        "k1234567", "88888888-8888-4888-8888-888888888888",
                         spatial=["iso:CO"])
         self.put_record(self.THAI, dict(META, state="2_final", dataset="thai"),
                         [record.manifest_entry("t.csv", "3" * 64, 10)],
-                        "k1078591", "99999999-9999-4999-8999-999999999999",
+                        "k1234567", "99999999-9999-4999-8999-999999999999",
                         spatial=["iso:TH", "iso:AU"])
         index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
 

@@ -96,6 +96,11 @@ def create_app(settings: Optional[Settings] = None,
                places_dict: Optional[Dict] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     current_user = make_authenticator(settings)
+    if settings.debug_headers:
+        # A warning reaches the container log (INFO does not), so a flag
+        # left on after the first deploy is seen at every restart.
+        log.warning("CRSW_DEBUG_HEADERS=1: /auth/headers is open and echoes request "
+                    "headers; set it to 0 once the identity header is known")
     client = s3_client or s3.make_client(settings)
     if vocab_dict is None:
         # fetch -> cache -> bundled. The cache write is best-effort, so a
@@ -896,28 +901,41 @@ def create_app(settings: Optional[Settings] = None,
         return {"username": user.username, "name": user.display_name,
                 "auth_mode": settings.auth_mode}
 
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy(request: Request, user: User = Depends(current_user)):
+        """What the service records about a person, and for how long:
+        the notice the audit of 9 November 2026 asked for."""
+        return templates.TemplateResponse(request, "privacy.html", {
+            "user": user, "read_enabled": read_enabled,
+            "privacy_contact": settings.privacy_contact,
+        })
+
     @app.get("/auth/headers")
     def auth_headers(request: Request):
         """First-deploy diagnostic: what does the KCL proxy send us? Only
         exists while CRSW_DEBUG_HEADERS=1; read it once, set
-        CRSW_PROXY_USER_HEADER, then unset the flag."""
+        CRSW_PROXY_USER_HEADER, then unset the flag. An address header
+        is shown as present, not by value: the service never reads it."""
         if not settings.debug_headers:
             raise HTTPException(status_code=404, detail="Not Found")
         hidden = {"cookie", "authorization", "proxy-authorization"}
         return {"peer": peer_address(request),
-                "headers": {k: v for k, v in request.headers.items()
+                "headers": {k: ("(present, %d characters)" % len(v) if "mail" in k.lower() else v)
+                            for k, v in request.headers.items()
                             if k.lower() not in hidden}}
 
     @app.get("/connectivity")
     def connectivity(user: User = Depends(current_user)):
+        # The caller's own staging only, as the quota counts it: a key
+        # under staging/ names its depositor and their files.
+        own = "%s/%s" % (settings.staging_prefix, user.username)
         try:
-            sample = s3.list_prefix(client, settings.s3_bucket,
-                                    settings.staging_prefix,
+            sample = s3.list_prefix(client, settings.s3_bucket, own,
                                     limit=CONNECTIVITY_SAMPLE)
         except Exception as exc:
             raise storage_error(exc)
         return {"endpoint": settings.s3_endpoint, "bucket": settings.s3_bucket,
-                "prefix": settings.staging_prefix + "/", "sample": sample,
+                "prefix": own + "/", "sample": sample,
                 "sample_limit": CONNECTIVITY_SAMPLE, "checked_by": user.username}
 
     @app.get("/vocabulary")

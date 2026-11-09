@@ -31,7 +31,7 @@ FORM = {
     "source_type": "archive", "source_detail": "The National Archives, CO 123",
     "creator": "Neil",
 }
-ROOT = "staging/_test/k1078591"
+ROOT = "staging/_test/k1234567"
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
@@ -105,7 +105,7 @@ class TestDepositFlow(unittest.TestCase):
         self.assertEqual(head["Metadata"], {
             "dataset-uuid": d["dataset_uuid"],
             "checksum-sha256": body["checksum_sha256"],
-            "sensitivity": "green", "depositor": "k1078591"})
+            "sensitivity": "green", "depositor": "k1234567"})
         state = self.client.get("/deposits/%s" % d["id"]).json()
         self.assertEqual([e["path"] for e in state["entries"]], ["one.csv"])
 
@@ -262,13 +262,13 @@ class TestDepositFlow(unittest.TestCase):
         # Byte-for-byte what deposit_logic produces for the same inputs.
         state = self.client.get("/deposits/%s" % d["id"]).json()
         expected, _, _, _ = deposit_logic.assemble_record(
-            state["meta"], None, state["entries"], "k1078591",
+            state["meta"], None, state["entries"], "k1234567",
             rec["modified"], d["dataset_uuid"])
         self.assertEqual(data, deposit_logic.record_bytes(expected))
         self.assertNotIn(b"\r", data)
         self.assertEqual([e["path"] for e in rec["files"]],
                          ["one.csv", "sub/readme.md"])
-        self.assertEqual(rec["depositors"], ["k1078591"])
+        self.assertEqual(rec["depositors"], ["k1234567"])
         self.assertEqual(rec["identifier"], "rs2/csac/green/0_raw/poc-test")
 
         head = self.head(out["record_key"])

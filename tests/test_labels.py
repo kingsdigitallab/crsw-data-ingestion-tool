@@ -5,13 +5,13 @@ from crsw_deposit import labels
 
 class TestObjectLabels(unittest.TestCase):
     def test_four_labels_in_fixed_order(self):
-        out = labels.object_labels("u", "c" * 64, "green", "k1078591")
+        out = labels.object_labels("u", "c" * 64, "green", "k1234567")
         self.assertEqual(list(out.keys()), list(labels.LABEL_NAMES))
         self.assertEqual(out, {
             "dataset-uuid": "u",
             "checksum-sha256": "c" * 64,
             "sensitivity": "green",
-            "depositor": "k1078591",
+            "depositor": "k1234567",
         })
 
     def test_names_are_the_r5_set(self):
