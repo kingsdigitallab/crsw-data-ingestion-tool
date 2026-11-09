@@ -927,7 +927,7 @@ class TestRecategorise(PromoterBase):
     def test_manual_recategorise_writes_marker(self):
         doc = self.evolved()
         self.place("one", ["debt-bondage"])
-        code, lines = self.run_cli("recategorise", doc, "--by", "k1078591")
+        code, lines = self.run_cli("recategorise", doc, "--by", "k1234567")
         self.assertEqual(code, 0, lines)
         self.assertEqual(self.marker()["vocabulary_version"], doc["vocabulary_version"])
         self.assertEqual(len(self.actions(lines, "vocabulary_replayed")), 1)
@@ -943,14 +943,14 @@ class TestRecategorise(PromoterBase):
         self.assertEqual(code, 0)
         self.assertIsNone(self.marker())
         code, _ = self.run_cli("recategorise", doc, "--dataset",
-                               "rs2/csac/green/2_final/one", "--by", "k1078591")
+                               "rs2/csac/green/2_final/one", "--by", "k1234567")
         self.assertEqual(code, 0)
         self.assertIsNone(self.marker())
 
     def test_recategorise_from_a_stale_source_writes_no_marker(self):
         doc = self.evolved()
         self.place("one", ["debt-bondage"])
-        code, _ = self.run_cli("recategorise", doc, "--by", "k1078591", source="cache")
+        code, _ = self.run_cli("recategorise", doc, "--by", "k1234567", source="cache")
         self.assertEqual(code, 0)
         self.assertIsNone(self.marker())
 
