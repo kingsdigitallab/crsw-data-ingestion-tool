@@ -54,22 +54,24 @@ class TestSkeleton(unittest.TestCase):
 
     def test_whoami_is_placeholder_user(self):
         self.assertEqual(self.client.get("/whoami").json(),
-                         {"username": "k1078591", "name": "", "auth_mode": "placeholder"})
+                         {"username": "k1234567", "name": "", "auth_mode": "placeholder"})
 
     def test_connectivity_empty_prefix_is_a_pass(self):
         r = self.client.get("/connectivity")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["sample"], [])
-        self.assertEqual(body["prefix"], "staging/_test/")
-        self.assertEqual(body["checked_by"], "k1078591")
+        self.assertEqual(body["prefix"], "staging/_test/k1234567/")
+        self.assertEqual(body["checked_by"], "k1234567")
 
-    def test_connectivity_lists_only_the_staging_prefix(self):
-        self.s3.put_object(Bucket="crsw", Key="staging/_test/a.txt", Body=b"x")
-        self.s3.put_object(Bucket="crsw", Key="staging/other/b.txt", Body=b"x")
+    def test_connectivity_lists_only_the_callers_own_staging(self):
+        # Another depositor's key names them and their files: never listed.
+        self.s3.put_object(Bucket="crsw", Key="staging/_test/k1234567/d1/a.txt", Body=b"x")
+        self.s3.put_object(Bucket="crsw", Key="staging/_test/k7654321/d2/b.txt", Body=b"x")
+        self.s3.put_object(Bucket="crsw", Key="staging/_test/c.txt", Body=b"x")
         self.s3.put_object(Bucket="crsw", Key="rs2/csac/c.txt", Body=b"x")
         body = self.client.get("/connectivity").json()
-        self.assertEqual(body["sample"], ["staging/_test/a.txt"])
+        self.assertEqual(body["sample"], ["staging/_test/k1234567/d1/a.txt"])
 
     def test_missing_bucket_is_translated_not_500(self):
         settings = Settings(**dict(SETTINGS, s3_bucket="nope"))

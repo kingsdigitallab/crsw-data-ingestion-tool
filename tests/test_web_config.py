@@ -30,11 +30,16 @@ class TestSettings(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Settings.from_env(dict(GOOD, CRSW_SEARCH_WEAK_BAND="-0.1"))
 
+    def test_privacy_contact_is_a_setting_blank_by_default(self):
+        self.assertEqual(Settings.from_env(GOOD).privacy_contact, "")
+        s = Settings.from_env(dict(GOOD, CRSW_PRIVACY_CONTACT="  the CRSW\n data steward "))
+        self.assertEqual(s.privacy_contact, "the CRSW data steward")
+
     def test_good_env(self):
         s = Settings.from_env(GOOD)
         self.assertEqual(s.staging_prefix, "staging/_test")  # slash stripped
         self.assertEqual(s.auth_mode, "placeholder")
-        self.assertEqual(s.dev_user, "k1078591")
+        self.assertEqual(s.dev_user, "k1234567")
         self.assertEqual(s.proxy_name_header, "")    # blank = the k-number only
 
     def test_proxy_name_header(self):

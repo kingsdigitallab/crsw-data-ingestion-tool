@@ -35,6 +35,9 @@ code { font-family: var(--mono); font-size: .92em; }
 .wordmark { font-family: var(--serif); font-size: 1.15rem; text-decoration: none; color: var(--ink); }
 .who { color: var(--muted); font-size: .95rem; }
 .release { color: var(--muted); font-size: .8rem; font-family: var(--mono, monospace); margin-left: .75rem; }
+.privacy-link { color: var(--muted); font-size: .85rem; }
+.summary.privacy h2 { font-family: var(--serif); font-size: 1.1rem; margin: 1.5rem 0 .4rem; }
+.summary.privacy p { max-width: 68ch; }
 .nav { margin-left: auto; margin-right: 1.5rem; display: flex; gap: 1rem; font-size: .95rem; }
 .nav a[aria-current] { color: var(--ink); text-decoration: none; font-weight: 600; }
 .page.single.wide { grid-template-columns: minmax(0, 1120px); }

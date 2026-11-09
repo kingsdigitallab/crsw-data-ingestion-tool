@@ -54,7 +54,7 @@ class TestForm(unittest.TestCase):
         self.assertNotIn('value="centre"', html)          # r12: curated, not deposited
         self.assertIn("Kevin Fahey", html)                 # steward on the domain option
         self.assertIn('value="forced-labour"', html)       # a subject checkbox
-        self.assertIn("Depositing as <strong>k1078591", html)
+        self.assertIn("Depositing as <strong>k1234567", html)
         self.assertIn("/static/deposit.js", html)
 
     def test_form_offers_providers_places_and_the_r11_fields(self):
@@ -209,6 +209,29 @@ class TestForm(unittest.TestCase):
     def test_static_served(self):
         self.assertEqual(self.client.get("/static/deposit.css").status_code, 200)
         self.assertEqual(self.client.get("/static/deposit.js").status_code, 200)
+
+    def test_privacy_page_says_what_is_recorded(self):
+        # The notice from the audit of 9 November 2026.
+        r = self.client.get("/privacy")
+        self.assertEqual(r.status_code, 200)
+        for said in ("recorded as the depositor", "life of the CRSW project",
+                     "KCL's own AI service", "does not keep your words",
+                     "do not record your search words", "crsw_per", "deposits.log",
+                     "the CRSW Centre team"):
+            self.assertIn(said, r.text)
+
+    def test_privacy_page_names_the_contact_when_set(self):
+        client = TestClient(create_app(
+            Settings(**dict(SETTINGS, privacy_contact="the CRSW data steward")),
+            s3_client=self.s3, vocab_dict=VOCAB))
+        text = client.get("/privacy").text
+        self.assertIn("Ask the CRSW data steward.", text)
+        self.assertNotIn("the CRSW Centre team", text)
+
+    def test_privacy_link_on_the_form(self):
+        html = self.client.get("/").text
+        self.assertIn('href="/privacy">Your information</a>', html)   # masthead
+        self.assertIn("recorded on the dataset and shown to members", html)  # depositor
 
     def test_summary_page_after_a_deposit(self):
         d = self.client.post("/deposits", json=FORM).json()

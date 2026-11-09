@@ -25,7 +25,11 @@ RUN pip install --no-cache-dir ".[web]"
 USER app
 EXPOSE 8000
 # No temp dirs, no volumes: request bodies stream through to Ceph.
+# --no-access-log: uvicorn's access line would carry the browser's address
+# (from X-Forwarded-For) and the query string, so a search's words. The
+# nginx sidecar writes the one access line, without either (nginx.conf).
 CMD ["uvicorn", "--factory", "crsw_web.app:create_app", \
      "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", \
      "--forwarded-allow-ips", "*", "--workers", "2", \
-     "--limit-concurrency", "64", "--timeout-keep-alive", "5"]
+     "--limit-concurrency", "64", "--timeout-keep-alive", "5", \
+     "--no-access-log"]

@@ -58,12 +58,12 @@ class TestDatasetUuid(unittest.TestCase):
 class TestAssembleRecord(unittest.TestCase):
     def test_first_deposit(self):
         rec, union, added, updated = deposit_logic.assemble_record(
-            META, None, [entry("a.csv")], "k1078591", NOW, UUID)
+            META, None, [entry("a.csv")], "k1234567", NOW, UUID)
         self.assertEqual(rec["dataset_uuid"], UUID)
         self.assertEqual(rec["identifier"], "rs2/csac/green/2_final/poc")
         self.assertEqual(rec["created"], NOW)
         self.assertEqual(rec["modified"], NOW)
-        self.assertEqual(rec["depositors"], ["k1078591"])
+        self.assertEqual(rec["depositors"], ["k1234567"])
         self.assertEqual(rec["temporal"], {"start": "2020", "end": "2021"})
         self.assertEqual([e["path"] for e in union], ["a.csv"])
         self.assertEqual(added, ["a.csv"])
@@ -80,10 +80,10 @@ class TestAssembleRecord(unittest.TestCase):
         }
         rec, union, added, updated = deposit_logic.assemble_record(
             META, existing, [entry("a.csv"), entry("c.csv")],
-            "k1078591", LATER, UUID)
+            "k1234567", LATER, UUID)
         self.assertEqual(rec["created"], NOW)
         self.assertEqual(rec["modified"], LATER)
-        self.assertEqual(rec["depositors"], ["alice", "k1078591"])
+        self.assertEqual(rec["depositors"], ["alice", "k1234567"])
         # Old envelope kept containment: 2019 < meta's 2020.
         self.assertEqual(rec["temporal"], {"start": "2019", "end": "2021"})
         self.assertEqual([e["path"] for e in union], ["a.csv", "c.csv"])

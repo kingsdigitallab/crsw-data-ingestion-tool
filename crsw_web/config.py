@@ -39,7 +39,7 @@ class Settings:
     s3_bucket: str
     staging_prefix: str          # no trailing slash, e.g. "staging/_test"
     auth_mode: str = "placeholder"
-    dev_user: str = "k1078591"   # placeholder-mode identity
+    dev_user: str = "k1234567"   # placeholder-mode identity
     max_body_bytes: int = 5 * 1024 ** 3
     # proxy mode
     proxy_user_header: str = ""            # x-webauth-user since Oct 2026 (/auth/headers)
@@ -104,6 +104,10 @@ class Settings:
     # r12: the (CD)ISaW explorer, linked from centre/cdisaw datasets on
     # the dataset page and the Find data row; blank = no link.
     cdisaw_url: str = ""
+    # Who to ask about what the service records, named on /privacy (a
+    # name, a team or an address; set on the VM, never in the repo).
+    # Blank = the page says "the CRSW Centre team".
+    privacy_contact: str = ""
 
     @property
     def read_enabled(self) -> bool:
@@ -230,7 +234,7 @@ class Settings:
             staging_prefix=prefix,
             auth_mode=auth_mode,
             vocab_refresh_seconds=opt_int("VOCAB_REFRESH_SECONDS", 600),
-            dev_user=get("DEV_USER", "k1078591"),
+            dev_user=get("DEV_USER", "k1234567"),
             max_body_bytes=opt_int("MAX_BODY_BYTES", cls.max_body_bytes),
             proxy_user_header=user_header,
             proxy_name_header=get("PROXY_NAME_HEADER"),
@@ -263,6 +267,7 @@ class Settings:
             search_weak_band=opt_float("SEARCH_WEAK_BAND", cls.search_weak_band),
             search_weak_floor=opt_float("SEARCH_WEAK_FLOOR", cls.search_weak_floor),
             cdisaw_url=get("CDISAW_URL").rstrip("/"),
+            privacy_contact=" ".join(get("PRIVACY_CONTACT").split()),
         )
 
 

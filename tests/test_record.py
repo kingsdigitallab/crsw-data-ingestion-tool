@@ -671,7 +671,7 @@ class TestActivities(unittest.TestCase):
                         "command": "cdisaw-parquet sweep --source cdb90"},
                "inputs": [{"kind": "external", "url": "https://github.com/jrnold/CDB90"}],
                "outputs": ["wide/events/cdb90.parquet", "crws/events/cdb90.parquet"],
-               "agent": "k1078591",
+               "agent": "k1234567",
                "started": "2026-09-17T08:40:00Z", "ended": "2026-09-17T08:59:10Z"}
         act.update(overrides)
         return act
@@ -791,7 +791,7 @@ class TestCategoryHistory(unittest.TestCase):
         out, entries = record.apply_dataset_change(
             r, {"add": ["prevalence"], "remove": ["survey"], "set_domain": "geo",
                 "reason": "steward review"},
-            "k1078591", self.NOW, vocab_terms, ["quant", "geo"],
+            "k1234567", self.NOW, vocab_terms, ["quant", "geo"],
             vocabulary_version="2026-10-01")
         self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
         self.assertEqual(out["domain"], ["geo"])
@@ -799,7 +799,7 @@ class TestCategoryHistory(unittest.TestCase):
         self.assertEqual(out["vocabulary_version"], "2026-10-01")
         self.assertEqual([e["kind"] for e in entries],
                          ["removed", "added", "domain_changed"])
-        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1078591",
+        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1234567",
                                       "kind": "removed", "from": ["survey"],
                                       "reason": "steward review",
                                       "vocabulary_version": "2026-10-01"})
@@ -915,7 +915,7 @@ class TestCategoryHistory(unittest.TestCase):
                           "ethics_ref": None},
                   "reason": "licence corrected after review"}
         out, entries = record.apply_dataset_change(
-            r, change, "k1078591", self.NOW, vocab_terms, ["quant", "geo"],
+            r, change, "k1234567", self.NOW, vocab_terms, ["quant", "geo"],
             vocabulary_version="2026-10-01")
         self.assertEqual(out["license"], "Third-party terms; not for redistribution")
         self.assertEqual(out["notes"], "ICC Legal Tools and UN ODS documents")
@@ -925,7 +925,7 @@ class TestCategoryHistory(unittest.TestCase):
         # One entry per field, in record field order, whatever order the
         # change file used; ethics_ref was absent so clearing it is a no-op.
         self.assertEqual([e["field"] for e in entries], ["license", "language", "notes"])
-        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1078591",
+        self.assertEqual(entries[0], {"when": self.NOW, "by": "k1234567",
                                       "kind": "field_set", "field": "license",
                                       "from": ["CC-BY-4.0"],
                                       "to": ["Third-party terms; not for redistribution"],

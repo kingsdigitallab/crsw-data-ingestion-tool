@@ -33,6 +33,20 @@ Your deposit lands in a holding area first. Within about five minutes an automat
 
 Choose **Find data** in the top bar. Datasets are listed under their projects, newest first: click a project to see what is in it, with each dataset's state, files and size. Ten projects fit on a page; **Show 25** or **50** at the foot of the list changes that, and the page remembers your choice. Search by a word from the name or description, or filter by strand, subject, place or whether the data is green or amber; the projects that match open by themselves. Where **Search by meaning or content** appears in the top bar, you can also search by what a dataset is about or what its documents say: type a phrase or a question in your own words and you get, first, the datasets whose descriptions come closest, then the passages from inside their documents that come closest, each with its dataset, its file and, for PDFs, its page. In each the sentence nearest to your question is marked and your own words are in bold, and "Why this?" asks for one sentence on the connection. Your words, the descriptions and those passages are read by KCL's own AI service. You only ever see passages from files you would be allowed to download, and a dataset whose description has not yet been read that way is still found on Find data by its words. Open a dataset to read its description, see what it was made from and what has been made from it, and download any file. A large download that is interrupted can be resumed. Amber data is listed for everyone; whether you can download it depends on the Centre's rule, and the page tells you who to ask.
 
+## What is recorded about you
+
+**Your information** at the top of every page says the same as this section.
+
+- **Signing in.** KCL sign-in tells the service your KCL username (your k-number) and your name. Your name is shown only to you and is never stored; your email address is not read.
+- **Depositing.** Your k-number is recorded as the depositor on every dataset you deposit, in its record and on each of its files, and other signed-in members see it on Find data and on the dataset's page. It stays as long as the dataset is held. What you type into the form becomes part of the record, which members can read.
+- **The trail.** The automatic check keeps a trail of each deposit, change and removal (who, which dataset, which files), kept for the life of the CRSW project and then reviewed by the Centre.
+- **Searching.** Your words go to KCL's own AI service to rank the results; the service does not keep them.
+- **Logs.** The service's logs record the time, the page asked for and whether it worked, never your search words, file names or network address, and they are overwritten as they fill. KCL's sign-in service keeps its own logs under KCL's policies.
+- **Cookies.** One, which remembers how many projects to show on a page.
+- **The command-line tool.** If you deposit with `deposit.py` instead, it keeps a log of your own deposits (`deposits.log`) on your own computer.
+
+To have something corrected or removed, ask your data steward; the Centre does it through the automatic check, so the trail records it too.
+
 ## If something goes wrong
 
 The form points at the box that needs changing and says why. If a deposit has not appeared under Find data after ten minutes, contact your data steward and quote the deposit number from the Deposited page.

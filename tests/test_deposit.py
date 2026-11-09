@@ -788,8 +788,8 @@ class TestMessageQuality(unittest.TestCase):
 
     def test_write_denied_formats_target(self):
         msg = deposit.MESSAGES["write_denied"].format(
-            target="k1078591:crsw/rs2/x/green/0_raw/")
-        self.assertIn("k1078591:crsw/rs2/x/green/0_raw/", msg)
+            target="k1234567:crsw/rs2/x/green/0_raw/")
+        self.assertIn("k1234567:crsw/rs2/x/green/0_raw/", msg)
 
     def test_permission_names_no_specific_strand(self):
         # The old canned "an RS2 credential cannot write to rs3/" example

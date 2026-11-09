@@ -182,8 +182,8 @@ class TestRefusals(RemoveBase):
         prefix, _ = self.place("promo", UUID_A)
         before = self.versions(prefix)
         code, lines = self.cli(["remove", "--dataset", prefix, "--confirm", prefix,
-                                "--by", "k1078591"],
-                               env={"PROMOTER_AUTHORISED": '{"k1078591": ["rs1"]}'})
+                                "--by", "k1234567"],
+                               env={"PROMOTER_AUTHORISED": '{"k1234567": ["rs1"]}'})
         self.assertEqual(code, 1)
         [refused] = self.only(lines, "remove_refused")
         self.assertIn("PROMOTER_AUTHORISED", refused["problems"][0])
@@ -434,17 +434,17 @@ class TestStaging(RemoveBase):
     def test_an_open_deposit_is_removed_control_object_last(self):
         dep = self.stage(finalise=False)
         other = self.stage(finalise=False, dataset="promo-b")
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         before = self.versions(root)
         keys_before = sorted({k for k, _ in before})
         self.assertEqual(len(keys_before), 3)      # one.csv, sub/r.md, _deposit.json
-        other_before = self.versions(self.store.root("k1078591", other.id))
+        other_before = self.versions(self.store.root("k1234567", other.id))
 
         code, lines = self.cli(["remove", "--staging", dep.id])
         self.assertEqual(code, 0, lines)
         [plan] = self.only(lines, "would_remove_staging")
         self.assertEqual((plan["deposit"], plan["user"], plan["objects"], plan["versions"]),
-                         (dep.id, "k1078591", 3, len(before)))
+                         (dep.id, "k1234567", 3, len(before)))
         self.assertEqual(self.versions(root), before)
 
         calls = self.record_calls()
@@ -453,15 +453,15 @@ class TestStaging(RemoveBase):
         self.assertEqual(code, 0, lines)
         [done] = self.only(lines, "staging_removed")
         self.assertEqual((done["deposit"], done["user"], done["versions"], done["by"]),
-                         (dep.id, "k1078591", len(before), "tester"))
+                         (dep.id, "k1234567", len(before), "tester"))
         self.assertEqual(self.versions(root), [])
-        self.assertEqual(self.versions(self.store.root("k1078591", other.id)), other_before)
-        self.assertEqual(set(calls[-1]), {self.store.control_key("k1078591", dep.id)})
+        self.assertEqual(self.versions(self.store.root("k1234567", other.id)), other_before)
+        self.assertEqual(set(calls[-1]), {self.store.control_key("k1234567", dep.id)})
         self.assertEqual(self.only(lines, "index_written"), [])
 
     def test_a_finished_deposit_that_passes_its_checks_is_refused(self):
         dep = self.stage()
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         before = self.versions(root)
         code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id])
         self.assertEqual(code, 1)
@@ -474,8 +474,8 @@ class TestStaging(RemoveBase):
         # r12: a stale copy of the same size is refused by the re-hash; without
         # this it would sit in staging, re-checked and refused on every run.
         dep = self.stage()
-        root = self.store.root("k1078591", dep.id)
-        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        root = self.store.root("k1234567", dep.id)
+        member = self.store.staged_key("k1234567", dep.id, dep.prefix + "/one.csv")
         labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
         self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n",   # same size, other bytes
                            Metadata=labels)
@@ -494,7 +494,7 @@ class TestStaging(RemoveBase):
         # record's provider would all refuse a deposit that promotes once the
         # VM is set right: removal is for the deposit's own content only.
         dep = self.stage()
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         before = self.versions(root)
         for env in ({"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'},
                     {"PROMOTER_MAX_OBJECT_BYTES": "3"}):
@@ -505,7 +505,7 @@ class TestStaging(RemoveBase):
             self.assertIn("Refused because:", refused["problems"][0])
             self.assertEqual(self.versions(root), before)
         # Both at once: the content problem does not outweigh the configuration one.
-        member = self.store.staged_key("k1078591", dep.id, dep.prefix + "/one.csv")
+        member = self.store.staged_key("k1234567", dep.id, dep.prefix + "/one.csv")
         labels = self.s3.head_object(Bucket="crsw", Key=member)["Metadata"]
         self.s3.put_object(Bucket="crsw", Key=member, Body=b"x,y\n9,9\n", Metadata=labels)
         code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id],
@@ -520,7 +520,7 @@ class TestStaging(RemoveBase):
         dep = self.stage()
         dep.status = "open"
         self.store.save(dep)
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
         self.assertEqual(code, 0, lines)
         [done] = self.only(lines, "staging_removed")
@@ -529,7 +529,7 @@ class TestStaging(RemoveBase):
 
     def test_a_finished_deposit_whose_record_object_is_gone_can_be_removed(self):
         dep = self.stage()
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         self.s3.delete_object(Bucket="crsw", Key=dep.record_key)
         code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id, "--by", "tester"])
         self.assertEqual(code, 0, lines)
@@ -545,7 +545,7 @@ class TestStaging(RemoveBase):
 
     def test_confirm_applies_to_staging_too(self):
         dep = self.stage(finalise=False)
-        root = self.store.root("k1078591", dep.id)
+        root = self.store.root("k1234567", dep.id)
         before = self.versions(root)
         code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", "other"])
         self.assertEqual(code, 2)

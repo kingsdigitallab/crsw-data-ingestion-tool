@@ -279,7 +279,9 @@ manifest, a record may carry:
 
 `export_dcat.py` renders a record as a DCAT dataset description with the
 derivation and activities expressed in W3C PROV terms, using
-`crsw-dc-mapping.json` as the single source of every term.
+`crsw-dc-mapping.json` as the single source of every term. The
+depositors' KCL usernames are left out unless `--include-depositors` is
+given, so a description sent to a catalogue outside KCL does not carry them.
 
 ## Deposit log
 

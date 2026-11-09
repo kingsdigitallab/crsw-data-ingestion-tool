@@ -73,7 +73,7 @@ class PromoterBase(unittest.TestCase):
         if finalise:
             r = self.web.post("/deposits/%s/finalise" % d["id"])
             assert r.status_code == 200, r.text
-        return self.store.load("k1078591", d["id"])
+        return self.store.load("k1234567", d["id"])
 
     def keys_under(self, prefix):
         r = self.s3.list_objects_v2(Bucket="crsw", Prefix=prefix)
@@ -128,7 +128,7 @@ class TestChecks(PromoterBase):
 
     def test_authorisation(self):
         dep = self.stage()
-        cfg = PromoterConfig(**dict(CFG, authorised={"k1078591": ["rs1"]}))
+        cfg = PromoterConfig(**dict(CFG, authorised={"k1234567": ["rs1"]}))
         rep = check(dep, self.store, cfg, TERMS, CODES)
         self.assertTrue(any("not authorised" in p for p in rep.problems))
         cfg = PromoterConfig(**dict(CFG, authorised={"*": ["rs2"]}))
@@ -166,7 +166,7 @@ class TestPromote(PromoterBase):
             DEST + "/dataset.promo.json", DEST + "/one.csv", DEST + "/sub/r.md"])
         head = self.s3.head_object(Bucket="crsw", Key=DEST + "/one.csv")
         self.assertEqual(head["Metadata"], labels_mod.object_labels(
-            dep.dataset_uuid, hashlib.sha256(b"a,b\n1,2\n").hexdigest(), "green", "k1078591"))
+            dep.dataset_uuid, hashlib.sha256(b"a,b\n1,2\n").hexdigest(), "green", "k1234567"))
         rec = record.parse_record(self.s3.get_object(
             Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode())
         self.assertEqual(rec["dataset_uuid"], dep.dataset_uuid)
@@ -197,7 +197,7 @@ class TestPromote(PromoterBase):
             Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode())
         self.assertEqual(rec["dataset_uuid"], old_uuid)
         self.assertEqual(rec["created"], "2026-01-01T00:00:00Z")
-        self.assertEqual(rec["depositors"], ["alice", "k1078591"])
+        self.assertEqual(rec["depositors"], ["alice", "k1234567"])
         self.assertEqual(rec["temporal"]["start"], "2018")
         self.assertEqual([e["path"] for e in rec["files"]], ["old.csv", "one.csv", "sub/r.md"])
         # Copied objects carry the KEPT uuid.
@@ -314,7 +314,7 @@ class TestResolveReferences(PromoterBase):
         self.assertEqual(staged["derived_from"], rec["derived_from"])
         head = self.s3.head_object(Bucket="crsw", Key=dep.record_key)
         self.assertEqual(head["Metadata"]["dataset-uuid"], dep.dataset_uuid)
-        self.assertEqual(head["Metadata"]["depositor"], "k1078591")
+        self.assertEqual(head["Metadata"]["depositor"], "k1234567")
 
     def test_missing_parent_is_a_warning_and_the_deposit_still_promotes(self):
         dep = self.stage(derived_from=self.PARENT)
@@ -406,8 +406,8 @@ class TestIndex(PromoterBase):
         self.assertEqual([r["identifier"] for r in rows], [parent, DEST])
         promo = rows[1]
         self.assertEqual(promo["dataset"], "promo")
-        self.assertEqual(promo["depositor"], "k1078591")
-        self.assertEqual(promo["depositors"], ["k1078591"])
+        self.assertEqual(promo["depositor"], "k1234567")
+        self.assertEqual(promo["depositors"], ["k1234567"])
         self.assertEqual(promo["subject"], FORM["subject"])
         self.assertEqual((promo["temporal_start"], promo["temporal_end"]), ("2020", "2021"))
         self.assertEqual((promo["files"], promo["bytes"]), (2, 11))
@@ -532,8 +532,8 @@ class TestRun(PromoterBase):
         fin = finish(lines)
         self.assertEqual((fin["promoted"], fin["refused_or_failed"]), (1, 1))
         self.assertEqual(len(self.keys_under(DEST + "/")), 3)
-        self.assertEqual(self.keys_under("staging/_test/k1078591/%s/" % good.id), [])
-        self.assertEqual(len(self.keys_under("staging/_test/k1078591/%s/" % bad.id)), 3)
+        self.assertEqual(self.keys_under("staging/_test/k1234567/%s/" % good.id), [])
+        self.assertEqual(len(self.keys_under("staging/_test/k1234567/%s/" % bad.id)), 3)
         # Second run: the bad one is refused again, nothing else to do.
         code, lines = self.run_cli()
         self.assertEqual(finish(lines)["promoted"], 0)
@@ -545,7 +545,7 @@ class TestRun(PromoterBase):
         code, lines = self.run_cli("--deposit", b.id)
         self.assertEqual(code, 0)
         self.assertEqual(finish(lines)["seen"], 1)
-        self.assertEqual(len(self.keys_under("staging/_test/k1078591/%s/" % a.id)), 4)
+        self.assertEqual(len(self.keys_under("staging/_test/k1234567/%s/" % a.id)), 4)
 
     def test_config_error_exit_2(self):
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch("builtins.print"):
@@ -608,7 +608,7 @@ class TestRecategorise(PromoterBase):
         self.s3.put_object(Bucket="crsw", Key=key, Body=data,
                            Metadata=labels_mod.object_labels(
                                rec["dataset_uuid"], hashlib.sha256(data).hexdigest(),
-                               "green", "k1078591"))
+                               "green", "k1234567"))
         return key, data, rec
 
     def read(self, key):
@@ -978,7 +978,7 @@ class TestRecategorise(PromoterBase):
         k1, d1, _ = self.place("one", ["debt-bondage", "armed-conflict"])
         k2, d2, _ = self.place("two", ["forced-labour", "debt-bondage"])
         k3, d3, _ = self.place("three", ["armed-conflict"])
-        code, lines = self.run_cli("recategorise", self.evolved(), "--by", "k1078591")
+        code, lines = self.run_cli("recategorise", self.evolved(), "--by", "k1234567")
         self.assertEqual(code, 0, lines)
         fin = finish(lines)
         self.assertEqual((fin["seen"], fin["rewritten"], fin["refused_or_failed"]),
@@ -1024,14 +1024,14 @@ class TestRecategorise(PromoterBase):
             path = Path(d) / "changes.json"
             path.write_text(json.dumps(changes), encoding="utf-8")
             code, lines = self.run_cli("recategorise", self.evolved(),
-                                       "--changes", str(path), "--by", "k1078591")
+                                       "--changes", str(path), "--by", "k1234567")
         self.assertEqual(code, 0, lines)
         out = self.read(k)
         self.assertEqual(out["subject"], ["forced-labour", "prevalence"])
         self.assertEqual(out["domain"], ["geo"])
         kinds = [e["kind"] for e in out["category_history"]]
         self.assertEqual(kinds, ["removed", "added", "domain_changed"])
-        self.assertTrue(all(e["by"] == "k1078591" and e["reason"] == "steward review"
+        self.assertTrue(all(e["by"] == "k1234567" and e["reason"] == "steward review"
                             for e in out["category_history"]))
         self.assertEqual(finish(lines)["rewritten"], 1)
         planned = [l for l in lines if l["action"] == "recategorise_planned"]
@@ -1082,7 +1082,7 @@ class TestRecategorise(PromoterBase):
         with tempfile.TemporaryDirectory() as d:
             path = self.changes_file(d, changes)
             code, lines = self.run_cli("recategorise", VOCAB,
-                                       "--changes", path, "--by", "k1078591")
+                                       "--changes", path, "--by", "k1234567")
             self.assertEqual(code, 0, lines)
             out = self.read(k)
             self.assertEqual(out["license"], "Third-party terms; Centre use only")
@@ -1093,7 +1093,7 @@ class TestRecategorise(PromoterBase):
             self.assertEqual((history[0]["from"], history[0]["to"], history[0]["by"],
                               history[0]["reason"]),
                              (["CC-BY-4.0"], ["Third-party terms; Centre use only"],
-                              "k1078591", "licence corrected"))
+                              "k1234567", "licence corrected"))
             self.assertNotIn("from", history[1])
             self.assertEqual(out["dataset_uuid"], rec["dataset_uuid"])
             self.assertEqual(out["files"], rec["files"])
@@ -1165,7 +1165,7 @@ class TestRecategorise(PromoterBase):
         self.s3.put_object(Bucket="crsw", Key=k, Body=old,
                            Metadata=labels_mod.object_labels(
                                rec["dataset_uuid"], hashlib.sha256(old).hexdigest(),
-                               "green", "k1078591"))
+                               "green", "k1234567"))
         code, lines = self.run_cli("recategorise", VOCAB)
         self.assertEqual(code, 0)
         self.assertEqual(self.s3.get_object(Bucket="crsw", Key=k)["Body"].read(), old)
@@ -1340,7 +1340,7 @@ class TestAuditTrail(PromoterBase):
         code, out = self.cli(["audit", "--json", "--dataset", "promo-b"])
         promoted = [json.loads(o) for o in out if json.loads(o)["action"] == "promoted"]
         self.assertEqual([e["deposit"] for e in promoted], [b.id])
-        code, out = self.cli(["audit", "--json", "--action", "promoted", "--user", "k1078591"])
+        code, out = self.cli(["audit", "--json", "--action", "promoted", "--user", "k1234567"])
         self.assertEqual(len(out), 2)
         code, out = self.cli(["audit", "--json", "--user", "nobody"])
         self.assertEqual(out, [])
@@ -1357,7 +1357,7 @@ class TestAuditTrail(PromoterBase):
         line = out[0]
         self.assertIn("promoted", line)
         self.assertIn(DEST, line)
-        self.assertIn("by k1078591", line)
+        self.assertIn("by k1234567", line)
         self.assertIn("deposit " + dep.id, line)
         code, out = self.cli(["audit", "--action", "checked"])
         self.assertIn("bytes=", out[0])
@@ -1373,7 +1373,7 @@ class TestAuditTrail(PromoterBase):
         r = rows[0]
         self.assertEqual(r["prefix"], DEST)
         self.assertEqual(r["identifier"], DEST)
-        self.assertEqual(r["depositor"], "k1078591")
+        self.assertEqual(r["depositor"], "k1234567")
         self.assertEqual(r["files"], 2)
         self.assertEqual(r["bytes"], 11)
         self.assertEqual(r["schema_version"], "0.7")

@@ -151,7 +151,7 @@ class TestAuthorityShape(unittest.TestCase):
                        "replaced_by": ["forced-labour"]}],
             "changes": [{"date": "2026-10-01", "kind": "merge",
                          "from": ["debt-bondage"], "to": ["forced-labour"],
-                         "by": "k1078591"}]}
+                         "by": "k1234567"}]}
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

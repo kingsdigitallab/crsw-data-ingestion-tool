@@ -92,6 +92,13 @@ class TestDcatShape(unittest.TestCase):
         self.assertEqual(self.out["dcterms:subject"],
                          ["armed-conflict", "forced-labour"])
 
+    def test_depositors_left_out_unless_asked(self):
+        # KCL usernames stay inside KCL unless the exporter asks for them.
+        self.assertTrue(self.rec["depositors"])
+        self.assertNotIn("dcterms:contributor", self.out)
+        out = export_dcat.dcat_dataset(self.rec, include_depositors=True)
+        self.assertEqual(out["dcterms:contributor"], list(self.rec["depositors"]))
+
     def test_sensitivity_value_translated(self):
         # The mapping's "values" table, not the raw green/amber code.
         self.assertEqual(self.out["dcterms:accessRights"], "public")
@@ -166,7 +173,7 @@ CDB90_ACTIVITY = {
                         "cdisaw-parquet project"},
     "inputs": [{"kind": "external", "url": "https://github.com/jrnold/CDB90"}],
     "outputs": ["wide/events/cdb90.parquet", "crws/events/cdb90.parquet"],
-    "agent": "k1078591",
+    "agent": "k1234567",
     "started": "2026-09-17T08:40:00Z",
     "ended": "2026-09-17T08:59:10Z",
 }
@@ -228,7 +235,7 @@ class TestProvenanceExport(unittest.TestCase):
              "crsw:commit": "3f2a9c1e",
              "crsw:command": "cdisaw-parquet sweep --source cdb90 && "
                              "cdisaw-parquet project"},
-            {"@type": "prov:Person", "dcterms:identifier": "k1078591"}])
+            {"@type": "prov:Person", "dcterms:identifier": "k1234567"}])
         self.assertEqual(act["prov:used"],
                          [{"@id": "https://github.com/jrnold/CDB90"}])
         self.assertEqual(act["prov:generated"], [
