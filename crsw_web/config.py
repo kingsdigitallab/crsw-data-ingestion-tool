@@ -104,10 +104,6 @@ class Settings:
     # r12: the (CD)ISaW explorer, linked from centre/cdisaw datasets on
     # the dataset page and the Find data row; blank = no link.
     cdisaw_url: str = ""
-    # Who to ask about what the service records, named on /privacy (a
-    # name, a team or an address; set on the VM, never in the repo).
-    # Blank = the page says "the CRSW Centre team".
-    privacy_contact: str = ""
 
     @property
     def read_enabled(self) -> bool:
@@ -267,7 +263,6 @@ class Settings:
             search_weak_band=opt_float("SEARCH_WEAK_BAND", cls.search_weak_band),
             search_weak_floor=opt_float("SEARCH_WEAK_FLOOR", cls.search_weak_floor),
             cdisaw_url=get("CDISAW_URL").rstrip("/"),
-            privacy_contact=" ".join(get("PRIVACY_CONTACT").split()),
         )
 
 

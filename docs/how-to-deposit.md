@@ -35,7 +35,7 @@ Choose **Find data** in the top bar. Datasets are listed under their projects, n
 
 ## What is recorded about you
 
-**Your information** at the top of every page says the same as this section.
+**Privacy**, at the top of every page, says the same as this section.
 
 - **Signing in.** KCL sign-in tells the service your KCL username (your k-number) and your name. Your name is shown only to you and is never stored; your email address is not read.
 - **Depositing.** Your k-number is recorded as the depositor on every dataset you deposit, in its record and on each of its files, and other signed-in members see it on Find data and on the dataset's page. It stays as long as the dataset is held. What you type into the form becomes part of the record, which members can read.
@@ -45,7 +45,7 @@ Choose **Find data** in the top bar. Datasets are listed under their projects, n
 - **Cookies.** One, which remembers how many projects to show on a page.
 - **The command-line tool.** If you deposit with `deposit.py` instead, it keeps a log of your own deposits (`deposits.log`) on your own computer.
 
-To have something corrected or removed, ask your data steward; the Centre does it through the automatic check, so the trail records it too.
+**Questions, corrections or removal.** Ask your strand leader, the lead of the research strand you work in (RS1 to RS4). They can tell you what the service holds about you and who can see it, have a dataset's description corrected, or have a dataset you deposited removed. They pass the request to the Centre, which makes the change through the automatic check, never by hand, so the trail records it too.
 
 ## If something goes wrong
 

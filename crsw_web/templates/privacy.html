@@ -11,7 +11,7 @@
   <div class="masthead-inner">
     <a class="wordmark" href="/">CRSW data deposit</a>
     <nav class="nav">{% if read_enabled %}<a href="/datasets">Find data</a> {% endif %}{% if search_enabled %}<a href="/search">Search by meaning or content</a> {% endif %}<a href="/">Deposit</a></nav>
-    {% set who_verb = "Signed in as" %}{% include "_who.html" %}
+    {% set who_verb = "Signed in as" %}{% set on_privacy = true %}{% include "_who.html" %}
   </div>
 </header>
 
@@ -45,7 +45,13 @@
     <p>If you deposit with <code>deposit.py</code> instead, it keeps a log of your own deposits on your own computer (<code>deposits.log</code>), which nobody else sees.</p>
 
     <h2>Questions, corrections or removal</h2>
-    <p>Ask {{ privacy_contact or "the CRSW Centre team" }}. A dataset is corrected or removed by the Centre, through the checking step, so the trail records that too.</p>
+    <p>Ask your strand leader: the lead of the research strand you work in (RS1, RS2, RS3 or RS4). They can:</p>
+    <ul>
+      <li>tell you what this service holds about you and who can see it;</li>
+      <li>have a dataset's description corrected, for example a name in its creator or notes;</li>
+      <li>have a dataset you deposited removed from the store.</li>
+    </ul>
+    <p>Your strand leader passes the request to the Centre, which makes the change through the checking step; nobody edits the store by hand. The trail then records the correction or removal too, and is kept like the rest of the trail, for the life of the CRSW project.</p>
   </article>
 </main>
 </body>

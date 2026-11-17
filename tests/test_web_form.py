@@ -217,20 +217,15 @@ class TestForm(unittest.TestCase):
         for said in ("recorded as the depositor", "life of the CRSW project",
                      "KCL's own AI service", "does not keep your words",
                      "do not record your search words", "crsw_per", "deposits.log",
-                     "the CRSW Centre team"):
+                     "Ask your strand leader", "have a dataset you deposited removed"):
             self.assertIn(said, r.text)
-
-    def test_privacy_page_names_the_contact_when_set(self):
-        client = TestClient(create_app(
-            Settings(**dict(SETTINGS, privacy_contact="the CRSW data steward")),
-            s3_client=self.s3, vocab_dict=VOCAB))
-        text = client.get("/privacy").text
-        self.assertIn("Ask the CRSW data steward.", text)
-        self.assertNotIn("the CRSW Centre team", text)
+        self.assertNotIn("@", r.text)            # no address, ever
+        self.assertIn('aria-current="page">Privacy</a>', r.text)
 
     def test_privacy_link_on_the_form(self):
         html = self.client.get("/").text
-        self.assertIn('href="/privacy">Your information</a>', html)   # masthead
+        self.assertIn('<a class="privacy-link" href="/privacy" '
+                      'title="How this service uses your information">Privacy</a>', html)  # masthead
         self.assertIn("recorded on the dataset and shown to members", html)  # depositor
 
     def test_summary_page_after_a_deposit(self):

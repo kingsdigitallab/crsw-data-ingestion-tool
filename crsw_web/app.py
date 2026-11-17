@@ -907,7 +907,6 @@ def create_app(settings: Optional[Settings] = None,
         the notice the audit of 9 November 2026 asked for."""
         return templates.TemplateResponse(request, "privacy.html", {
             "user": user, "read_enabled": read_enabled,
-            "privacy_contact": settings.privacy_contact,
         })
 
     @app.get("/auth/headers")
