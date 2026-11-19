@@ -43,7 +43,7 @@ services:
 
   nginx:
     logging: *logging
-    image: nginx:1.27-alpine
+    image: nginx:1.30.7-alpine
     depends_on:
       - deposit-web
     ports:
