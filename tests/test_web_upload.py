@@ -7,7 +7,7 @@ from unittest import mock
 try:
     import boto3
     from moto import mock_aws
-    from crsw_web.upload import TooLarge, stream_to_s3
+    from crsw_web.upload import Refused, TooLarge, stream_to_s3
     HAVE_WEB = True
 except ImportError:
     HAVE_WEB = False
@@ -90,6 +90,79 @@ class TestStreamToS3(unittest.TestCase):
         self.assertNotIn("Uploads", self.s3.list_multipart_uploads(Bucket="bkt"))
         with self.assertRaises(self.s3.exceptions.ClientError):
             self.s3.head_object(Bucket="bkt", Key="k/toobig")
+
+    # -- head_check (r13): the opening bytes are shown to a checker
+    #    before anything is written.
+
+    def absent(self, key):
+        with self.assertRaises(self.s3.exceptions.ClientError):
+            self.s3.head_object(Bucket="bkt", Key=key)
+        self.assertNotIn("Uploads", self.s3.list_multipart_uploads(Bucket="bkt"))
+
+    def test_head_assembled_across_tiny_chunks_and_refused(self):
+        data = b"MZ" + bytes(range(200)) * 5
+        seen = []
+
+        def checker(head):
+            seen.append(head)
+            return "a program"
+        with self.assertRaises(Refused) as cm:
+            run(stream_to_s3(self.s3, "bkt", "k/r1", gen(data, chunk=1),
+                             self.labels, part_size=PART,
+                             head_check=checker, head_bytes=512))
+        self.assertEqual(cm.exception.reason, "a program")
+        self.assertEqual(seen, [data[:512]])
+        self.absent("k/r1")
+
+    def test_large_refused_body_leaves_nothing(self):
+        data = os.urandom(PART * 2)
+        with self.assertRaises(Refused):
+            run(stream_to_s3(self.s3, "bkt", "k/r2", gen(data), self.labels,
+                             part_size=PART, head_check=lambda h: "no",
+                             head_bytes=512))
+        self.absent("k/r2")
+
+    def test_short_body_is_still_checked(self):
+        seen = []
+
+        def checker(head):
+            seen.append(head)
+            return "no"
+        with self.assertRaises(Refused):
+            run(stream_to_s3(self.s3, "bkt", "k/r3", gen(b"#!/bin/sh\n"),
+                             self.labels, part_size=PART,
+                             head_check=checker, head_bytes=512))
+        self.assertEqual(seen, [b"#!/bin/sh\n"])
+        self.absent("k/r3")
+
+    def test_refused_replacement_keeps_the_earlier_copy(self):
+        run(stream_to_s3(self.s3, "bkt", "k/keep", gen(b"good"), self.labels,
+                         part_size=PART))
+        with self.assertRaises(Refused):
+            run(stream_to_s3(self.s3, "bkt", "k/keep", gen(b"bad"), self.labels,
+                             part_size=PART, head_check=lambda h: "no",
+                             head_bytes=512))
+        self.check_object("k/keep", b"good")
+
+    def test_passing_check_is_asked_once_and_stores_as_before(self):
+        data = os.urandom(PART + 100)
+        calls = []
+
+        def checker(head):
+            calls.append(len(head))
+            return None
+        run(stream_to_s3(self.s3, "bkt", "k/ok", gen(data), self.labels,
+                         part_size=PART, head_check=checker, head_bytes=512))
+        self.assertEqual(calls, [512])
+        self.check_object("k/ok", data)
+
+    def test_empty_body_is_checked_with_nothing(self):
+        calls = []
+        run(stream_to_s3(self.s3, "bkt", "k/e", gen(b""), self.labels,
+                         part_size=PART, head_check=lambda h: calls.append(h),
+                         head_bytes=512))
+        self.assertEqual(calls, [b""])
+        self.check_object("k/e", b"")
 
     def test_memory_bound_one_part(self):
         # The buffer never holds more than one part plus one chunk.

@@ -136,6 +136,15 @@ named. Empty folders contribute nothing, since object storage has no
 directories. A member path matching the reserved `dataset.*.json`
 pattern is refused at any depth, not just the last segment.
 
+Programs, installers, system scripts (`.bat`, `.sh`, `.ps1`, ...),
+shortcuts and Office files with macros are not deposited (r13). The run
+stops before anything is uploaded and lists each one, whether it was
+recognised by its name or by how the file starts (a program renamed
+`notes.txt` is still a program). Analysis code (`.py`, `.R`, `.do`,
+`.ipynb`, `.sql`, ...) is fine. Archives (`.zip`, `.tar.gz`, ...) are
+deposited as they are with a note that nobody checks what is inside.
+The full lists are in `crsw_deposit/filetypes.py`.
+
 Re-depositing a file that already exists in the dataset under a
 *different* path (e.g. it was flat before and is now inside a folder) is
 detected by content and warned about before the point of no return:

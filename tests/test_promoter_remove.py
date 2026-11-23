@@ -489,6 +489,30 @@ class TestStaging(RemoveBase):
         self.assertIn("refused_because", done)
         self.assertEqual(self.versions(root), [])
 
+    def test_a_finished_deposit_holding_a_program_can_be_removed(self):
+        # r13: staged before the rule, refused on every run since; removing
+        # it is the fix, for a name and for opening bytes alike.
+        for files in ((("one.csv", b"a\n"), ("setup.exe", b"anything")),
+                      (("notes.txt", b"\x7fELF" + b"\x00" * 60),)):
+            dep = self.stage_unchecked(files)
+            root = self.store.root("k1234567", dep.id)
+            code, lines = self.cli(["remove", "--staging", dep.id])
+            self.assertEqual(code, 0, lines)
+            [plan] = self.only(lines, "would_remove_staging")
+            self.assertRegex(plan["refused_because"][0], "^member (type|content): ")
+            code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id,
+                                    "--by", "tester"])
+            self.assertEqual(code, 0, lines)
+            self.assertEqual(self.versions(root), [])
+
+    def test_a_program_and_a_configuration_refusal_together_are_kept(self):
+        dep = self.stage_unchecked((("setup.exe", b"anything"),))
+        root = self.store.root("k1234567", dep.id)
+        code, lines = self.cli(["remove", "--staging", dep.id, "--confirm", dep.id],
+                               env={"PROMOTER_AUTHORISED": '{"nobody": ["rs2"]}'})
+        self.assertEqual(code, 1, lines)
+        self.assertNotEqual(self.versions(root), [])
+
     def test_a_finished_deposit_refused_for_the_promoters_configuration_is_kept(self):
         # The authorisation map, a size cap or a vocabulary fetched without the
         # record's provider would all refuse a deposit that promotes once the

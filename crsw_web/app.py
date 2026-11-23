@@ -25,8 +25,9 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 import crsw_deposit
-from crsw_deposit import (authority, deposit_logic, keys, labels as labels_mod, noise,
-                          places as places_mod, record, vocab)
+from crsw_deposit import (authority, deposit_logic, filetypes, keys,
+                          labels as labels_mod, noise, places as places_mod,
+                          record, vocab)
 from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
@@ -40,7 +41,7 @@ from .vocabulary import VocabularyCache
 from .metadata import SOURCE_TYPES, validate_meta
 from .version import release
 from . import quota
-from .upload import TooLarge, stream_to_s3
+from .upload import Refused, TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
 DOWNLOAD_CHUNK = 8 * 1024 * 1024   # one chunk in memory at a time, never the file
@@ -67,7 +68,24 @@ def client_rules() -> Dict:
         "noise_dir_names": sorted(noise.NOISE_DIR_NAMES),
         "reserved_record_pattern": keys.RESERVED_RECORD_RE.pattern,
         "problem_chars": keys.PROBLEM_CHARS,
+        # r13: what is not taken (by name, by opening bytes) and what is
+        # taken with a caution. Magics travel as hex.
+        "refused_extensions": dict(filetypes.REFUSED_EXTENSIONS),
+        "archive_extensions": sorted(filetypes.ARCHIVE_EXTENSIONS),
+        "sniff_bytes": filetypes.SNIFF_BYTES,
+        "refused_magics": [[magic.hex(), kind]
+                           for magic, kind in filetypes.MAGICS],
+        "windows_magic": filetypes.WINDOWS_MAGIC.hex(),
+        "windows_kind": filetypes.WINDOWS_KIND,
+        "windows_header_bytes": filetypes.WINDOWS_HEADER_BYTES,
+        "shell_interpreters": sorted(filetypes.SHELL_INTERPRETERS),
+        "shell_kind": filetypes.SHELL_KIND,
     }
+
+
+REFUSED_TYPES = ("Programs, installers, system scripts, shortcuts and Office "
+                 "files with macros cannot be deposited. Remove it and "
+                 "deposit again.")
 
 
 _DAY_RE = re.compile(r"^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?")
@@ -855,6 +873,10 @@ def create_app(settings: Optional[Settings] = None,
         labels, scopes = v["labels"], v["scopes"]
         return templates.TemplateResponse(request, "dataset.html", {
             "user": user, "identifier": identifier, "rec": rec, "derived": derived,
+            # r13: archives are stored unopened; the page says so.
+            "archives": {f.get("path") for f in files
+                         if isinstance(f.get("path"), str)
+                         and filetypes.is_archive(f["path"])},
             # Each subject as its label, slug and scope note, linked to the filter.
             "subjects": [{"slug": s, "label": labels.get(s), "scope": scopes.get(s)}
                          for s in (rec.get("subject") or [])],
@@ -1091,6 +1113,12 @@ def create_app(settings: Optional[Settings] = None,
                 detail="%r looks like OS/editor noise and is excluded by "
                        "default; re-send with ?include_noise=1 to deposit "
                        "it anyway" % member)
+        # r13: by name here, by opening bytes as the body arrives.
+        kind = filetypes.refused_name(member)
+        if kind:
+            raise HTTPException(
+                status_code=422,
+                detail="'%s' is %s. %s" % (member, kind, REFUSED_TYPES))
         try:
             (_, final_key), = deposit_logic.plan_keys(dep.meta, [member])
         except (ValueError, keys.RedDataError) as e:
@@ -1124,9 +1152,16 @@ def create_app(settings: Optional[Settings] = None,
         try:
             size, checksum = await stream_to_s3(
                 client, settings.s3_bucket, staged, request.stream(),
-                lambda c: labels_for(dep, c), max_bytes=limit)
+                lambda c: labels_for(dep, c), max_bytes=limit,
+                head_check=filetypes.refused_content,
+                head_bytes=filetypes.SNIFF_BYTES)
         except TooLarge as e:
             raise HTTPException(status_code=413, detail=str(e))
+        except Refused as e:
+            raise HTTPException(
+                status_code=422,
+                detail="'%s' starts like %s, whatever its name says. %s"
+                       % (member, e.reason, REFUSED_TYPES))
         except Exception as exc:
             raise storage_error(exc)
 
@@ -1149,9 +1184,12 @@ def create_app(settings: Optional[Settings] = None,
             raise storage_error(exc)
         log.info("file stored user=%s deposit=%s member=%s bytes=%d",
                  dep.user, dep.id, member, size)
-        return {"member": member, "key": final_key, "staged_key": staged,
-                "bytes": size, "checksum_sha256": checksum,
-                "format": entry.get("format")}
+        out = {"member": member, "key": final_key, "staged_key": staged,
+               "bytes": size, "checksum_sha256": checksum,
+               "format": entry.get("format")}
+        if filetypes.is_archive(member):
+            out["note"] = "archive: contents are not checked"
+        return out
 
     @app.delete("/deposits/{deposit_id}/files/{member:path}", status_code=204)
     def delete_file(deposit_id: str, member: str,

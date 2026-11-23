@@ -207,6 +207,43 @@ class TestFind(CatalogueBase):
 
 
 @unittest.skipUnless(HAVE_WEB, "web extras not installed")
+class TestArchiveNote(CatalogueBase):
+    """r13: archives are stored unopened and the page says so. A program
+    already in the store (from before the rule) is still listed and
+    still downloads: the rule is about what comes in."""
+    ZIPPED = "rs2/csac/green/0_raw/zipped"
+
+    def seed(self):
+        super().seed()
+        self.put_record(
+            self.ZIPPED, dict(META, dataset="zipped"),
+            [record.manifest_entry("all.zip", "d" * 64, 30),
+             record.manifest_entry("old/setup.exe", "e" * 64, 12),
+             record.manifest_entry("data.csv", "f" * 64, 5)],
+            "k1234567", "33333333-3333-4333-8333-333333333333")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+
+    def test_archive_rows_and_the_page_carry_the_caution(self):
+        page = self.app().get("/datasets/" + self.ZIPPED)
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.text.count("archive: contents not checked"), 1)
+        self.assertIn("nobody has checked what is inside them", page.text)
+
+    def test_no_caution_without_an_archive(self):
+        page = self.app().get("/datasets/" + GREEN)
+        self.assertNotIn("contents not checked", page.text)
+        self.assertNotIn("nobody has checked", page.text)
+
+    def test_a_program_already_in_the_store_still_lists_and_downloads(self):
+        c = self.app()
+        self.assertIn("old/setup.exe", c.get("/datasets/" + self.ZIPPED).text)
+        r = c.get("/datasets/%s/files/old/setup.exe" % self.ZIPPED)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"], "application/octet-stream")
+        self.assertTrue(r.headers["content-disposition"].startswith("attachment"))
+
+
+@unittest.skipUnless(HAVE_WEB, "web extras not installed")
 class TestGrouping(unittest.TestCase):
     """The find page's list is projects first: `group_projects` folds
     rows into projects in order of first appearance (so newest-first

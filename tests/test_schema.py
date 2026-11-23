@@ -137,6 +137,9 @@ class TestSchemaInStepWithCode(unittest.TestCase):
         self.assertTrue(re.search(pattern, "sub/dataset.foo.json"))
         self.assertTrue(re.search(pattern, "a/b/dataset.x.json"))
         self.assertFalse(re.search(pattern, "a/b/notes.json"))
+        # r13: file types are an intake rule, not the record's; a program
+        # already in a manifest is still a valid path.
+        self.assertFalse(re.search(pattern, "old/setup.exe"))
 
     def test_temporal_shape_at_record_and_entry_level(self):
         for location in (SCHEMA["properties"]["temporal"],

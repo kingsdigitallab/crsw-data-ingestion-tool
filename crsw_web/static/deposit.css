@@ -162,6 +162,10 @@ table.files tfoot td { border-bottom: 0; color: var(--muted); }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.noise td:first-child { color: var(--muted); }
 tr.noise label { font-size: .85rem; margin-left: .5rem; }
+tr.refused td:first-child { color: var(--muted); text-decoration: line-through; }
+table.files .why { display: inline-block; font-size: .85rem; margin-left: .5rem; color: var(--muted); text-decoration: none; }
+tr.refused .why { color: var(--danger); }
+tr.refused .bar { visibility: hidden; }
 .bar { display: block; height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; min-width: 120px; }
 .bar > i { display: block; height: 100%; width: 0; background: var(--action); transition: width .15s linear; }
 @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }

@@ -4,9 +4,10 @@ is a named problem; the deposit is left where it is and reported.
 Nothing here moves or deletes anything."""
 import hashlib
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
-from crsw_deposit import deposit_logic, keys, labels as labels_mod, record, vocab
+from crsw_deposit import (deposit_logic, filetypes, keys, labels as labels_mod,
+                          record, vocab)
 from crsw_web.deposits import STATUS_COMPLETE, Deposit, DepositStore
 
 from .config import PromoterConfig
@@ -41,12 +42,24 @@ class Report:
 _read_json_object = read_json_object
 
 
-def _sha256_of_object(client, bucket, key) -> str:
+def _sha256_and_head(client, bucket, key, n: int) -> Tuple[str, bytes]:
+    """The object's SHA-256 and its first `n` bytes, from one read."""
     h = hashlib.sha256()
+    head = b""
     body = client.get_object(Bucket=bucket, Key=key)["Body"]
     for chunk in body.iter_chunks(CHUNK):
         h.update(chunk)
-    return h.hexdigest()
+        if len(head) < n:
+            head += chunk[:n - len(head)]
+    return h.hexdigest(), head
+
+
+def _head_of_object(client, bucket, key, n: int) -> bytes:
+    """The object's first `n` bytes alone (when checksums are not being
+    verified, so nothing else reads it). Not for an empty object."""
+    body = client.get_object(Bucket=bucket, Key=key,
+                             Range="bytes=0-%d" % (n - 1))["Body"]
+    return body.read()
 
 
 def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
@@ -170,10 +183,20 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
                 p.append("%s: label %s is %r, expected %r"
                          % (entry["path"], name, meta.get(name), value))
         if verify_checksums:
-            actual = _sha256_of_object(client, bucket, key)
+            actual, opening = _sha256_and_head(client, bucket, key,
+                                               filetypes.SNIFF_BYTES)
             if actual != entry["checksum_sha256"]:
                 p.append("%s: stored bytes hash to %s, manifest says %s"
                          % (entry["path"], actual[:12], entry["checksum_sha256"][:12]))
+        elif entry["bytes"]:
+            opening = _head_of_object(client, bucket, key, filetypes.SNIFF_BYTES)
+        else:
+            opening = b""
+        # r13: a program under another name. Its name is step 7's.
+        kind = filetypes.refused_content(opening)
+        if kind and not filetypes.refused_name(entry["path"]):
+            p.append("member content: %s starts like %s; not accepted"
+                     % (entry["path"], kind))
     rep.total_bytes = total
     if cfg.max_deposit_bytes is not None and total > cfg.max_deposit_bytes:
         p.append("deposit totals %d bytes, over the %d-byte limit"
@@ -186,6 +209,17 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             p.append("member path: %s" % err)
         if keys.is_reserved_member(entry["path"]):
             p.append("member path %r is reserved" % entry["path"])
+        # r13: only what this deposit brings; what is already in the
+        # dataset is never judged here.
+        kind = filetypes.refused_name(entry["path"])
+        if kind:
+            p.append("member type: %s is %s; not accepted" % (entry["path"], kind))
+    archives = [e["path"] for e in dep.entries if filetypes.is_archive(e["path"])]
+    if archives:
+        rep.warnings.append("%d archive member(s) promoted unopened; contents "
+                            "are not checked: %s"
+                            % (len(archives), ", ".join(archives[:5])
+                               + (" ..." if len(archives) > 5 else "")))
 
     # 8. authorisation
     if not cfg.user_may_deposit_to(dep.user, dep.meta["strand"]):

@@ -839,6 +839,101 @@ class TestReservedNameRefusal(unittest.TestCase):
         self.assertIn("reserved", f.call_args[0][0])
 
 
+PE_HEAD = b"MZ\x90\x00" + b"\x00" * 60
+
+
+class TestTypeRefusal(unittest.TestCase):
+    """r13: programs, installers, system scripts, shortcuts and macro
+    files are refused by name and by opening bytes, before preflight."""
+
+    def _main(self, d):
+        said = []
+        with mock.patch("deposit.say", side_effect=said.append), \
+             mock.patch("deposit.warn"), \
+             mock.patch("deposit.fail", side_effect=lambda m, c=1: c) as f, \
+             mock.patch("deposit.preflight",
+                        side_effect=RuntimeError("preflight reached")) as pre, \
+             mock.patch("deposit.load_config",
+                        return_value={"remote": "ceph", "bucket": "crsw"}):
+            try:
+                code = deposit.main([str(d), "--remote", "ceph",
+                                     "--bucket", "crsw", "--dry-run"])
+            except RuntimeError:
+                code = None
+        return code, f, pre, said
+
+    def test_program_by_name_fails_before_preflight(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "tools").mkdir()
+            (Path(d) / "tools" / "setup.exe").write_bytes(b"anything")
+            (Path(d) / "data.csv").write_text("a,b\n")
+            code, f, pre, _ = self._main(d)
+        self.assertNotIn(code, (0, None))
+        msg = f.call_args[0][0]
+        self.assertIn("tools/setup.exe - a Windows program (.exe)", msg)
+        self.assertNotIn("data.csv", msg)
+        self.assertIn("Nothing was uploaded", msg)
+        pre.assert_not_called()
+
+    def test_renamed_program_caught_by_its_opening_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "notes.txt").write_bytes(PE_HEAD + b"x" * 100)
+            (Path(d) / "run.txt").write_bytes(b"#!/usr/bin/env bash\necho hi\n")
+            code, f, pre, _ = self._main(d)
+        self.assertNotIn(code, (0, None))
+        msg = f.call_args[0][0]
+        self.assertIn(
+            "notes.txt - starts like a Windows program, whatever its name", msg)
+        self.assertIn("run.txt - starts like a system script", msg)
+        pre.assert_not_called()
+
+    def test_long_lists_are_capped(self):
+        refused = [("f%02d.exe" % i, "a Windows program (.exe)")
+                   for i in range(13)]
+        lines = deposit.refusal_lines(refused).splitlines()
+        self.assertEqual(len(lines), deposit.REFUSALS_SHOWN + 1)
+        self.assertEqual(lines[-1], "  ... and 3 more")
+
+    def test_analysis_code_and_mz_text_are_not_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "ok.py").write_bytes(b"#!/usr/bin/env python\nprint(1)\n")
+            (Path(d) / "data.csv").write_bytes(b"MZ,2019,31.2\n")
+            sources, _, _ = deposit.resolve_files([d])
+            self.assertEqual(deposit.type_refusals(sources), [])
+
+    def test_archive_note_only_when_there_is_an_archive(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "data.csv").write_text("a,b\n")
+            plain, _, _ = deposit.resolve_files([d])
+            self.assertIsNone(deposit.archive_note(plain))
+            (Path(d) / "bundle.zip").write_bytes(b"PK\x03\x04")
+            (Path(d) / "more.tar.gz").write_bytes(b"\x1f\x8b")
+            both, _, _ = deposit.resolve_files([d])
+            note = deposit.archive_note(both)
+        self.assertIn("2 compressed or archive file(s) (.gz, .zip)", note)
+        self.assertIn("nobody checks what is inside", note)
+
+    def test_archive_is_noted_and_the_run_goes_on(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "bundle.zip").write_bytes(b"PK\x03\x04")
+            code, f, pre, said = self._main(d)
+        pre.assert_called()
+        self.assertTrue(any("compressed or archive" in line for line in said))
+
+    def test_plain_deposit_says_nothing_new(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "data.csv").write_text("a,b\n")
+            code, f, pre, said = self._main(d)
+        pre.assert_called()
+        self.assertFalse(any("archive" in line for line in said))
+
+    def test_rename_message_formats(self):
+        msg = deposit.MESSAGES["refused_rename"].format(
+            name="x.exe", reason="a Windows program (.exe)")
+        self.assertIn("x.exe", msg)
+        self.assertIn("Nothing was uploaded", msg)
+
+
 class TestResolveProjectChoice(unittest.TestCase):
     ENTRIES = [("1", "csac", ""), ("2", "aid-flows", "")]
 

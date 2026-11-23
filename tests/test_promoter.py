@@ -79,6 +79,76 @@ class PromoterBase(unittest.TestCase):
         r = self.s3.list_objects_v2(Bucket="crsw", Prefix=prefix)
         return sorted(o["Key"] for o in r.get("Contents", []))
 
+    def stage_unchecked(self, files, **overrides):
+        """A deposit staged as if before r13: the web service's own type
+        refusals are switched off for the staging only, so the promoter
+        is what meets the file."""
+        with mock.patch("crsw_deposit.filetypes.refused_name", return_value=None), \
+             mock.patch("crsw_deposit.filetypes.refused_content", return_value=None):
+            return self.stage(files=files, **overrides)
+
+
+ELF = b"\x7fELF\x02\x01\x01" + b"\x00" * 57
+
+
+class TestTypeChecks(PromoterBase):
+    """r13: the promoter refuses a program in a staged deposit, by name
+    and by its opening bytes, and never judges what is already in place."""
+
+    def test_program_by_name_is_refused(self):
+        dep = self.stage_unchecked((("one.csv", b"a,b\n"), ("tools/setup.exe", b"anything")))
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(rep.problems, [
+            "member type: tools/setup.exe is a Windows program (.exe); not accepted"])
+
+    def test_renamed_program_is_refused_by_its_opening_bytes(self):
+        dep = self.stage_unchecked((("one.csv", b"a,b\n"), ("notes.txt", ELF + b"x" * 900)))
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(rep.problems, [
+            "member content: notes.txt starts like a Linux program; not accepted"])
+
+    def test_a_named_program_is_reported_once(self):
+        dep = self.stage_unchecked((("setup.exe", b"MZ\x90\x00" + b"\x00" * 60),))
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(len(rep.problems), 1, rep.problems)
+        self.assertTrue(rep.problems[0].startswith("member type: "))
+
+    def test_opening_bytes_are_read_even_when_checksums_are_not(self):
+        dep = self.stage_unchecked((("empty.txt", b""), ("notes.txt", ELF)))
+        rep = check(dep, self.store, self.cfg, TERMS, CODES, verify_checksums=False)
+        self.assertEqual(rep.problems, [
+            "member content: notes.txt starts like a Linux program; not accepted"])
+
+    def test_analysis_code_passes_and_an_archive_is_a_warning(self):
+        dep = self.stage((("clean.py", b"#!/usr/bin/env python\nprint(1)\n"),
+                          ("data.csv", b"MZ,2019,31.2\n"),
+                          ("all.zip", b"PK\x03\x04rest")))
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(rep.problems, [])
+        self.assertEqual(len(rep.warnings), 1)
+        self.assertIn("1 archive member(s) promoted unopened", rep.warnings[0])
+        self.assertIn("all.zip", rep.warnings[0])
+
+    def test_a_program_already_in_the_dataset_does_not_block_a_new_deposit(self):
+        # The live-data guard: the rule is for what comes in. A dataset
+        # that holds an .exe from before r13 still takes new files, and
+        # keeps the old one in its manifest.
+        dep = self.stage()
+        existing, _, _, _ = deposit_logic.assemble_record(
+            dep.meta, None, [record.manifest_entry("old/setup.exe", "b" * 64, 3)],
+            "alice", "2026-01-01T00:00:00Z", "11111111-1111-4111-8111-111111111111")
+        self.s3.put_object(Bucket="crsw", Key=DEST + "/dataset.promo.json",
+                           Body=deposit_logic.record_bytes(existing))
+        self.s3.put_object(Bucket="crsw", Key=DEST + "/old/setup.exe", Body=b"old")
+        rep = check(dep, self.store, self.cfg, TERMS, CODES)
+        self.assertEqual(rep.problems, [])
+        out = promote(dep, rep, self.store, self.log, TERMS, CODES)
+        self.assertTrue(out.promoted, out.error)
+        rec = record.parse_record(self.s3.get_object(
+            Bucket="crsw", Key=DEST + "/dataset.promo.json")["Body"].read().decode())
+        self.assertEqual([e["path"] for e in rec["files"]],
+                         ["old/setup.exe", "one.csv", "sub/r.md"])
+
 
 class TestChecks(PromoterBase):
     def test_clean_deposit_passes(self):

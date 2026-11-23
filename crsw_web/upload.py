@@ -23,20 +23,44 @@ class TooLarge(Exception):
         self.limit = limit
 
 
+class Refused(Exception):
+    """The body's opening bytes failed `head_check`. Nothing was stored."""
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 async def stream_to_s3(client, bucket: str, key: str,
                        chunks: AsyncIterator[bytes],
                        labels_for: Callable[[str], Dict[str, str]],
                        max_bytes: Optional[int] = None,
-                       part_size: int = PART_SIZE) -> Tuple[int, str]:
+                       part_size: int = PART_SIZE,
+                       head_check: Optional[Callable[[bytes], Optional[str]]] = None,
+                       head_bytes: int = 0) -> Tuple[int, str]:
     """Upload `chunks` to bucket/key. Returns (size, sha256 hex).
     `labels_for(checksum)` supplies the object metadata once the
     checksum is known. Raises TooLarge (after aborting any multipart
-    upload) if the body exceeds `max_bytes`."""
+    upload) if the body exceeds `max_bytes`.
+
+    `head_check`, when given, is shown the body's first `head_bytes`
+    bytes (all of a shorter body) before anything is written to the
+    store; a reason back from it raises Refused, with nothing stored."""
+    if head_check is not None and head_bytes > part_size:
+        raise ValueError("head_bytes must fit in one part")
     hasher = hashlib.sha256()
     size = 0
     buf = bytearray()
     upload_id = None
     parts = []
+    head_checked = head_check is None
+
+    def check_head() -> None:
+        # Always before the first flush: buf still holds the body's start.
+        nonlocal head_checked
+        head_checked = True
+        reason = head_check(bytes(buf[:head_bytes]))
+        if reason:
+            raise Refused(reason)
 
     async def flush_part() -> None:
         nonlocal upload_id, buf
@@ -61,9 +85,13 @@ async def stream_to_s3(client, bucket: str, key: str,
                 raise TooLarge(max_bytes)
             hasher.update(chunk)
             buf.extend(chunk)
+            if not head_checked and len(buf) >= head_bytes:
+                check_head()
             while len(buf) >= part_size:
                 await flush_part()
 
+        if not head_checked:
+            check_head()        # a body shorter than head_bytes
         checksum = hasher.hexdigest()
         labels = labels_for(checksum)
         if upload_id is None:

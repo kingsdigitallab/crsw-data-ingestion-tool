@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
-from crsw_deposit import deposit_logic, keys, labels as labels_mod, record
+from crsw_deposit import deposit_logic, filetypes, keys, labels as labels_mod, record
 
 from .deposits import STATUS_COMPLETE, Deposit, DepositStore
 
@@ -121,6 +121,28 @@ def check_files(rec: Dict, files: Dict[str, Path]) -> None:
         raise BulkError("local sizes differ from the manifest: %s" % "; ".join(wrong))
 
 
+def check_types(files: Dict[str, Path]) -> None:
+    """r13: refuse a program, installer, system script, shortcut or macro
+    file, by name and by its opening bytes, before anything is written.
+    The promoter checks again."""
+    refused = []
+    for path in sorted(files):
+        reason = filetypes.refused_name(path)
+        if reason is None:
+            try:
+                kind = filetypes.sniff_file(files[path])
+            except OSError as e:
+                raise BulkError("could not read %s: %s" % (path, e))
+            if kind:
+                reason = "starts like %s, whatever its name" % kind
+        if reason:
+            refused.append("%s (%s)" % (path, reason))
+    if refused:
+        raise BulkError("these files cannot be deposited: %s. Programs, installers, "
+                        "system scripts, shortcuts and Office files with macros "
+                        "are not accepted." % "; ".join(refused))
+
+
 def _size_at(client, bucket: str, key: str) -> Optional[int]:
     try:
         return client.head_object(Bucket=bucket, Key=key)["ContentLength"]
@@ -149,6 +171,7 @@ def stage_dataset(store: DepositStore, user: str, rec: Dict, files: Dict[str, Pa
         raise BulkError("%s is not among the record's depositors %s; the labels and the "
                         "record must name the same person" % (user, rec.get("depositors")))
     check_files(rec, files)
+    check_types(files)
     if store.client is not None:  # a dry run without a store cannot look
         for other in store.deposits_for(prefix):
             if other.status == STATUS_COMPLETE:
