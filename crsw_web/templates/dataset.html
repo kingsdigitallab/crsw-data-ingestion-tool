@@ -59,12 +59,13 @@
 
     <h2>Files</h2>
     {% if refusal %}<p class="notice">{{ refusal }}</p>{% endif %}
+    {% if archives %}<p class="hint">Archives are stored as deposited; nobody has checked what is inside them. Open them with care.</p>{% endif %}
     <table class="files">
       <thead><tr><th>Path</th><th class="num">Size</th><th>SHA-256</th></tr></thead>
       <tbody>
       {% for f in rec.files %}
       <tr>
-        <td>{% if not refusal %}<a href="/datasets/{{ identifier }}/files/{{ f.path }}" download><code>{{ f.path }}</code></a>{% else %}<code>{{ f.path }}</code>{% endif %}</td>
+        <td>{% if not refusal %}<a href="/datasets/{{ identifier }}/files/{{ f.path }}" download><code>{{ f.path }}</code></a>{% else %}<code>{{ f.path }}</code>{% endif %}{% if f.path in archives %} <span class="why">archive: contents not checked</span>{% endif %}</td>
         <td class="num">{{ sizes[f.path] }}</td>
         <td><code class="sha">{{ f.checksum_sha256[:16] }}…</code></td>
       </tr>

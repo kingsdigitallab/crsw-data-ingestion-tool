@@ -136,7 +136,8 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
 # manifest's, a missing or mislabelled object, a record that is absent,
 # unreadable or disagrees with the control object, and a deposit that has
 # its record written but a control object that never reached complete
-# (an upload that died between the two: nothing will finish it). Any
+# (an upload that died between the two: nothing will finish it), and
+# (r13) a member that is a program, by name or by its opening bytes. Any
 # other refusal (a record invalid against the vocabulary the promoter
 # happened to fetch, authorisation, size caps, the destination record)
 # may be the VM's configuration, and the deposit would promote once that
@@ -145,7 +146,8 @@ CONTENT_REFUSALS = (r"stored bytes hash to", r"size mismatch at ", r"no object a
                     r": label ", r"staged record's files manifest differs",
                     r"staged record identifier ", r"staged record dataset_uuid",
                     r"staged record cannot be used", r"^staged record \S*/\S*: ",
-                    r"^record_key ", r"^member path", r"^deposit status is ",
+                    r"^record_key ", r"^member path", r"^member type: ",
+                    r"^member content: ", r"^deposit status is ",
                     r"^deposit has no record_key", r"^deposit has no files",
                     r"^control object missing or unreadable")
 

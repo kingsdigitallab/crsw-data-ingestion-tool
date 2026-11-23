@@ -66,6 +66,10 @@ class TestDepositFlow(unittest.TestCase):
     def head(self, key):
         return self.s3.head_object(Bucket="crsw", Key=key)
 
+    def staged_names(self):
+        listed = self.s3.list_objects_v2(Bucket="crsw", Prefix="staging/")
+        return [o["Key"].rsplit("/", 1)[-1] for o in listed.get("Contents", [])]
+
     # --- create -----------------------------------------------------------
     def test_create_returns_prefixes_and_writes_control_object(self):
         d = self.create()
@@ -138,6 +142,53 @@ class TestDepositFlow(unittest.TestCase):
         self.assertIn("include_noise", r.json()["detail"])
         r = self.put(d["id"], "sub/.DS_Store", b"", include_noise=1)
         self.assertEqual(r.status_code, 200)
+
+    def test_program_refused_by_name_and_nothing_stored(self):
+        d = self.create()
+        r = self.put(d["id"], "tools/setup.exe", b"anything")
+        self.assertEqual(r.status_code, 422)
+        detail = r.json()["detail"]
+        self.assertIn("'tools/setup.exe' is a Windows program (.exe).", detail)
+        self.assertIn("cannot be deposited", detail)
+        self.assertEqual(self.put(d["id"], "book.XLSM", b"PK").status_code, 422)
+        self.assertEqual(self.client.get("/deposits/%s" % d["id"]).json()["entries"], [])
+        names = self.staged_names()
+        self.assertNotIn("setup.exe", names)
+        self.assertNotIn("book.XLSM", names)
+
+    def test_renamed_program_refused_by_its_opening_bytes(self):
+        d = self.create()
+        r = self.put(d["id"], "notes.txt", b"MZ\x90\x00" + b"\x00" * 60 + b"x" * 900)
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("'notes.txt' starts like a Windows program, whatever its "
+                      "name says.", r.json()["detail"])
+        r = self.put(d["id"], "run.txt", b"#!/bin/bash\necho hi\n")
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("a system script", r.json()["detail"])
+        self.assertEqual(self.client.get("/deposits/%s" % d["id"]).json()["entries"], [])
+        names = self.staged_names()
+        self.assertNotIn("notes.txt", names)
+        self.assertNotIn("run.txt", names)
+
+    def test_refused_replacement_leaves_the_earlier_file(self):
+        d = self.create()
+        staged = self.put(d["id"], "notes.txt", b"plain words").json()["staged_key"]
+        r = self.put(d["id"], "notes.txt", b"\x7fELF" + b"\x00" * 60)
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(self.head(staged)["ContentLength"], len(b"plain words"))
+
+    def test_analysis_code_and_mz_text_accepted(self):
+        d = self.create()
+        r = self.put(d["id"], "clean.py", b"#!/usr/bin/env python\nprint(1)\n")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("note", r.json())
+        self.assertEqual(self.put(d["id"], "data.csv", b"MZ,2019,31.2\n").status_code, 200)
+
+    def test_archive_accepted_with_a_note(self):
+        d = self.create()
+        r = self.put(d["id"], "bundle.zip", b"PK\x03\x04rest")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["note"], "archive: contents are not checked")
 
     def test_body_over_cap_refused(self):
         settings = Settings(**dict(SETTINGS, max_body_bytes=10))

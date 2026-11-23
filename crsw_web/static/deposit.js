@@ -7,7 +7,7 @@
   var RULES = JSON.parse(document.getElementById("rules").textContent);
   var form = document.getElementById("deposit-form");
   var $ = function (id) { return document.getElementById(id); };
-  var files = [];          // {file, member, noise, include, row}
+  var files = [];          // {file, member, noise, include, refused, archive, row}
 
   // ----- deposit slip preview ---------------------------------------
   function slug(s) {
@@ -51,7 +51,7 @@
     $("steward-hint").textContent = steward ? "Steward: " + steward : "The steward is set by the domain.";
     var lic = $("license");
     if (!lic.value) lic.placeholder = val("sensitivity") === "amber" ? "internal-only" : "CC-BY-4.0";
-    var kept = files.filter(function (f) { return !f.noise || f.include; });
+    var kept = files.filter(wanted);
     $("slip-files").textContent = kept.length ? kept.length + " file" + (kept.length === 1 ? "" : "s") + ", " + human(kept.reduce(function (n, f) { return n + f.file.size; }, 0)) : "none yet";
   }
   form.addEventListener("input", updateSlip);
@@ -92,6 +92,59 @@
     for (var j = 0; j < parts.length - 1; j++) if (RULES.noise_dir_names.indexOf(parts[j]) >= 0) return true;
     return false;
   }
+  // r13: what the store does not take. The lists are crsw_deposit's own
+  // (RULES); the server refuses the same files, this only says so sooner.
+  function extensionOf(member) {
+    var name = member.split("/").pop().replace(/[. ]+$/, "");
+    var dot = name.lastIndexOf(".");
+    return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
+  }
+  function refusedName(member) {
+    var ext = extensionOf(member);
+    var kind = Object.prototype.hasOwnProperty.call(RULES.refused_extensions, ext) ? RULES.refused_extensions[ext] : null;
+    return kind ? kind + " (." + ext + ")" : null;
+  }
+  function isArchive(member) { return RULES.archive_extensions.indexOf(extensionOf(member)) >= 0; }
+  function shebangInterpreter(bytes) {
+    if (bytes.length < 2 || bytes[0] !== 0x23 || bytes[1] !== 0x21) return "";
+    var line = "";
+    for (var i = 2; i < bytes.length && bytes[i] !== 0x0a; i++) line += String.fromCharCode(bytes[i]);
+    var tokens = line.trim().split(/\s+/).filter(function (t) { return t; });
+    if (!tokens.length) return "";
+    function bare(t) { return t.replace(/\\/g, "/").split("/").pop().toLowerCase(); }
+    var name = bare(tokens[0]);
+    if (name !== "env") return name;
+    for (var j = 1; j < tokens.length; j++) {
+      if (tokens[j].charAt(0) === "-" || tokens[j].indexOf("=") >= 0) continue;
+      return bare(tokens[j]);
+    }
+    return "";
+  }
+  function refusedContent(bytes) {
+    var hex = "";
+    for (var i = 0; i < Math.min(bytes.length, 8); i++) hex += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+    if (hex.indexOf(RULES.windows_magic) === 0) {
+      for (var k = 2; k < Math.min(bytes.length, RULES.windows_header_bytes); k++) if (bytes[k] === 0) return RULES.windows_kind;
+    }
+    for (var m = 0; m < RULES.refused_magics.length; m++) if (hex.indexOf(RULES.refused_magics[m][0]) === 0) return RULES.refused_magics[m][1];
+    if (RULES.shell_interpreters.indexOf(shebangInterpreter(bytes)) >= 0) return RULES.shell_kind;
+    return null;
+  }
+  // Read a file's opening bytes and mark it if it is a program under
+  // another name. Nothing is sent anywhere; a browser that cannot do
+  // this leaves the check to the server.
+  function sniff(f) {
+    if (!f.file.slice || !window.FileReader) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var kind = refusedContent(new Uint8Array(reader.result));
+      if (!kind || f.refused) return;
+      f.refused = "starts like " + kind + ", whatever its name";
+      if (files.indexOf(f) >= 0 && !$("submit").disabled) renderFiles(0);
+    };
+    try { reader.readAsArrayBuffer(f.file.slice(0, RULES.sniff_bytes)); } catch (e) { /* the server checks */ }
+  }
+  function wanted(f) { return !f.refused && (!f.noise || f.include); }
   function memberFor(file, fromFolder) {
     var rel = file.webkitRelativePath || file.name;
     if (fromFolder && rel.indexOf("/") > 0) rel = rel.slice(rel.indexOf("/") + 1); // the folder's own name is never part of the key
@@ -105,7 +158,10 @@
       var member = memberFor(file, fromFolder);
       if (seen[member]) { dropped++; return; }
       seen[member] = true;
-      files.push({ file: file, member: member, noise: isNoise(member), include: false });
+      var f = { file: file, member: member, noise: isNoise(member), include: false,
+                refused: refusedName(member), archive: isArchive(member) };
+      files.push(f);
+      if (!f.refused) sniff(f);
     });
     files.sort(function (a, b) { return a.member < b.member ? -1 : a.member > b.member ? 1 : 0; });
     renderFiles(dropped);
@@ -113,13 +169,19 @@
   function renderFiles(dropped) {
     var tbody = $("files").querySelector("tbody");
     tbody.innerHTML = "";
-    var noise = 0, total = 0;
+    var noise = 0, refused = 0, total = 0;
     files.forEach(function (f) {
       var tr = document.createElement("tr");
-      if (f.noise) { tr.className = "noise"; noise++; }
+      if (f.refused) { tr.className = "refused"; refused++; }
+      else if (f.noise) { tr.className = "noise"; noise++; }
       var td1 = document.createElement("td");
       td1.textContent = f.member;
-      if (f.noise) {
+      if (f.refused || f.archive) {
+        var why = document.createElement("span"); why.className = "why";
+        why.textContent = f.refused ? "not accepted: " + f.refused : "archive: contents are not checked";
+        td1.appendChild(why);
+      }
+      if (f.noise && !f.refused) {
         var lab = document.createElement("label");
         var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = f.include;
         cb.addEventListener("change", function () { f.include = cb.checked; updateSlip(); });
@@ -132,12 +194,12 @@
       tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
       tbody.appendChild(tr);
       f.row = tr;
-      if (!f.noise || f.include) total += f.file.size;
+      if (wanted(f)) total += f.file.size;
     });
     $("files").hidden = !files.length;
     $("files-empty").hidden = !!files.length;
     $("clear-files").hidden = !files.length;
-    $("files-summary").textContent = files.length + " file" + (files.length === 1 ? "" : "s") + (noise ? ", " + noise + " excluded as OS noise (tick to include)" : "");
+    $("files-summary").textContent = files.length + " file" + (files.length === 1 ? "" : "s") + (noise ? ", " + noise + " excluded as OS noise (tick to include)" : "") + (refused ? ", " + refused + " not accepted (programs and macro files are not deposited)" : "");
     $("files-total").textContent = human(total);
     var note = $("picker-note");
     note.hidden = !dropped;
@@ -583,8 +645,11 @@
     ev.preventDefault();
     clearErrors();
     $("result").hidden = true; $("warnings").hidden = true;
-    var toSend = files.filter(function (f) { return !f.noise || f.include; });
-    if (!toSend.length) { fail("Choose at least one file first."); return; }
+    var toSend = files.filter(wanted);
+    if (!toSend.length) {
+      fail(files.some(function (f) { return f.refused; }) ? "None of the chosen files can be deposited: programs, installers, system scripts, shortcuts and Office files with macros are not accepted." : "Choose at least one file first.");
+      return;
+    }
     var gate = destination.blocked();
     if (gate) { showErrors(gate); fail(gate.dataset); return; }
     $("submit").disabled = true;

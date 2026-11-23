@@ -17,7 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from crsw_deposit import deposit_logic, keys, labels as labels_mod, noise, record, vocab
+from crsw_deposit import (deposit_logic, filetypes, keys, labels as labels_mod,
+                          noise, record, vocab)
 import transfer
 
 RCLONE_DOWNLOAD_URL = "https://rclone.org/downloads/"
@@ -98,6 +99,17 @@ MESSAGES = {
     "reserved_name": (
         "{name} matches dataset.<name>.json, which is reserved for\n"
         "dataset records. Rename the file and re-run."),
+    "refused_type": (
+        "These files cannot be deposited:\n"
+        "{lines}\n"
+        "The shared store holds data, documents and analysis code (.py, .R, .do,\n"
+        ".ipynb, .sql and the like), not programs, installers, system scripts,\n"
+        "shortcuts or Office files with macros. Nothing was uploaded.\n"
+        "Leave these files out and re-run. For an Office file with macros, save a\n"
+        "copy without them (.docx, .xlsx, .pptx)."),
+    "refused_rename": (
+        "{name} cannot be used as a name: it would make the file {reason}.\n"
+        "Nothing was uploaded. Choose another name and re-run."),
     "bad_record": (
         "The dataset record at {key} exists but could not be used:\n"
         "{reason}\n"
@@ -487,6 +499,46 @@ def _walk_dir(dirpath: Path, root: Path, include_noise: bool,
             member = _member_for(full, root)
             seen[resolved] = member
             sources.append(Source(full, member))
+
+
+REFUSALS_SHOWN = 10
+
+
+def type_refusals(sources):
+    """[(member, why)] for every source the store does not take (r13):
+    by name first, else by its opening bytes. Reads SNIFF_BYTES of each
+    file; OSError is the caller's."""
+    out = []
+    for s in sources:
+        reason = filetypes.refused_name(s.member)
+        if reason is None:
+            kind = filetypes.sniff_file(s.path)
+            if kind:
+                reason = "starts like %s, whatever its name" % kind
+        if reason:
+            out.append((s.member, reason))
+    return out
+
+
+def refusal_lines(refused):
+    """The indented list for MESSAGES['refused_type'], capped."""
+    lines = ["  %s - %s" % pair for pair in refused[:REFUSALS_SHOWN]]
+    if len(refused) > REFUSALS_SHOWN:
+        lines.append("  ... and %d more" % (len(refused) - REFUSALS_SHOWN))
+    return "\n".join(lines)
+
+
+def archive_note(sources):
+    """One line about compressed/archive files, or None when there are
+    none (so an ordinary deposit's output is unchanged)."""
+    exts = sorted({"." + filetypes.extension(s.member) for s in sources
+                   if filetypes.is_archive(s.member)})
+    if not exts:
+        return None
+    count = sum(1 for s in sources if filetypes.is_archive(s.member))
+    return ("%d compressed or archive file(s) (%s) will be deposited as they "
+            "are; nobody checks what is inside them. Make sure they hold no "
+            "programs." % (count, ", ".join(exts)))
 
 
 def resolve_files(patterns: List[str],
@@ -1633,7 +1685,21 @@ def main(argv=None) -> int:
                      if keys.is_reserved_member(s.member)), None)
     if reserved:
         return fail(MESSAGES["reserved_name"].format(name=reserved))
-    total = sum(s.path.stat().st_size for s in sources)
+    # r13: no programs, installers, system scripts, shortcuts or macro
+    # files - by name, then by how the file starts. Before preflight, so
+    # it is caught offline and under --dry-run.
+    try:
+        refused = type_refusals(sources)
+    except OSError as e:
+        return fail("Could not read %s: %s"
+                    % (e.filename or "a file", e.strerror or e))
+    if refused:
+        return fail(MESSAGES["refused_type"].format(
+            lines=refusal_lines(refused)))
+    archives = archive_note(sources)
+    if archives:
+        say("note: " + archives)
+    total =sum(s.path.stat().st_size for s in sources)
     say("%d file(s), %s total." % (len(sources), human_size(total)))
 
     # Remote preflight (§8). Dry-run downgrades failures to warnings so the
@@ -1718,6 +1784,10 @@ def main(argv=None) -> int:
             if plan["member"] not in renames:
                 continue
             new_member = renames[plan["member"]]
+            reason = filetypes.refused_name(new_member)
+            if reason:
+                raise ValueError(MESSAGES["refused_rename"].format(
+                    name=new_member, reason=reason))
             del seen[plan["key"]]
             new_key = keys.build_key(
                 meta["strand"], meta["project"], meta["sensitivity"],

@@ -180,6 +180,15 @@ class TestValidateRecord(unittest.TestCase):
             self.assertTrue(any("reserved" in e for e in self._errors(rec)),
                             name)
 
+    def test_a_program_in_the_manifest_is_not_a_record_error(self):
+        # r13 refuses programs where files ENTER (crsw_deposit.filetypes),
+        # never here: validate_record also runs over records already in
+        # the store, on a merge, a recategorise and the vocabulary
+        # replay, and a file from before the rule must not block those.
+        rec = _record(files=[{"path": name, "checksum_sha256": "ab" * 32, "bytes": 1}
+                             for name in ("old/setup.exe", "run.sh", "book.xlsm")])
+        self.assertEqual(self._errors(rec), [])
+
     def test_duplicate_manifest_paths_is_error(self):
         entry = {"path": "a.csv", "checksum_sha256": "ab" * 32, "bytes": 1}
         rec = _record(files=[entry, dict(entry)])

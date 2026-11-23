@@ -188,6 +188,16 @@ class TestForm(unittest.TestCase):
         rules = json.loads(html[start:html.index("</script>", start)])
         self.assertEqual(set(rules["noise_file_names"]), set(noise.NOISE_FILE_NAMES))
         self.assertEqual(rules["noise_file_prefixes"], ["._"])
+        # r13: the page pre-checks with the same lists the server enforces.
+        from crsw_deposit import filetypes
+        self.assertEqual(rules["refused_extensions"], filetypes.REFUSED_EXTENSIONS)
+        self.assertEqual(set(rules["archive_extensions"]), filetypes.ARCHIVE_EXTENSIONS)
+        self.assertEqual(rules["sniff_bytes"], filetypes.SNIFF_BYTES)
+        self.assertEqual([(bytes.fromhex(m), k) for m, k in rules["refused_magics"]],
+                         list(filetypes.MAGICS))
+        self.assertEqual(bytes.fromhex(rules["windows_magic"]), filetypes.WINDOWS_MAGIC)
+        self.assertEqual(rules["windows_header_bytes"], filetypes.WINDOWS_HEADER_BYTES)
+        self.assertEqual(set(rules["shell_interpreters"]), filetypes.SHELL_INTERPRETERS)
 
     def test_script_parses(self):
         """The whole form dies if deposit.js has a syntax error (seen once:

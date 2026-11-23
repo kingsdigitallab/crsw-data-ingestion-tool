@@ -107,6 +107,31 @@ class TestStageDataset(unittest.TestCase):
             stage_dataset(self.store, "k1234567", self.rec, files, NOW)
         self.assertEqual(self.keys_under("staging/"), [])
 
+    def _prepared(self, data):
+        for p, b in data.items():
+            f = self.root.joinpath(*p.split("/"))
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b)
+        return make_record(data), {p: self.root.joinpath(*p.split("/")) for p in data}
+
+    def test_a_program_is_refused_before_any_write(self):
+        # r13: by name, and by opening bytes under another name.
+        rec, files = self._prepared({"wide/demo.parquet": b"PAR1",
+                                     "tools/setup.exe": b"anything",
+                                     "wide/notes.txt": b"\x7fELF" + b"\x00" * 60})
+        with self.assertRaises(BulkError) as cm:
+            stage_dataset(self.store, "k1234567", rec, files, NOW)
+        said = str(cm.exception)
+        self.assertIn("tools/setup.exe (a Windows program (.exe))", said)
+        self.assertIn("wide/notes.txt (starts like a Linux program, whatever its name)", said)
+        self.assertNotIn("demo.parquet", said)
+        self.assertEqual(self.keys_under("staging/"), [])
+
+    def test_a_program_is_refused_on_a_dry_run_too(self):
+        rec, files = self._prepared({"tools/setup.exe": b"anything"})
+        with self.assertRaises(BulkError):
+            stage_dataset(self.store, "k1234567", rec, files, NOW, dry_run=True)
+
     def test_size_mismatch_refused(self):
         self.files["wide/events/demo.parquet"].write_bytes(b"different length")
         with self.assertRaises(BulkError):
