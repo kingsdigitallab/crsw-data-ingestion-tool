@@ -199,20 +199,55 @@ def _ancestors(by_slug: Dict[str, dict], slug: str) -> List[str]:
 
 # --- validation --------------------------------------------------------
 
-def validate_authority(doc) -> List[str]:
-    """Every rule the file must satisfy, as plain messages. Empty means
-    the file is good. Runs in the vocabulary repo's CI and in the tool
-    before a fetched file is trusted."""
+def _term_field_errors(t: dict, label: str) -> List[str]:
+    """Return what is wrong with one term's own fields."""
     errors = []
-    if not isinstance(doc, dict):
-        return ["the vocabulary is not a JSON object"]
-    if not isinstance(doc.get("vocabulary_version"), str) or not DATE_RE.match(
-            doc["vocabulary_version"]):
-        errors.append("vocabulary_version must be a date like 2026-07-23")
-    terms = doc.get("terms")
-    if not isinstance(terms, list) or not terms:
-        return errors + ["terms must be a non-empty list"]
+    if not isinstance(t.get("facet"), str) or not t["facet"]:
+        errors.append("%s: facet is missing" % label)
+    if not isinstance(t.get("label"), str) or not t["label"].strip():
+        errors.append("%s: label is missing" % label)
+    if t.get("status") not in STATUSES:
+        errors.append("%s: status must be current or retired" % label)
+    for field in ("since", "until"):
+        value = t.get(field)
+        if value is not None and not (isinstance(value, str)
+                                      and DATE_RE.match(value)):
+            errors.append("%s: %s %r is not a date" % (label, field, value))
+    if t.get("status") == "retired":
+        if not t.get("until"):
+            errors.append("%s: a retired term needs an until date" % label)
+        rb = t.get("replaced_by")
+        if rb is not None and not (isinstance(rb, list)
+                                   and all(isinstance(s, str) for s in rb)):
+            errors.append("%s: replaced_by must be a list of slugs" % label)
+    elif t.get("until") or t.get("replaced_by"):
+        errors.append("%s: only a retired term has until or replaced_by"
+                      % label)
+    broader = t.get("broader")
+    if broader is not None and not isinstance(broader, str):
+        errors.append("%s: broader must be a slug or null" % label)
+    scope = t.get("scope")
+    if scope is not None and not (isinstance(scope, str) and scope.strip()):
+        errors.append("%s: scope must be a non-empty string" % label)
+    aliases = t.get("aliases")
+    if aliases is not None:
+        if not (isinstance(aliases, list)
+                and all(isinstance(a, str) for a in aliases)):
+            errors.append("%s: aliases must be a list of slugs" % label)
+        else:
+            for alias in aliases:
+                if not SLUG_RE.match(alias):
+                    errors.append("%s: alias %r is not lower-case words joined "
+                                  "by hyphens" % (label, alias))
+            if len(set(aliases)) != len(aliases):
+                errors.append("%s: aliases repeat" % label)
+    return errors
 
+
+def _collect_terms(terms: list) -> Tuple[Dict[str, dict], List[str]]:
+    """Return (terms by slug, errors). A term that is not an object, or
+    whose slug is unusable or repeated, is reported and left out."""
+    errors = []
     by_slug = {}
     for i, t in enumerate(terms):
         label = "terms[%d]" % (i + 1)
@@ -229,47 +264,14 @@ def validate_authority(doc) -> List[str]:
             errors.append("%s appears twice" % label)
             continue
         by_slug[slug] = t
-        if not isinstance(t.get("facet"), str) or not t["facet"]:
-            errors.append("%s: facet is missing" % label)
-        if not isinstance(t.get("label"), str) or not t["label"].strip():
-            errors.append("%s: label is missing" % label)
-        if t.get("status") not in STATUSES:
-            errors.append("%s: status must be current or retired" % label)
-        for field in ("since", "until"):
-            value = t.get(field)
-            if value is not None and not (isinstance(value, str)
-                                          and DATE_RE.match(value)):
-                errors.append("%s: %s %r is not a date" % (label, field, value))
-        if t.get("status") == "retired":
-            if not t.get("until"):
-                errors.append("%s: a retired term needs an until date" % label)
-            rb = t.get("replaced_by")
-            if rb is not None and not (isinstance(rb, list)
-                                       and all(isinstance(s, str) for s in rb)):
-                errors.append("%s: replaced_by must be a list of slugs" % label)
-        elif t.get("until") or t.get("replaced_by"):
-            errors.append("%s: only a retired term has until or replaced_by"
-                          % label)
-        broader = t.get("broader")
-        if broader is not None and not isinstance(broader, str):
-            errors.append("%s: broader must be a slug or null" % label)
-        scope = t.get("scope")
-        if scope is not None and not (isinstance(scope, str) and scope.strip()):
-            errors.append("%s: scope must be a non-empty string" % label)
-        aliases = t.get("aliases")
-        if aliases is not None:
-            if not (isinstance(aliases, list)
-                    and all(isinstance(a, str) for a in aliases)):
-                errors.append("%s: aliases must be a list of slugs" % label)
-            else:
-                for alias in aliases:
-                    if not SLUG_RE.match(alias):
-                        errors.append("%s: alias %r is not lower-case words joined "
-                                      "by hyphens" % (label, alias))
-                if len(set(aliases)) != len(aliases):
-                    errors.append("%s: aliases repeat" % label)
+        errors.extend(_term_field_errors(t, label))
+    return by_slug, errors
 
-    # Cross-term rules.
+
+def _alias_errors(by_slug: Dict[str, dict]) -> List[str]:
+    """Return the aliases that are a current term's slug or are also on
+    another term."""
+    errors = []
     seen_alias: Dict[str, str] = {}
     for slug, t in by_slug.items():
         if t.get("status") == "current" and isinstance(t.get("aliases"), list):
@@ -284,6 +286,13 @@ def validate_authority(doc) -> List[str]:
                                   % (slug, alias, seen_alias[alias]))
                 else:
                     seen_alias[alias] = slug
+    return errors
+
+
+def _link_errors(by_slug: Dict[str, dict]) -> List[str]:
+    """Return what is wrong with each term's replaced_by and broader
+    links to other terms."""
+    errors = []
     for slug, t in by_slug.items():
         for succ in t.get("replaced_by") or []:
             if succ not in by_slug:
@@ -307,7 +316,13 @@ def validate_authority(doc) -> List[str]:
                 chain = _ancestors(by_slug, slug)
                 if slug in chain:
                     errors.append("term %s: broader chain loops" % slug)
+    return errors
 
+
+def _facet_errors(doc: dict) -> List[str]:
+    """Return where the flat `facets` lists, when present, differ from the
+    lists derived from the terms."""
+    errors = []
     # The flat lists, when present, must be exactly the derivation.
     if "facets" in doc:
         derived = facets_from_terms(doc)
@@ -321,7 +336,31 @@ def validate_authority(doc) -> List[str]:
             for name in derived:
                 if name not in doc["facets"]:
                     errors.append("facets is missing %s" % name)
+    return errors
 
+
+def validate_authority(doc) -> List[str]:
+    """Every rule the file must satisfy, as plain messages. Empty means
+    the file is good. Runs in the vocabulary repo's CI and in the tool
+    before a fetched file is trusted."""
+    errors = []
+    if not isinstance(doc, dict):
+        return ["the vocabulary is not a JSON object"]
+    if not isinstance(doc.get("vocabulary_version"), str) or not DATE_RE.match(
+            doc["vocabulary_version"]):
+        errors.append("vocabulary_version must be a date like 2026-07-23")
+    terms = doc.get("terms")
+    if not isinstance(terms, list) or not terms:
+        return errors + ["terms must be a non-empty list"]
+
+    by_slug, term_errors = _collect_terms(terms)
+    errors.extend(term_errors)
+
+    # Cross-term rules.
+    errors.extend(_alias_errors(by_slug))
+    errors.extend(_link_errors(by_slug))
+
+    errors.extend(_facet_errors(doc))
     errors.extend(_validate_changes(doc, by_slug))
     errors.extend(_validate_providers(doc))
     return errors
