@@ -14,10 +14,10 @@ from .cmd_derived import _write_index
 
 
 def cmd_remove(args) -> int:
-    """r10: a dataset leaves the store only this way. The plan unless
-    --confirm repeats every id; each dataset its own unit of work and its
-    own lines; the derived layers rebuilt once at the end, as after a
-    run that changed a record."""
+    """Run `promoter remove` and return the exit code. Without --confirm
+    repeating every id it logs the plan and touches nothing. Each target
+    is its own unit of work with its own log lines; the derived layers
+    are rebuilt once at the end."""
     targets = list(dict.fromkeys(args.dataset or args.staging))
     dry_run = not args.confirm
     if not dry_run and sorted(set(args.confirm)) != sorted(targets):
@@ -34,7 +34,8 @@ def cmd_remove(args) -> int:
     removed, refused, removed_ids = 0, 0, []
 
     def do(t, name, would, done, **where):
-        """One target: refused, planned, or removed; True when removed."""
+        """Handle one target: refused, planned or removed. Return True when
+        it was removed."""
         nonlocal removed, refused
         if t.problems:
             log.write("remove_refused", problems=t.problems, **where)
@@ -89,7 +90,7 @@ def cmd_remove(args) -> int:
         provider_slugs, place_codes, _ = _lists(vocab_dict)
 
         def refusal(user, deposit_id):
-            """r12: the problems `run` would refuse this deposit for."""
+            """Return the problems `run` would refuse this deposit for."""
             dep = store.load(user, deposit_id)
             if dep is None:
                 return ["control object missing or unreadable"]
