@@ -42,7 +42,10 @@ specifications are in `docs/specs/`; "r5 Q4" means question 4 of
 - **Decision:** a version is stored as `{major}-{minor}`; `3-0`, `v3-0`, `3.0` and `v3.0` are accepted and a bare `3` is rejected, never guessed.
   **Reference:** r2 §3.
 - **Decision:** a dataset's UUID4 is minted once, at first record creation.
-  **Reference:** r5 Q1. The docstring also says: "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." That sentence is kept as it was. What "promotion" means there is an open question in `docs/refactor/findings.md`.
+  **Reference:** r5 Q1.
+- **Decision:** a change of state or sensitivity makes a new dataset with a new UUID, linked to the old one by `derived_from`.
+  **Reason:** state and sensitivity are parts of the prefix, so the changed dataset lives at a new prefix with its own record. The old docstring called this "promotion or reclassification"; it was reworded on 24 November 2026 (Neil's ruling) so that it cannot be confused with the promoter, which moves a deposit from staging to the store and keeps the UUID.
+  **Reference:** r5 Q1.
 - **Decision:** a file's MIME type comes from a private table; an unknown type is omitted, never guessed.
   **Reason:** the default table consults the Windows registry, which maps `.csv` to `application/vnd.ms-excel`, so the manifest would differ by the depositor's platform.
   **Reference:** r5 §2.
