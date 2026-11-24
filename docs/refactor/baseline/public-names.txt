@@ -1,0 +1,236 @@
+[crsw_deposit]
+  module     authority
+  module     deposit_logic
+  module     filetypes
+  module     keys
+  module     labels
+  module     noise
+  module     places
+  module     record
+  module     vocab
+
+[crsw_deposit.keys]
+  tuple      DEPOSIT_STRANDS
+  tuple      DOMAINS
+  int        MEMBER_PATH_MAX_BYTES
+  int        MEMBER_SEGMENT_MAX_BYTES
+  str        PROBLEM_CHARS
+  Pattern    RESERVED_RECORD_RE
+  type       RedDataError
+  tuple      SENSITIVITIES
+  tuple      STATES
+  tuple      STRANDS
+  function   build_key
+  function   dataset_prefix
+  function   dataset_prefix_ok
+  function   filename_problems
+  function   is_reserved_member
+  function   is_reserved_name
+  function   member_path_error
+  function   member_path_problems
+  function   normalise_member_path
+  function   normalise_project
+  function   record_filename
+  function   record_key
+  function   similar_projects
+  function   suggest_filename
+  function   suggest_member_path
+  function   validate_project
+
+[crsw_deposit.record]
+  int        ABSTRACT_MIN_WORDS
+  tuple      ACCEPTED_SCHEMA_VERSIONS
+  tuple      ACTIVITY_KINDS
+  tuple      HISTORY_KINDS
+  tuple      MANIFEST_OPTIONAL
+  tuple      MANIFEST_REQUIRED
+  tuple      OPTIONAL_FIELDS
+  Pattern    PLACE_CODE_RE
+  tuple      RECOMMENDED_FIELDS
+  tuple      REFERENCE_KINDS
+  tuple      REQUIRED_FIELDS
+  type       RecordChangeError
+  type       RecordParseError
+  str        SCHEMA_VERSION
+  tuple      SETTABLE_FIELDS
+  tuple      SOURCE_TYPES
+  str        VOCABULARY_ACTOR
+  function   abstract_warning
+  function   append_depositor
+  function   apply_dataset_change
+  function   apply_vocabulary_mapping
+  function   build_record
+  function   coverage_error
+  function   default_depositor
+  function   domain_list
+  function   envelope_errors
+  function   field_set_error
+  function   guess_format
+  function   history_entry
+  function   human_bytes
+  function   manifest_entry
+  function   merge_manifest
+  function   mint_uuid
+  function   normalise_version
+  function   parse_record
+  function   parse_record_with_status
+  function   place_errors
+  function   provider_errors
+  function   record_json
+  function   reference_from_text
+  function   references_from_lines
+  function   sha256_file
+  function   temporal_object
+  function   temporal_pair
+  function   unchanged_paths
+  function   unknown_subjects
+  function   upgrade_record
+  _lru_cache_wrapper urlsplit
+  function   utc_now_iso
+  function   validate_activity
+  function   validate_history_entry
+  function   validate_record
+  function   validate_reference
+  function   widen
+
+[crsw_deposit.deposit_logic]
+  tuple      INHERITED_FIELDS
+  tuple      KEPT_UNLESS_SUPPLIED
+  function   assemble_record
+  function   completion_problems
+  function   dataset_prefix
+  function   dataset_uuid_for
+  function   defaults_from_record
+  function   parse_provenance_file
+  function   plan_keys
+  function   record_bytes
+  function   version_not_lower
+
+[crsw_deposit.vocab]
+  int        FETCH_TIMEOUT
+  str        VOCAB_URL
+  function   activities
+  function   activity_codes
+  function   all_terms
+  function   bundled_vocab_path
+  function   cache_dir
+  function   domain_codes
+  function   domains
+  function   facets
+  function   load_vocabulary
+  function   provider_slugs
+  function   providers
+
+[crsw_deposit.authority]
+  type       AuthorityError
+  tuple      CHANGE_KINDS
+  Pattern    DATE_RE
+  str        MAPPED_REMOVED
+  str        MAPPED_REPLACED
+  str        MAPPED_SPLIT_REVIEW
+  Pattern    SLUG_RE
+  tuple      STATUSES
+  function   aliases_of
+  function   ancestors
+  function   apply_change
+  function   children_of
+  function   current_terms
+  function   describe_term
+  function   dump_authority
+  function   expand_subject
+  function   facet_order
+  function   facets_from_terms
+  function   facets_of
+  function   is_authority
+  function   labels_of
+  function   map_subjects
+  function   narrower
+  function   normalise
+  function   providers_of
+  function   scopes_of
+  function   terms_by_slug
+  function   tree
+  function   validate_authority
+
+[crsw_deposit.places]
+  Pattern    CODE_RE
+  Pattern    DATE_RE
+  str        EXPANDED_EXACT
+  str        EXPANDED_HIERARCHY
+  str        EXPANDED_UNKNOWN
+  tuple      KINDS
+  str        PLACES_URL
+  function   ancestors
+  function   bundled_places_path
+  function   children_of
+  function   codes
+  function   expand_place
+  function   labels_of
+  function   load_places
+  function   narrower
+  function   places_by_code
+  function   tree
+  function   validate_places
+
+[crsw_deposit.labels]
+  str        CHECKSUM
+  str        DATASET_UUID
+  str        DEPOSITOR
+  tuple      LABEL_NAMES
+  str        S3_META_PREFIX
+  str        SENSITIVITY
+  function   as_s3_headers
+  function   object_labels
+
+[crsw_deposit.noise]
+  frozenset  NOISE_DIR_NAMES
+  frozenset  NOISE_FILE_NAMES
+  tuple      NOISE_FILE_PREFIXES
+  function   is_noise_dir
+  function   is_noise_file
+  function   is_noise_member
+
+[crsw_deposit.filetypes]
+  frozenset  ARCHIVE_EXTENSIONS
+  tuple      MAGICS
+  dict       REFUSED_EXTENSIONS
+  frozenset  SHELL_INTERPRETERS
+  str        SHELL_KIND
+  int        SNIFF_BYTES
+  int        WINDOWS_HEADER_BYTES
+  str        WINDOWS_KIND
+  bytes      WINDOWS_MAGIC
+  function   extension
+  function   is_archive
+  function   refused_content
+  function   refused_name
+  function   sniff_file
+
+[crsw_deposit.vocab_cli]
+  str        DEFAULT_FILE
+  function   build_parser
+  function   cmd_add
+  function   cmd_describe
+  function   cmd_merge
+  function   cmd_move
+  function   cmd_rename
+  function   cmd_retire
+  function   cmd_split
+  function   cmd_tree
+  function   cmd_validate
+  function   main
+
+[crsw_web.bulk]
+  type       AlreadyStaged
+  type       BulkError
+  str        COPIED
+  str        STATUS_COMPLETE
+  type       Staged
+  type       StagingInterrupted
+  str        UPLOADED
+  function   check_files
+  function   check_types
+  function   files_under
+  function   main
+  function   meta_from_record
+  function   stage_dataset
