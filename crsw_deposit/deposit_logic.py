@@ -1,15 +1,13 @@
-"""What a deposit means, independent of how bytes move.
+"""What a deposit means, whichever way the bytes move.
 
-The orchestration that was inside the CLI's perform_deposits: which
-keys a batch lands at, how the dataset record is assembled from the
-batch plus any existing record, the exact bytes the record is written
-as, and the completion check that proves every manifest entry is in
-the store. The CLI (rclone) and the web service (boto3) both call
-these so the record and labels are byte-identical whichever route a
-researcher used.
+Which keys a batch lands at, how the dataset record is assembled from
+the batch and any existing record, the exact bytes the record is
+written as, and the check that every manifest entry is in the store.
+The CLI (rclone) and the web service (boto3) both call these, so the
+record and labels are byte-identical whichever route was used.
 
 No user I/O, no network. Stdlib only. Time and identity are passed
-in, never looked up, so tests are deterministic."""
+in, never looked up."""
 import json
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -18,12 +16,13 @@ from . import record
 
 
 def parse_provenance_file(text: str) -> Tuple[List[Dict], List[Dict]]:
-    """A `--provenance FILE` (r8 §3): either a JSON list of activities,
-    or an object with `provenance` and/or `derived_from`. Returns
-    (provenance, derived_from), each possibly empty. Shape errors raise
-    ValueError naming the entry; the full activity and reference checks
-    run in validate_record once the manifest exists. Strings in
-    `derived_from` become references by the shared rule."""
+    """Parse the text of a `--provenance FILE` and return (provenance,
+    derived_from), each possibly empty. The file is a JSON list of
+    activities, or an object with `provenance` and/or `derived_from`;
+    strings in `derived_from` become references.
+
+    Raises ValueError naming the entry for a shape error. The full
+    activity and reference checks run later, in validate_record."""
     try:
         doc = json.loads(text)
     except ValueError as e:
@@ -72,14 +71,11 @@ def parse_provenance_file(text: str) -> Tuple[List[Dict], List[Dict]]:
 
 def plan_keys(meta: Dict, members: List[str],
               display: Optional[List[str]] = None) -> List[Tuple[str, str]]:
-    """(member, key) for every member, in input order. Raises ValueError
-    when two members would land at the same key - that would be a
-    silent overwrite inside one batch. build_key does the per-part
-    validation (red, reserved names, member-path grammar).
+    """Return (member, key) for every member, in input order. `display`,
+    aligned with `members`, is what to call each one in an error message.
 
-    `display`, aligned with `members`, is what to call each one in the
-    collision message (the CLI passes local paths; the web route can
-    pass the browser's relative names)."""
+    Raises ValueError when two members would land at the same key, and
+    whatever keys.build_key raises for an invalid part."""
     display = list(display) if display is not None else list(members)
     out = []
     seen = {}
@@ -103,31 +99,27 @@ def dataset_prefix(meta: Dict) -> str:
 
 
 def dataset_uuid_for(existing: Optional[Dict], mint=record.mint_uuid) -> str:
-    """The existing record's UUID, or a fresh one for a first deposit
-    (r5 Q1: minted once per prefix, stable across moves)."""
+    """Return the existing record's UUID, or a new one for a first deposit."""
     return existing["dataset_uuid"] if existing else mint()
 
 
-# Descriptive fields a deposit to an existing dataset starts from (r5 §4).
+# Descriptive fields a deposit to an existing dataset starts from.
 # Not derived_from: assemble_record keeps the existing list unless this
-# deposit supplies one (r8 §3), so a form must not echo it back.
+# deposit supplies one, so a form must not echo it back.
 INHERITED_FIELDS = ("domain", "steward", "version", "subject", "abstract", "license",
                     "source_type", "source_detail", "creator", "provider",
                     "spatial", "spatial_note", "notes")
 
-# r11: descriptive fields a deposit keeps from the existing record
-# unless it supplies its own, the derived_from rule (r8 §3) applied to
-# the rest of the optional tier.
+# Descriptive fields a deposit keeps from the existing record unless it
+# supplies its own, as derived_from is kept.
 KEPT_UNLESS_SUPPLIED = ("provider", "spatial", "spatial_note", "notes",
                         "language", "ethics_ref")
 
 
 def defaults_from_record(existing: Optional[Dict]) -> Dict:
-    """The values a new deposit to an existing dataset begins with: the
-    record's descriptive fields, and its coverage as coverage_start and
-    coverage_end. Blank fields are left out. The CLI offers these as its
-    prompt defaults and the web form prefills from them, so the two
-    routes inherit the same things."""
+    """Return the values a new deposit to an existing dataset begins with:
+    the record's descriptive fields, and its coverage as coverage_start
+    and coverage_end. Blank fields are left out."""
     if not existing:
         return {}
     out: Dict = {}
@@ -151,9 +143,9 @@ def _version_tuple(value) -> Optional[Tuple[int, int]]:
 
 
 def version_not_lower(new, existing) -> bool:
-    """False when `new` is a lower version than the record's (a re-deposit
-    with the form's default 1-0 over a dataset at 3-0). Anything that is
-    not a version compares as fine: the validators say what is wrong."""
+    """False if `new` is a lower version than `existing`. Anything that is
+    not a version compares as fine; the validators say what is wrong with
+    it."""
     a, b = _version_tuple(new), _version_tuple(existing)
     if a is None or b is None:
         return True
@@ -164,24 +156,19 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
                     entries: List[Dict], depositor: str, now: str,
                     dataset_uuid: str, created: Optional[str] = None
                     ) -> Tuple[Dict, List[Dict], List[str], List[str]]:
-    """The record for this deposit, plus (union, added, updated) for
-    the caller's report.
+    """Return (record, union, added, updated): the record for this
+    deposit, and the manifest changes for the caller's report.
 
-    Rules carried over from the CLI unchanged (r5 Q4, Q5):
-    - manifest is the union of existing and batch; nothing is removed
-    - the coverage envelope widens over every member's own range AND the
-      old envelope, so legacy members whose per-file coverage was never
-      recorded stay contained
-    - `created` is preserved from the existing record, else `created`
-      if the caller knows when the dataset first came into being (the
-      promoter passes the staged record's), else now; `modified` is now
-    - depositors accumulate, first-seen order, no repeats
-    - provenance activities accumulate too: the existing list followed by
-      whatever this deposit supplies (r8 §3, decided); derived_from is
-      this deposit's list if it supplies one, else the existing one, and
-      so are provider, spatial, spatial_note, notes, language and
-      ethics_ref (r11): a re-deposit never silently drops them
-    The result is NOT validated here: callers run record.validate_record
+    - The manifest is the union of existing and batch; nothing is removed.
+    - Coverage widens over every member's own range and the old envelope.
+    - `created` is the existing record's, else the `created` argument,
+      else now; `modified` is now.
+    - Depositors, provenance activities and category history accumulate.
+    - derived_from, provider, spatial, spatial_note, notes, language and
+      ethics_ref are this deposit's if it supplies them, else the existing
+      record's: a re-deposit never silently drops them.
+
+    The result is not validated here: callers run record.validate_record
     with their vocabulary and treat errors as fatal before writing."""
     existing = existing or {}
     existing_files = existing.get("files") or None
@@ -189,7 +176,7 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
         meta.get("provenance") or [])
     derived_from = meta.get("derived_from") or existing.get("derived_from")
     kept = {name: meta.get(name) or existing.get(name) for name in KEPT_UNLESS_SUPPLIED}
-    # r9: category history accumulates the same way (the promoter adds
+    # Category history accumulates the same way (the promoter adds
     # entries when it maps a staged record's stale terms).
     category_history = list(existing.get("category_history") or []) + list(
         meta.get("category_history") or [])
@@ -227,21 +214,22 @@ def assemble_record(meta: Dict, existing: Optional[Dict],
 
 
 def record_bytes(rec: Dict) -> bytes:
-    """The exact bytes a record is stored as: UTF-8, LF only, trailing
-    newline. The record's own checksum label is computed from these
-    bytes, so they must not vary by platform (r7 §4) or by route."""
+    """Return the exact bytes a record is stored as: UTF-8, LF only,
+    trailing newline."""
+    # The record's checksum label is computed from these bytes, so they
+    # must not vary by platform or by route.
     return record.record_json(rec).encode("utf-8")
 
 
 def completion_problems(prefix: str, entries: List[Dict],
                         stored_size: Callable[[str], Optional[int]]
                         ) -> List[str]:
-    """Completion check (r5 Q4): every manifest entry exists at
-    prefix + '/' + path with the recorded size. Sizes only, never
-    checksum-vs-ETag (r2 §0). `stored_size` maps an object key to its
-    size in the store, or None when absent. Returns problems, empty
-    when the deposit is complete."""
+    """Return what is missing from the store or the wrong size there; empty
+    when the deposit is complete. Every manifest entry must exist at
+    prefix + '/' + path with the recorded size. `stored_size` maps an
+    object key to its size in the store, or None when absent."""
     problems = []
+    # Sizes only, never a checksum against an ETag.
     for entry in entries:
         key = prefix + "/" + entry["path"]
         size = stored_size(key)
