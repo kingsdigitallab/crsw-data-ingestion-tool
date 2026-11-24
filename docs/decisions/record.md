@@ -42,7 +42,7 @@ specifications are in `docs/specs/`; "r5 Q4" means question 4 of
 - **Decision:** a version is stored as `{major}-{minor}`; `3-0`, `v3-0`, `3.0` and `v3.0` are accepted and a bare `3` is rejected, never guessed.
   **Reference:** r2 §3.
 - **Decision:** a dataset's UUID4 is minted once, at first record creation.
-  **Reference:** r5 Q1. (The old docstring added: "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." Later decisions keep the UUID when a deposit is merged into an existing record and when categories change, so that sentence was not carried over. See `docs/refactor/findings.md`.)
+  **Reference:** r5 Q1. The docstring also says: "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." That sentence is kept as it was. What "promotion" means there is an open question in `docs/refactor/findings.md`.
 - **Decision:** a file's MIME type comes from a private table; an unknown type is omitted, never guessed.
   **Reason:** the default table consults the Windows registry, which maps `.csv` to `application/vnd.ms-excel`, so the manifest would differ by the depositor's platform.
   **Reference:** r5 §2.

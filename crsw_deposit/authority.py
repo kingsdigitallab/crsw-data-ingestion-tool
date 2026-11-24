@@ -680,6 +680,7 @@ def map_subjects(subjects: List[str], doc: dict) -> Tuple[List[str], List[dict]]
         elif kind == "retire":
             substitute(frm, [], MAPPED_REMOVED, c.get("date"))
 
+    # Records never carry a retired term: the promoter rewrites them with this.
     # Safety net for retired terms the changes list did not cover.
     for slug in list(current):
         t = by_slug.get(slug)

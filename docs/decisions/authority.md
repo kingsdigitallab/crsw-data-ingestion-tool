@@ -52,7 +52,7 @@ and "r11 §3" section 3 of `_R11.md`.
   **Reason:** the promoter replays the changes over every record on every run, so mapping twice must be a no-op.
   **Reference:** r9.
 - **Decision:** a retired term with no change entry is still handled, from its own `replaced_by`.
-  **Reason:** a hand-maintained file may lack the entry, and the result must never carry a retired term.
+  **Reason:** a hand-maintained file may lack the entry, and the result must never carry a retired term. This is where "records never carry a retired term" is enforced: the promoter rewrites records with this function, and a comment at that line says so.
   **Reference:** r9.
 
 ## Writing (`dump_authority`)

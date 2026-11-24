@@ -164,7 +164,9 @@ def default_depositor() -> str:
 
 def mint_uuid() -> str:
     """Return a new UUID4 for a dataset. It is minted once, when the
-    dataset's first record is created."""
+    dataset's first record is created. Promotion or reclassification
+    creates a NEW record with a new UUID; derived_from carries the
+    lineage."""
     return str(uuid.uuid4())
 
 

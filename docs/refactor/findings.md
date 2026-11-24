@@ -21,7 +21,7 @@ left alone.
 ## Noticed during the docstring sweep of `crsw_deposit/` (24 November 2026)
 
 - The module docstring of `record.py` said "dataset record v0.4" and named the file `dataset.meta.json`; `RecordParseError`'s said the same name. Both were years out of date. The new docstrings give the current name. No code was involved.
-- `record.mint_uuid`'s docstring said "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." The promoter keeps the UUID when it merges into an existing record and when categories change, so the sentence was dropped. Worth a check by someone who knows whether any route still mints a second UUID for a dataset that moves between states.
+- **Question for Neil.** `record.mint_uuid`'s docstring says "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." The sentence is kept as it was. Read today it looks wrong, because the promoter keeps the UUID when it moves a deposit from staging to the store and when categories change. But "promotion" there may mean a change of state or sensitivity (for example `1_interim` to `2_final`, or amber to green), which is a new prefix and so a new record, and not staging to store. Which is meant? If the first, the sentence should say "a change of state or sensitivity"; if the second, it is out of date.
 - Several small functions in `crsw_deposit/` have no docstring at all (for example `places.codes`, `places.labels_of`, `vocab.cache_dir`, `vocab.domain_codes`, `authority.is_authority`, `record.utc_now_iso`, the `cmd_*` handlers in `vocab_cli.py`). The sweep rewrote existing docstrings and did not add new ones.
 
 ## Noticed while taking the baseline (24 November 2026)
