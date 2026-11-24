@@ -23,12 +23,12 @@ class Report:
     existing_record: Optional[Dict] = None
     staged_record: Optional[Dict] = None
     total_bytes: int = 0
-    # r9: set when the staged record's subject terms were stale and mapped
+    # Set when the staged record's subject terms were stale and mapped
     # cleanly (rename/merge/retire) to the current vocabulary.
     mapped_subjects: Optional[List[str]] = None
     mapping_entries: List[Dict] = field(default_factory=list)
     mapped_vocabulary_version: Optional[str] = None
-    # r8 §4: derived_from with parents' uuid/version filled in from the
+    # derived_from with parents' uuid/version filled in from the
     # store, when any reference needed it; None when nothing changed.
     resolved_derived_from: Optional[List[Dict]] = None
     resolved_references: List[Dict] = field(default_factory=list)
@@ -43,7 +43,7 @@ _read_json_object = read_json_object
 
 
 def _sha256_and_head(client, bucket, key, n: int) -> Tuple[str, bytes]:
-    """The object's SHA-256 and its first `n` bytes, from one read."""
+    """Return the object's SHA-256 and its first `n` bytes, from one read."""
     h = hashlib.sha256()
     head = b""
     body = client.get_object(Bucket=bucket, Key=key)["Body"]
@@ -55,8 +55,9 @@ def _sha256_and_head(client, bucket, key, n: int) -> Tuple[str, bytes]:
 
 
 def _head_of_object(client, bucket, key, n: int) -> bytes:
-    """The object's first `n` bytes alone (when checksums are not being
-    verified, so nothing else reads it). Not for an empty object."""
+    """Return the object's first `n` bytes. Used when checksums are not
+    being verified, so nothing else reads the object. Not for an empty
+    object."""
     body = client.get_object(Bucket=bucket, Key=key,
                              Range="bytes=0-%d" % (n - 1))["Body"]
     return body.read()
@@ -131,7 +132,7 @@ def _resolve_derived_from(staged_rec: Optional[Dict], client, bucket,
     """Look up the datasets the staged record says it was derived from,
     and note on the report which were found."""
     if staged_rec and isinstance(staged_rec.get("derived_from"), list):
-        # r8 §4: resolve, don't invent. A parent that is not there is a
+        # Resolve, don't invent. A parent that is not there is a
         # warning; the reference is left as typed and the deposit goes on.
         refs, resolved, unresolved = lookup(client, bucket, staged_rec["derived_from"])
         rep.resolved_references = resolved
@@ -203,7 +204,7 @@ def _check_members(dep: Deposit, client, bucket, cfg: PromoterConfig,
             opening = _head_of_object(client, bucket, key, filetypes.SNIFF_BYTES)
         else:
             opening = b""
-        # r13: a program under another name. Its name is step 7's.
+        # A program under another name. Its name is step 7's.
         kind = filetypes.refused_content(opening)
         if kind and not filetypes.refused_name(entry["path"]):
             p.append("member content: %s starts like %s; not accepted"
@@ -221,7 +222,7 @@ def _check_member_paths(dep: Deposit, rep: Report) -> None:
             p.append("member path: %s" % err)
         if keys.is_reserved_member(entry["path"]):
             p.append("member path %r is reserved" % entry["path"])
-        # r13: only what this deposit brings; what is already in the
+        # Only what this deposit brings; what is already in the
         # dataset is never judged here.
         kind = filetypes.refused_name(entry["path"])
         if kind:
@@ -277,12 +278,14 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
           vocab_doc: Optional[Dict] = None,
           provider_slugs: Optional[List[str]] = None,
           place_codes: Optional[Set[str]] = None) -> Report:
-    """`vocab_doc`, when given, is the whole vocabulary (r9 authority
-    file): a staged record whose subject terms have since been renamed,
-    merged or retired is mapped and promoted with the mapping in its
-    history; one whose term was split needs a person and is refused.
-    `provider_slugs` and `place_codes` (r11) are the lists the record's
-    provider and spatial are checked against."""
+    """Run every check on a staged deposit and return the Report. An empty
+    `problems` list means the deposit may be promoted.
+
+    With `vocab_doc` (the whole vocabulary), a staged record whose subject
+    terms have since been renamed, merged or retired is mapped and
+    promoted with the mapping in its history; one whose term was split
+    needs a person and is refused. `provider_slugs` and `place_codes` are
+    the lists the record's provider and spatial are checked against."""
     rep = Report()
     client, bucket = store.client, store.bucket
     p = rep.problems
