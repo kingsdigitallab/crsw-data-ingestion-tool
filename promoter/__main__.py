@@ -76,6 +76,7 @@ from .config import ConfigError, PromoterConfig
 from .log import Log
 from .promote import promote
 from .scan import list_deposits
+from .cmd_common import _whoami, _connect, _setup, _lists, _print_line, _write_audit
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,35 +163,6 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
     return p
-
-
-def _whoami() -> str:
-    try:
-        return getpass.getuser()
-    except Exception:
-        return "promoter"
-
-
-def _connect(args):
-    load_dotenv(args.env_file)
-    cfg = PromoterConfig.from_env()
-    client = s3mod.make_client(cfg)          # same fields as web Settings
-    return cfg, client
-
-
-def _setup(args):
-    cfg, client = _connect(args)
-    log = Log(args.log or cfg.log_path)
-    vocab_dict, source = vocab.load_vocabulary()
-    return cfg, client, log, vocab_dict, source
-
-
-def _lists(vocab_dict):
-    """r11: what provider slugs and place codes are checked against:
-    the vocabulary's providers and places.json through its own chain.
-    Returns (provider_slugs, place_codes, places_source)."""
-    places_doc, places_source = places_mod.load_places()
-    return vocab.provider_slugs(vocab_dict), places_mod.codes(places_doc), places_source
 
 
 def _write_index(cfg, client, log, dry_run: bool, changed: int,
@@ -385,10 +357,6 @@ def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False,
     return summary
 
 
-def _print_line(action: str, **detail) -> None:
-    print(json.dumps({"action": action, **detail}, ensure_ascii=False))
-
-
 def _apply_plan(client, cfg, log, plan, who: str, dry_run: bool) -> Tuple[int, int]:
     """Log a recategorise plan and, unless a dry run, write it. Returns
     (rewritten, failed)."""
@@ -458,21 +426,6 @@ def _replay_vocabulary(cfg, client, log, vocab_dict, source, provider_slugs, pla
         log.write("vocabulary_replay_failed", rewritten=rewritten, reason=str(e))
         return "failed", rewritten, True
     return "replayed", rewritten, False
-
-
-def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
-    """Keep this run's lines in the bucket. A real run whose audit
-    object cannot be written exits 2: a promotion without its trail is
-    the one thing that must be noticed."""
-    if not cfg.audit_prefix:
-        return code
-    try:
-        key = audit.write_run(client, cfg.s3_bucket, cfg.audit_prefix, log)
-    except Exception as e:
-        log.write("audit_write_failed", error=str(e), dry_run=dry_run)
-        return code if dry_run else 2
-    log.write("audit_written", key=key)
-    return code
 
 
 def cmd_run(args) -> int:
