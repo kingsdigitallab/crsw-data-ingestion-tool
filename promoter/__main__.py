@@ -53,37 +53,22 @@ configuration error, unusable change file, a --confirm that does not
 repeat every id, or (a real run) the audit object could not be
 written."""
 import argparse
-import getpass
-import json
 import sys
-from typing import Optional, Tuple
 
-from crsw_deposit import keys, places as places_mod, record, vocab
-from crsw_web import s3 as s3mod
-from crsw_web.config import load_dotenv
-from crsw_web.deposits import DepositStore
-from crsw_web.llm import Platform
-from crsw_web.version import release
+# The tests reach these three through this module (they patch
+# promoter.__main__.vocab.load_vocabulary, .s3mod.make_client and
+# .recat.plan), so they stay imported here although nothing below uses them.
+from crsw_deposit import vocab  # noqa: F401
+from crsw_web import s3 as s3mod  # noqa: F401
 
-from . import audit
-from . import embed as embed_mod
-from . import index as index_mod
-from . import passages as passages_mod
-from . import recategorise as recat
-from . import remove as remove_mod
-from .checks import check
-from .config import ConfigError, PromoterConfig
-from .log import Log
-from .promote import promote
-from .scan import list_deposits
-from .cmd_common import _whoami, _connect, _setup, _lists, _print_line, _write_audit
-from .cmd_derived import _write_index, _embed_if_model_changed, _ocr, _write_passages, _record_in_place, _passages_skip_reason, _embed_model, _refresh_embeddings
-from .cmd_recategorise import _apply_plan, _mark_applied, cmd_recategorise
-from .cmd_run import _replay_vocabulary, cmd_run
-from .cmd_remove import cmd_remove
+from . import recategorise as recat  # noqa: F401
+from .cmd_audit import cmd_audit, cmd_datasets
 from .cmd_index import cmd_index
 from .cmd_passages import cmd_passages
-from .cmd_audit import cmd_audit, cmd_datasets
+from .cmd_recategorise import cmd_recategorise
+from .cmd_remove import cmd_remove
+from .cmd_run import cmd_run
+from .config import ConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
