@@ -36,9 +36,9 @@ def _setup(args):
 
 
 def _lists(vocab_dict):
-    """r11: what provider slugs and place codes are checked against:
-    the vocabulary's providers and places.json through its own chain.
-    Returns (provider_slugs, place_codes, places_source)."""
+    """Return (provider_slugs, place_codes, places_source): what provider
+    slugs and place codes are checked against, from the vocabulary's
+    providers and from places.json loaded by its own chain."""
     places_doc, places_source = places_mod.load_places()
     return vocab.provider_slugs(vocab_dict), places_mod.codes(places_doc), places_source
 
@@ -48,15 +48,15 @@ def _print_line(action: str, **detail) -> None:
 
 
 def _write_audit(cfg, client, log, dry_run: bool, code: int) -> int:
-    """Keep this run's lines in the bucket. A real run whose audit
-    object cannot be written exits 2: a promotion without its trail is
-    the one thing that must be noticed."""
+    """Write this run's lines to the bucket and return the exit code to
+    use: `code`, or 2 when a real run's audit object could not be written."""
     if not cfg.audit_prefix:
         return code
     try:
         key = audit.write_run(client, cfg.s3_bucket, cfg.audit_prefix, log)
     except Exception as e:
         log.write("audit_write_failed", error=str(e), dry_run=dry_run)
+        # A promotion without its trail is the one thing that must be noticed.
         return code if dry_run else 2
     log.write("audit_written", key=key)
     return code
