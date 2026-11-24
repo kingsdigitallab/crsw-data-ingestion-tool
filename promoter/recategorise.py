@@ -1,4 +1,4 @@
-"""Bring dataset records in place up to the current categories (r9).
+"""Bring dataset records in place up to the current categories.
 
 Two sources of change, both applied to the record only (never a member,
 a label or a key):
@@ -8,7 +8,7 @@ a label or a key):
   affected term, recorded in the record by the actor "vocabulary";
 - a change file: a steward's per-dataset decisions, each naming a
   dataset by identifier or UUID with terms to add, terms to remove, a
-  new domain, descriptive fields to set in place (r11: licence, notes,
+  new domain, descriptive fields to set in place (licence, notes,
   creator and the like; `record.SETTABLE_FIELDS`) and a reason.
 
 `plan` reads every record and works out what would change; `apply`
@@ -42,7 +42,7 @@ class ChangeFileError(ValueError):
 
 
 def load_change_file(text: str) -> List[Dict]:
-    """The change file as a validated list. Shape:
+    """Return the change file as a validated list. Shape:
     [{"dataset": "<identifier or uuid>", "add": [...], "remove": [...],
       "set_domain": "...", "set": {"license": "...", "notes": null},
       "reason": "..."}, ...]
@@ -144,9 +144,8 @@ def _matches(change: Dict, rec: Dict) -> bool:
 
 
 def _read_record_text(client, bucket: str, key: str):
-    """(text, None) or (None, why): bytes that are not UTF-8 (a record saved
-    through the mount by something else) are one record's problem, not the
-    whole walk's."""
+    """Return (text, None), or (None, why) when the record's bytes are not
+    UTF-8. That is one record's problem and does not stop the walk."""
     try:
         return _read_json_object(client, bucket, key)
     except UnicodeDecodeError as e:
@@ -157,10 +156,11 @@ def plan(client, bucket: str, vocab_doc: Dict, changes: List[Dict],
          who: str, now: str, only: Optional[str] = None,
          provider_slugs: Optional[List[str]] = None,
          place_codes: Optional[Set[str]] = None) -> Plan:
-    """What every record in place would become. `only` limits the walk
-    to one dataset (identifier or uuid). Change-file entries that match
-    no dataset are problems on the plan. `provider_slugs` and
-    `place_codes` (r11) check a `set` of provider or spatial."""
+    """Return the Plan: what every record in place would become. `only`
+    limits the walk to one dataset (identifier or uuid). Change-file
+    entries that match no dataset are problems on the plan.
+    `provider_slugs` and `place_codes` check a `set` of provider or
+    spatial."""
     out = Plan()
     terms = vocab.all_terms(vocab_doc)
     codes = vocab.domain_codes(vocab_doc)
@@ -230,9 +230,8 @@ def _marker_key(index_prefix: str) -> str:
 
 
 def read_marker(client, bucket: str, index_prefix: str) -> Optional[Dict]:
-    """The marker in place, or None when there is none or it cannot be
-    used: a replay is safe to repeat, so an unreadable marker is the same
-    as never having applied. Any other failure to read it raises."""
+    """Return the marker in place, or None when there is none or it cannot
+    be used. Any other failure to read it raises."""
     try:
         body = client.get_object(Bucket=bucket, Key=_marker_key(index_prefix))["Body"].read()
     except ClientError as e:
@@ -264,9 +263,9 @@ def write_marker(client, bucket: str, index_prefix: str, vocab_doc: Dict, now: s
 
 
 def apply(client, bucket: str, item: Item, log: Log, who: str) -> bool:
-    """Write one planned record in place, exactly as promotion writes a
-    record: put, read back, compare. Logs record_rewritten or
-    recategorise_failed. Returns True on success."""
+    """Write one planned record in place as promotion writes a record: put,
+    read back, compare. Logs record_rewritten or recategorise_failed.
+    Return True on success."""
     if not item.changed or item.problems:
         raise ValueError("nothing to write for %s" % item.prefix)
     data = deposit_logic.record_bytes(item.after)
