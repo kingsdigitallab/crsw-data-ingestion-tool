@@ -19,12 +19,10 @@ from .scan import list_deposits
 
 def _replay_vocabulary(cfg, client, log, vocab_dict, source, provider_slugs, place_codes,
                        dry_run: bool) -> Tuple[str, int, bool]:
-    """Bring every record up to the vocabulary's changes if it has moved
-    since the marker. Returns (state, rewritten, failed). Nothing here may
-    stop the run: promotion is done and the index still has to be written.
-    Only a vocabulary fetched from its repository counts; after a failed
-    fetch the cache or bundled copy may be older than the marker and would
-    refuse records that already carry newer terms."""
+    """Bring every record up to the vocabulary's changes if the vocabulary
+    has moved since the marker. Return (state, rewritten, failed). Only a
+    vocabulary fetched from its repository is replayed. Nothing here may
+    stop the run: a failure is logged and returned."""
     if not cfg.index_prefix:
         return "off", 0, False               # nowhere to keep the marker
     if source != "remote":
@@ -82,7 +80,7 @@ def cmd_run(args) -> int:
                   warnings=rep.warnings, files=len(dep.entries),
                   bytes=rep.total_bytes)
         for r in rep.resolved_references:
-            # r8 §4: what the store knows about the parent, filled in.
+            # What the store knows about the parent, filled in.
             log.write("resolved_reference", dep, identifier=r["identifier"],
                       dataset_uuid=r["dataset_uuid"], version=r["version"],
                       dry_run=args.dry_run)
