@@ -13,16 +13,15 @@ from . import passages as passages_mod
 
 def _write_index(cfg, client, log, dry_run: bool, changed: int,
                  vocab_doc: Optional[dict] = None) -> Optional[dict]:
-    """Rewrite the index after a real run that changed a record. Never
-    on a dry run, never when nothing changed (the bucket is versioned;
-    a write every five minutes would pile up versions). A failure is
-    logged and does not change the exit code: the index is a cache
-    that `promoter index` rebuilds. A run that changed nothing still
-    asks what the embed alias resolves to today, and replaces every
-    vector when that moved. Returns the embeddings summary when vectors
-    were written, else None."""
+    """Rewrite the index after a real run that changed a record. Return
+    the embeddings summary when vectors were written, else None. Nothing
+    is written on a dry run. A run that changed nothing only checks
+    whether the embed model or the vocabulary's text has moved. A failure
+    is logged and does not change the exit code."""
     if not cfg.index_prefix or dry_run:
         return None
+    # Not rewritten when nothing changed: the bucket is versioned, and a
+    # write every five minutes would pile up versions.
     if not changed:
         return _embed_if_model_changed(cfg, client, log, vocab_doc)
     try:
@@ -48,13 +47,11 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int,
 
 def _embed_if_model_changed(cfg, client, log, vocab_doc: Optional[dict] = None
                             ) -> Optional[dict]:
-    """The quiet run's check: one GET for the fingerprint, one for the
-    previous file, one for the index; nothing more unless the backend
-    behind the alias has moved (every vector in place is from another
-    model and is replaced now rather than at the next promotion) or the
-    vocabulary of the day gives some row other text than its vector was
-    made from (a scope note or label edited: those rows are remade).
-    The rows come from the index in place, not from every record."""
+    """Replace embeddings on a run that changed no record, if the model
+    behind the embed alias has moved or the vocabulary gives some row
+    other text than its vector was made from. Return the summary when
+    vectors were written, else None. The rows come from the index in
+    place, not from every record."""
     if not cfg.embed_enabled:
         return None
     try:
@@ -72,15 +69,15 @@ def _embed_if_model_changed(cfg, client, log, vocab_doc: Optional[dict] = None
 
 
 def _ocr(platform):
-    """The platform's page reader when PROMOTER_LLM_OCR_MODEL names an
-    alias, else None: a PDF with no text layer then keeps its marker."""
+    """Return the platform's page reader when PROMOTER_LLM_OCR_MODEL names
+    an alias, else None."""
     return platform.transcribe if platform is not None and platform.ocr_model else None
 
 
 def _write_passages(cfg, client, log, prefixes) -> None:
-    """After a real run: passages for the datasets it promoted. Each
-    dataset is its own unit of work and its own log line; a failure is
-    logged and the next dataset still runs."""
+    """Write passages for the datasets a real run promoted. Each dataset
+    is its own unit of work and its own log line; a failure is logged and
+    the next dataset still runs."""
     if not cfg.passages_enabled or not prefixes:
         return
     platform = Platform.from_settings(cfg)
@@ -137,10 +134,9 @@ def _passages_skip_reason(cfg, prefix, rec):
 
 
 def _embed_model(cfg, platform, emit, step: str) -> str:
-    """What the vectors of this step are keyed to: the fingerprint of
-    what the embed alias resolves to on the platform right now (or the
-    alias alone when the platform does not say). Said on the trail, so
-    the audit shows what made the vectors and when it changed."""
+    """Return what this step's vectors are keyed to: the fingerprint of
+    what the embed alias resolves to on the platform now, or the alias
+    alone when the platform does not say. Also written to the trail."""
     model = platform.embed_fingerprint()
     emit("embed_model_resolved", step=step, alias=cfg.llm_embed_model, model=model)
     return model
@@ -148,16 +144,14 @@ def _embed_model(cfg, platform, emit, step: str) -> str:
 
 def _refresh_embeddings(cfg, client, rows_, emit, only_if_model_changed=False,
                         vocab_doc=None) -> Optional[dict]:
-    """Embed what changed and rewrite embeddings.parquet. Only record
-    metadata goes to the platform (promoter/embed.py, text_for), with
-    the subject terms' labels and scope notes from `vocab_doc`. `emit`
-    is the run's log line writer (or print, from the command); `rows_`
-    may be a callable, read only when there is something to write. A
-    previous file keyed to another fingerprint is said on the trail
-    (`embed_model_changed`); with `only_if_model_changed` that, or
-    rows whose text the vocabulary has since changed
-    (`embed_text_changed`), are the only cases anything is written or
-    said, else None."""
+    """Embed what changed, rewrite embeddings.parquet and return the
+    summary, or None when nothing was written. Only record metadata goes
+    to the platform, with the subject terms' labels and scope notes from
+    `vocab_doc`. `emit` writes a log line (or prints, from the command);
+    `rows_` may be a callable, read only when there is something to
+    write. With `only_if_model_changed`, nothing is written or said unless
+    the model behind the alias has moved, a row's text has changed or a
+    row is missing."""
     platform = Platform.from_settings(cfg)
     try:
         model = platform.embed_fingerprint()
