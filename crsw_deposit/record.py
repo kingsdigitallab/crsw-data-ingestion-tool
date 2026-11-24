@@ -896,29 +896,11 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
     return rec
 
 
-def validate_record(rec: dict, vocab_terms: Set[str],
-                    domain_codes: Optional[List[str]] = None,
-                    activity_codes: Optional[List[str]] = None,
-                    provider_slugs: Optional[List[str]] = None,
-                    place_codes: Optional[Set[str]] = None
-                    ) -> Tuple[List[str], List[str]]:
-    """Return (errors, warnings). Errors block a deposit; warnings do not.
-    Hand-rolled on purpose: the shipped tool cannot use jsonschema (stdlib
-    constraint) — dataset.schema.json is the contract artefact for CI and
-    the gateway, this function is the runtime check (r5 §7).
-    domain_codes / activity_codes: valid codes from the fetched vocabulary;
-    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded).
-    provider_slugs / place_codes (r11): the providers list and the
-    places in hand; None or empty means an unknown value is a warning,
-    not an error, so an old cache never blocks a deposit."""
+def _identity_errors(rec: dict,
+                     domain_codes: Optional[List[str]] = None) -> List[str]:
+    """Return what is wrong with the fields that place a record: strand,
+    domain, state, sensitivity, dataset, identifier and dataset_uuid."""
     errors = []
-    warnings = []
-    for field in REQUIRED_FIELDS:
-        if field not in rec or rec[field] in (None, "", [], {}):
-            errors.append("required field '%s' is missing or empty" % field)
-    if errors:
-        return errors, warnings
-
     if rec["strand"] not in keys.STRANDS:
         errors.append("strand %r is not one of %s"
                       % (rec["strand"], "/".join(keys.STRANDS)))
@@ -956,7 +938,12 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                       % (rec["identifier"], expected_id))
     if not _UUID4_RE.match(str(rec["dataset_uuid"])):
         errors.append("dataset_uuid %r is not a UUID4" % (rec["dataset_uuid"],))
+    return errors
 
+
+def _temporal_errors(rec: dict) -> List[str]:
+    """Return what is wrong with the record's coverage dates."""
+    errors = []
     if not isinstance(rec["temporal"], dict):
         errors.append("'temporal' must be an object with start and end")
     else:
@@ -964,7 +951,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             err = coverage_error(rec["temporal"].get(part))
             if err:
                 errors.append("temporal %s: %s" % (part, err))
+    return errors
 
+
+def _subject_errors(rec: dict, vocab_terms: Set[str]) -> List[str]:
+    """Return an error if there is no subject term, and one for each term
+    that is not in the vocabulary."""
+    errors = []
     if not isinstance(rec["subject"], list) or not rec["subject"]:
         errors.append("at least one subject term is required")
     else:
@@ -972,7 +965,14 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             errors.append(
                 "subject %r is not in the vocabulary; to propose an addition, "
                 "open a pull request or issue on the vocabulary repo" % term)
+    return errors
 
+
+def _abstract_and_version_problems(rec: dict) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the abstract's length and the form of
+    the version."""
+    errors = []
+    warnings = []
     warn = abstract_warning(rec["abstract"])
     if warn:
         warnings.append(warn)
@@ -982,7 +982,17 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     elif canonical != rec["version"]:
         warnings.append("version %r should be stored as %r"
                         % (rec["version"], canonical))
+    return errors, warnings
 
+
+def _descriptive_problems(rec: dict,
+                          provider_slugs: Optional[List[str]] = None,
+                          place_codes: Optional[Set[str]] = None
+                          ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the optional descriptive fields: their
+    types, the source type, providers, places and the licence spelling."""
+    errors = []
+    warnings = []
     for field in ("depositors", "language"):
         if field in rec and not isinstance(rec[field], list):
             errors.append("'%s' must be a list" % field)
@@ -1006,7 +1016,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     if "license" not in rec and "licence" in rec:
         errors.append("'licence' was renamed 'license' in v0.5 (the "
                       "Dublin Core spelling)")
+    return errors, warnings
 
+
+def _derived_from_problems(rec: dict) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the derived_from references."""
+    errors = []
+    warnings = []
     # r8 §1: derived_from is a list of references. A bare string is the
     # 0.5 shape arriving unupgraded (parse_record would have converted it).
     if "derived_from" in rec:
@@ -1024,53 +1040,75 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     if rec.get("source_type") == "derived" and not rec.get("derived_from"):
         warnings.append("source type is 'derived' but derived_from is empty "
                         "- derived from what?")
+    return errors, warnings
 
+
+def _file_entry_errors(entry, i: int, seen_paths: Set[str]) -> List[str]:
+    """Return what is wrong with one manifest entry. Adds the entry's path
+    to `seen_paths`, which is how a duplicate path is noticed."""
+    errors = []
+    if not isinstance(entry, dict):
+        errors.append("files entry %d is not an object" % (i + 1))
+        return errors
+    name = entry.get("path") or ("entry %d" % (i + 1))
+    for field in MANIFEST_REQUIRED:
+        if field not in entry or entry[field] in (None, ""):
+            errors.append("file %s: required field '%s' is missing or "
+                          "empty" % (name, field))
+    path = entry.get("path")
+    if path:
+        structural = keys.member_path_error(path)
+        if structural:
+            errors.append("manifest path %s" % structural)
+    if path and keys.is_reserved_member(path):
+        errors.append("manifest path %r matches the reserved "
+                      "dataset.*.json pattern (at any depth)" % path)
+    if path:
+        if path in seen_paths:
+            errors.append("duplicate manifest path %r" % path)
+        seen_paths.add(path)
+    checksum = entry.get("checksum_sha256")
+    if checksum and not _SHA256_RE.match(str(checksum)):
+        errors.append("file %s: checksum_sha256 is not a 64-character "
+                      "SHA-256 hex digest" % name)
+    size = entry.get("bytes")
+    if size is not None and size != "" and (
+            not isinstance(size, int) or isinstance(size, bool) or size < 0):
+        errors.append("file %s: bytes must be a non-negative integer" % name)
+    file_temporal = entry.get("temporal")
+    if file_temporal is not None:
+        if not isinstance(file_temporal, dict):
+            errors.append("file %s: temporal must be an object with "
+                          "start and end" % name)
+        else:
+            for part in ("start", "end"):
+                err = coverage_error(file_temporal.get(part))
+                if err:
+                    errors.append("file %s temporal %s: %s"
+                                  % (name, part, err))
+    return errors
+
+
+def _files_errors(rec: dict) -> Tuple[List[str], Optional[Set[str]]]:
+    """Return (errors, manifest paths) for the files manifest. The paths
+    are None when `files` is not a list."""
+    errors = []
     if not isinstance(rec["files"], list):
         errors.append("'files' must be a list of manifest entries")
-        return errors, warnings
+        return errors, None
     seen_paths = set()
     for i, entry in enumerate(rec["files"]):
-        if not isinstance(entry, dict):
-            errors.append("files entry %d is not an object" % (i + 1))
-            continue
-        name = entry.get("path") or ("entry %d" % (i + 1))
-        for field in MANIFEST_REQUIRED:
-            if field not in entry or entry[field] in (None, ""):
-                errors.append("file %s: required field '%s' is missing or "
-                              "empty" % (name, field))
-        path = entry.get("path")
-        if path:
-            structural = keys.member_path_error(path)
-            if structural:
-                errors.append("manifest path %s" % structural)
-        if path and keys.is_reserved_member(path):
-            errors.append("manifest path %r matches the reserved "
-                          "dataset.*.json pattern (at any depth)" % path)
-        if path:
-            if path in seen_paths:
-                errors.append("duplicate manifest path %r" % path)
-            seen_paths.add(path)
-        checksum = entry.get("checksum_sha256")
-        if checksum and not _SHA256_RE.match(str(checksum)):
-            errors.append("file %s: checksum_sha256 is not a 64-character "
-                          "SHA-256 hex digest" % name)
-        size = entry.get("bytes")
-        if size is not None and size != "" and (
-                not isinstance(size, int) or isinstance(size, bool) or size < 0):
-            errors.append("file %s: bytes must be a non-negative integer" % name)
-        file_temporal = entry.get("temporal")
-        if file_temporal is not None:
-            if not isinstance(file_temporal, dict):
-                errors.append("file %s: temporal must be an object with "
-                              "start and end" % name)
-            else:
-                for part in ("start", "end"):
-                    err = coverage_error(file_temporal.get(part))
-                    if err:
-                        errors.append("file %s temporal %s: %s"
-                                      % (name, part, err))
-    errors.extend(envelope_errors(rec))
+        errors.extend(_file_entry_errors(entry, i, seen_paths))
+    return errors, seen_paths
 
+
+def _provenance_problems(rec: dict, seen_paths: Set[str],
+                         activity_codes: Optional[List[str]] = None
+                         ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the provenance activities, checked
+    against the manifest paths."""
+    errors = []
+    warnings = []
     # r8 §2: provenance activities, checked against the manifest paths.
     if "provenance" in rec:
         if not isinstance(rec["provenance"], list):
@@ -1081,6 +1119,12 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                     act, "provenance[%d]" % (i + 1), seen_paths, activity_codes)
                 errors.extend(act_errors)
                 warnings.extend(act_warnings)
+    return errors, warnings
+
+
+def _category_history_errors(rec: dict) -> List[str]:
+    """Return what is wrong with the category history entries."""
+    errors = []
     # r9: category history entries.
     if "category_history" in rec:
         if not isinstance(rec["category_history"], list):
@@ -1089,6 +1133,53 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             for i, entry in enumerate(rec["category_history"]):
                 errors.extend(validate_history_entry(
                     entry, "category_history[%d]" % (i + 1)))
+    return errors
+
+
+def validate_record(rec: dict, vocab_terms: Set[str],
+                    domain_codes: Optional[List[str]] = None,
+                    activity_codes: Optional[List[str]] = None,
+                    provider_slugs: Optional[List[str]] = None,
+                    place_codes: Optional[Set[str]] = None
+                    ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings). Errors block a deposit; warnings do not.
+    Hand-rolled on purpose: the shipped tool cannot use jsonschema (stdlib
+    constraint) — dataset.schema.json is the contract artefact for CI and
+    the gateway, this function is the runtime check (r5 §7).
+    domain_codes / activity_codes: valid codes from the fetched vocabulary;
+    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded).
+    provider_slugs / place_codes (r11): the providers list and the
+    places in hand; None or empty means an unknown value is a warning,
+    not an error, so an old cache never blocks a deposit."""
+    errors = []
+    warnings = []
+    for field in REQUIRED_FIELDS:
+        if field not in rec or rec[field] in (None, "", [], {}):
+            errors.append("required field '%s' is missing or empty" % field)
+    if errors:
+        return errors, warnings
+
+    errors.extend(_identity_errors(rec, domain_codes))
+    errors.extend(_temporal_errors(rec))
+    errors.extend(_subject_errors(rec, vocab_terms))
+    more_errors, more_warnings = _abstract_and_version_problems(rec)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, more_warnings = _descriptive_problems(rec, provider_slugs, place_codes)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, more_warnings = _derived_from_problems(rec)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, seen_paths = _files_errors(rec)
+    errors.extend(more_errors)
+    if seen_paths is None:
+        return errors, warnings
+    errors.extend(envelope_errors(rec))
+    more_errors, more_warnings = _provenance_problems(rec, seen_paths, activity_codes)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    errors.extend(_category_history_errors(rec))
     return errors, warnings
 
 
