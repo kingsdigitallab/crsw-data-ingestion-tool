@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 scratch/
 *.png
+!docs/img/*.png
 
 # secrets and local env
 .env
