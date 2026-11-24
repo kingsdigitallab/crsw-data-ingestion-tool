@@ -1,5 +1,5 @@
-"""Datasets leave the store only through the promoter (r10, extending
-r9's rule for categories): `python -m promoter remove`.
+"""Datasets leave the store only through the promoter:
+`python -m promoter remove`.
 
 A dataset in place is every object version under its prefix: current
 versions, noncurrent versions and delete markers alike, the bucket
@@ -11,7 +11,7 @@ the write order, so a run that dies halfway leaves a prefix whose
 record still says it is a dataset and the retry recognises it. An
 abandoned staging deposit goes the same way with its control object
 last. Nothing here reads or writes outside the one prefix it is given;
-`__main__` logs each step and rebuilds the derived layers."""
+`cmd_remove` logs each step and rebuilds the derived layers."""
 import json
 import re
 from dataclasses import dataclass, field
@@ -26,7 +26,7 @@ BATCH = 1000                 # delete_objects takes at most this many
 
 
 class RemoveIncomplete(Exception):
-    """Something was still under the prefix after the deletes."""
+    """Raised when something was still under the prefix after the deletes."""
 
     def __init__(self, left: List[str]):
         self.left = left
@@ -63,8 +63,8 @@ class Target:
 
 
 def list_versions(client, bucket: str, prefix: str) -> Listing:
-    """Every version and delete marker under `prefix`, which must end
-    with a slash."""
+    """Return every version and delete marker under `prefix`, which must
+    end with a slash."""
     if not prefix.endswith("/"):
         raise ValueError("prefix must end with a slash: %r" % prefix)
     versions, markers, size = [], [], 0
@@ -79,12 +79,12 @@ def list_versions(client, bucket: str, prefix: str) -> Listing:
 
 
 def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Target:
-    """Is this a dataset in place, and what is under it? Refuses at the
-    first problem, making no further request: a malformed identifier
-    before any request at all, then no record (current or hidden under
-    a delete marker), a record that does not parse, or one whose
-    identifier disagrees with its location (the typo guard). `index_rows` (promoter/index.py rows) give the count of
-    datasets whose derived_from names this one; they are not rewritten."""
+    """Return a Target saying whether this is a dataset in place and what
+    is under it. Stops at the first problem, making no further request: a
+    malformed identifier, no record (current or hidden under a delete
+    marker), a record that does not parse, or one whose identifier
+    disagrees with its location. `index_rows` give the count of datasets
+    whose derived_from names this one; they are not rewritten."""
     t = Target(prefix=identifier + "/", last_key="")
     if not keys.dataset_prefix_ok(identifier):
         t.problems.append("not a dataset identifier "
@@ -130,14 +130,14 @@ def inspect(client, bucket: str, identifier: str, index_rows: List[Dict]) -> Tar
     return t
 
 
-# r12: the refusals (promoter.checks.check wording, and cmd_remove's
+# The refusals (promoter.checks.check wording, and cmd_remove's
 # "control object missing") that are the deposit's own doing, so that
 # removing it is the fix: a member whose stored bytes or size are not the
 # manifest's, a missing or mislabelled object, a record that is absent,
 # unreadable or disagrees with the control object, and a deposit that has
 # its record written but a control object that never reached complete
 # (an upload that died between the two: nothing will finish it), and
-# (r13) a member that is a program, by name or by its opening bytes. Any
+# a member that is a program, by name or by its opening bytes. Any
 # other refusal (a record invalid against the vocabulary the promoter
 # happened to fetch, authorisation, size caps, the destination record)
 # may be the VM's configuration, and the deposit would promote once that
@@ -153,7 +153,7 @@ CONTENT_REFUSALS = (r"stored bytes hash to", r"size mismatch at ", r"no object a
 
 
 def deposit_at_fault(problems: List[str]) -> bool:
-    """True when every one of the promoter's problems with a deposit is
+    """True if every one of the promoter's problems with a deposit is
     about its own content (see CONTENT_REFUSALS)."""
     return bool(problems) and all(any(re.search(m, p) for m in CONTENT_REFUSALS)
                                   for p in problems)
@@ -161,13 +161,13 @@ def deposit_at_fault(problems: List[str]) -> bool:
 
 def inspect_staging(client, bucket: str, staging_prefix: str, deposit_id: str,
                     refusal=None) -> Target:
-    """An abandoned or refused deposit under staging/<user>/<id>/: the
-    id is looked for under every user (the operator has the id from a
-    log, not the user). One whose record was written, or whose control
-    object says complete, is finished: it may go only when the
-    promoter's own checks refuse it (r12), which `refusal(user, id)`
-    answers with the problems (an empty list: it passes, so promote it).
-    Without `refusal` a finished deposit is never removed here."""
+    """Return a Target for a deposit under staging/<user>/<id>/. The id is
+    looked for under every user. A deposit whose record was written, or
+    whose control object says complete, is finished: it may go only when
+    the promoter's own checks refuse it, which `refusal(user, id)`
+    answers with the problems (an empty list means it passes and should
+    be promoted). Without `refusal` a finished deposit is never removed
+    here."""
     sp = staging_prefix.strip("/")
     t = Target(prefix="", last_key="")
     users, record_seen = set(), False
@@ -237,9 +237,11 @@ def _delete(client, bucket: str, pairs: List[Tuple[str, str]]) -> None:
 
 
 def remove(client, bucket: str, t: Target) -> Dict:
-    """Everything but the last key, a fresh listing that must show only
-    the last key, then every version of it, then a listing that must be
-    empty. `RemoveIncomplete` names what is left; the last key is never
+    """Delete everything under the target and return what was done:
+    everything but the last key, a fresh listing that must show only the
+    last key, then every version of it, then a listing that must be empty.
+
+    Raises RemoveIncomplete naming what is left. The last key is never
     touched while anything else remains."""
     if t.problems or t.listing is None:
         raise ValueError("target was refused or not inspected")
