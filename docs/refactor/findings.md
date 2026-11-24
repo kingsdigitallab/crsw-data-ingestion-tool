@@ -24,6 +24,14 @@ left alone.
 - **Question for Neil.** `record.mint_uuid`'s docstring says "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." The sentence is kept as it was. Read today it looks wrong, because the promoter keeps the UUID when it moves a deposit from staging to the store and when categories change. But "promotion" there may mean a change of state or sensitivity (for example `1_interim` to `2_final`, or amber to green), which is a new prefix and so a new record, and not staging to store. Which is meant? If the first, the sentence should say "a change of state or sensitivity"; if the second, it is out of date.
 - Several small functions in `crsw_deposit/` have no docstring at all (for example `places.codes`, `places.labels_of`, `vocab.cache_dir`, `vocab.domain_codes`, `authority.is_authority`, `record.utc_now_iso`, the `cmd_*` handlers in `vocab_cli.py`). The sweep rewrote existing docstrings and did not add new ones.
 
+## Noticed during Stage B, `promoter/` (24 November 2026)
+
+- `promoter/__main__.py` still imports `vocab`, `s3mod` and `recat` although nothing in it uses them. The tests patch through that module (`promoter.__main__.vocab.load_vocabulary`, `promoter.__main__.s3mod.make_client`, `promoter.__main__.recat.plan`), and the tests are not to be edited. Pointing those patches at `crsw_deposit.vocab`, `crsw_web.s3` and `promoter.recategorise` would let the three imports go.
+- The command modules import each other's helpers by their private names (`from .cmd_common import _setup`, and so on). The names were kept because a move must not also edit. Dropping the underscore from the shared ones would be a rename for a later commit.
+- `dataclasses.field` is imported and unused in `promoter/config.py` and `promoter/passages.py` (ruff F401). Both were there before this branch.
+- `docs/web-deposit/remove-from-store-handoff.md`, `embedding-model-fingerprint-handoff.md` and `passage-length-handoff.md` say that `cmd_remove` and the embedding call sites are in `promoter/__main__.py`. They are now in `promoter/cmd_remove.py` and `promoter/cmd_derived.py`. Those documents are records of past work and were left as written.
+- `check()`'s docstring and several comments in `promoter/` still cite spec revisions (r8 §4, r9, r11, r13). The docstring sweep has covered `crsw_deposit/` only.
+
 ## Noticed while taking the baseline (24 November 2026)
 
 - `python deposit.py --help` lists `centre` among the choices for `--strand`. `CLAUDE.md` says the command line offers `rs1` to `rs4` only. Not checked whether a later step refuses it.
