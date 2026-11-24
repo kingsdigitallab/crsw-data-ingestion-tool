@@ -21,7 +21,8 @@ left alone.
 ## Noticed during the docstring sweep of `crsw_deposit/` (24 November 2026)
 
 - The module docstring of `record.py` said "dataset record v0.4" and named the file `dataset.meta.json`; `RecordParseError`'s said the same name. Both were years out of date. The new docstrings give the current name. No code was involved.
-- **Answered by Neil, 24 November 2026.** `record.mint_uuid`'s docstring said "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." "Promotion" there meant a change of state or sensitivity, not the promoter's move from staging to the store. The sentence is kept and reworded: "A change of state or sensitivity makes a new dataset with a new UUID, linked to the old one by derived_from."
+- **Closed, 24 November 2026 (Neil checked `main`).** `record.mint_uuid`'s docstring said "Promotion or reclassification creates a NEW record with a new UUID; derived_from carries the lineage." "Promotion" there meant a change of state or sensitivity, not the promoter's move from staging to the store: a different state or sensitivity is a new prefix, so it gets a new record with a new UUID. The sentence is kept and reworded: "A dataset deposited at a different state or sensitivity is a new record with a new UUID; derived_from carries the lineage."
+- **Corrected in the docstring, 24 November 2026.** `deposit_logic.dataset_uuid_for`'s docstring on `main` says the UUID is "minted once per prefix, stable across moves". "Stable across moves" is wrong: a dataset does not move between prefixes, and a deposit at another state or sensitivity gets a new UUID. The docstring now says the UUID is kept for re-deposits to the same prefix and through staging. `docs/decisions/deposit_logic.md` repeated the phrase and is corrected too. The code was right throughout; `main` still carries the old wording.
 - Several small functions in `crsw_deposit/` have no docstring at all (for example `places.codes`, `places.labels_of`, `vocab.cache_dir`, `vocab.domain_codes`, `authority.is_authority`, `record.utc_now_iso`, the `cmd_*` handlers in `vocab_cli.py`). The sweep rewrote existing docstrings and did not add new ones.
 
 ## Noticed during Stage B, `promoter/` (24 November 2026)
@@ -30,7 +31,7 @@ left alone.
 - The command modules import each other's helpers by their private names (`from .cmd_common import _setup`, and so on). The names were kept because a move must not also edit. Dropping the underscore from the shared ones would be a rename for a later commit.
 - `dataclasses.field` is imported and unused in `promoter/config.py` and `promoter/passages.py` (ruff F401). Both were there before this branch.
 - `docs/web-deposit/remove-from-store-handoff.md`, `embedding-model-fingerprint-handoff.md` and `passage-length-handoff.md` say that `cmd_remove` and the embedding call sites are in `promoter/__main__.py`. They are now in `promoter/cmd_remove.py` and `promoter/cmd_derived.py`. Those documents are records of past work and were left as written.
-- `check()`'s docstring and several comments in `promoter/` still cite spec revisions (r8 §4, r9, r11, r13). The docstring sweep has covered `crsw_deposit/` only.
+- Done since: `check()`'s docstring and several comments in `promoter/` cited spec revisions (r8 §4, r9, r11, r13). The docstring sweep of `promoter/` removed them; the reasons are in `docs/decisions/promoter/`.
 
 ## Noticed while taking the baseline (24 November 2026)
 
