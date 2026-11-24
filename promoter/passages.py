@@ -1,4 +1,4 @@
-"""Searching inside documents (finding-and-reuse.md §7): the text of each
+"""Searching inside documents: the text of each
 text-bearing file in a dataset, split into passages and embedded, kept in
 the bucket as `<index_prefix>/passages/<identifier>.parquet`.
 
@@ -82,8 +82,8 @@ def supported(member: str) -> bool:
 # --- text out of files ------------------------------------------------------------
 
 def extract(member: str, data: bytes) -> Optional[List[Page]]:
-    """Pages of text, or None when the file type is not one this reads.
-    A supported file with no text at all gives []."""
+    """Return the file's pages of text, or None when the file type is not
+    one this reads. A supported file with no text at all gives []."""
     name = member.lower()
     if name.endswith(TEXT_TYPES):
         text = data.decode("utf-8", errors="replace")
@@ -135,7 +135,7 @@ def _docx_pages(data: bytes) -> List[Page]:
 # --- pages as images, for a scan ----------------------------------------------------
 
 def page_images(data: bytes, n: int, dpi: int = OCR_DPI) -> List[bytes]:
-    """The first `n` pages of a PDF as JPEG bytes at `dpi`, for the
+    """Return the first `n` pages of a PDF as JPEG bytes at `dpi`, for the
     vision model to read; [] when the file cannot be opened."""
     import pypdfium2 as pdfium
     try:
@@ -156,10 +156,10 @@ def page_images(data: bytes, n: int, dpi: int = OCR_DPI) -> List[bytes]:
 
 
 def _transcribe(data: bytes, ocr: Callable[[bytes], str], n: int) -> Tuple[List[Page], int, bool]:
-    """The first `n` pages read by the vision model: the pages that had
-    text, how many images were sent, and whether a call failed. After a
-    failure nothing is kept, so the file is tried again on the next run
-    rather than remembered as half read."""
+    """Have the vision model read the first `n` pages. Return (the pages
+    that had text, how many images were sent, whether a call failed).
+    After a failure no pages are returned, so the file is tried again on
+    the next run."""
     pages: List[Page] = []
     sent = 0
     for i, image in enumerate(page_images(data, n), start=1):
@@ -175,9 +175,9 @@ def _transcribe(data: bytes, ocr: Callable[[bytes], str], n: int) -> Tuple[List[
 
 
 def _ocr_same(row: Dict, want: int) -> bool:
-    """Was this row read under the page count wanted now? A text-layer
-    row (ocr 0, text present) is never affected; with OCR off (want 0)
-    whatever was read stays."""
+    """True if this row was read under the page count wanted now. A
+    text-layer row is never affected; with OCR off, whatever was read
+    stays."""
     had = row.get("ocr") or 0
     if want == 0:
         return True
@@ -193,10 +193,10 @@ _WS = re.compile(r"\s+")
 
 def chunk(pages: Sequence[Page], words: int = PASSAGE_WORDS,
           overlap: int = OVERLAP_WORDS) -> List[Tuple[Optional[int], int, str]]:
-    """(page, position, text) passages of about `words` words, each
+    """Return (page, position, text) passages of about `words` words, each
     starting `overlap` words before the previous one ended. The page is
-    the one the passage starts on. Whitespace is normalised, nothing
-    else is changed."""
+    the one the passage starts on. Whitespace is normalised; nothing else
+    is changed."""
     tagged: List[Tuple[Optional[int], str]] = []
     for page, text in pages:
         for w in _WS.split(text.strip()):
@@ -247,13 +247,12 @@ def build(identifier: str, rec: Dict, fetch: Callable[[str], bytes],
           max_file_bytes: int, max_passages: int, words: int = PASSAGE_WORDS,
           overlap: int = OVERLAP_WORDS, ocr: Optional[Callable[[bytes], str]] = None,
           ocr_pages: int = OCR_PAGES) -> Tuple[List[Dict], Summary]:
-    """Rows for the dataset's passages file and a summary. `fetch(member)`
-    returns a member's bytes; it is called only for files that changed
-    (or whose vectors were made by another `model`: the resolved
-    fingerprint of the embed alias, as in embed.py; or whose rows were
-    cut under another `words`/`overlap` layout; or, with `ocr` set, a
-    scan read under another `ocr_pages`, or not read at all). `ocr` is
-    the platform's `transcribe`, or None when off."""
+    """Return (rows for the dataset's passages file, a summary).
+    `fetch(member)` returns a member's bytes and is called only for files
+    that need reading again: a changed file, vectors made by another
+    `model`, rows cut under another `words`/`overlap` layout, or (with
+    `ocr` set) a scan read under another `ocr_pages` or not read at all.
+    `ocr` is the platform's `transcribe`, or None when off."""
     split = "%d/%d" % (words, overlap)
     want = ocr_pages if ocr is not None else 0   # the page count rows are read under
     s = Summary(identifier=identifier, split=split)
@@ -429,8 +428,8 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
             overlap: int = OVERLAP_WORDS, ocr: Optional[Callable[[bytes], str]] = None,
             ocr_pages: int = OCR_PAGES) -> Summary:
     """Read the previous file, re-read and embed what changed, write the
-    new file (or remove it when the dataset has no text). Members are
-    fetched from the store with the promoter's own client."""
+    new file (or remove it when the dataset has no text) and return the
+    summary."""
     key = passages_key(prefix, identifier)
     if pq is None:
         s = Summary(identifier=identifier)
@@ -453,8 +452,8 @@ def refresh(client, bucket: str, prefix: str, identifier: str, rec: Dict, platfo
 
 def listing(client, bucket: str, prefix: str, strand: str = "",
             dataset: str = "") -> Dict[str, str]:
-    """identifier -> key of every passages file in the bucket, of one
-    strand's, or of one dataset's (at most one entry)."""
+    """Return identifier -> key for every passages file in the bucket, in
+    one strand, or for one dataset (at most one entry)."""
     base = prefix.strip("/") + "/passages/"
     if dataset:
         under = base + dataset.strip("/") + ".parquet"
@@ -470,9 +469,8 @@ def listing(client, bucket: str, prefix: str, strand: str = "",
 
 
 def remove(client, bucket: str, prefix: str, identifier: str) -> Optional[str]:
-    """Delete a dataset's passages file, for when its passages are no
-    longer permitted (excluded, or its sensitivity taken off the list).
-    The key when there was one to delete, else None."""
+    """Delete a dataset's passages file. Return its key, or None when there
+    was none to delete."""
     key = passages_key(prefix, identifier)
     try:
         client.head_object(Bucket=bucket, Key=key)
@@ -485,7 +483,7 @@ def remove(client, bucket: str, prefix: str, identifier: str) -> Optional[str]:
 
 
 def excluded(identifier: str, patterns: Sequence[str]) -> bool:
-    """An identifier, or any prefix of one ending at a path element,
-    named in PROMOTER_PASSAGES_EXCLUDE."""
+    """True if the identifier, or any prefix of it ending at a path
+    element, is named in PROMOTER_PASSAGES_EXCLUDE."""
     return any(identifier == p or identifier.startswith(p.rstrip("/") + "/")
                for p in patterns if p)
