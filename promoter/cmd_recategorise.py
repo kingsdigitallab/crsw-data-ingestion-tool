@@ -11,7 +11,7 @@ from .cmd_derived import _write_index
 
 
 def _apply_plan(client, cfg, log, plan, who: str, dry_run: bool) -> Tuple[int, int]:
-    """Log a recategorise plan and, unless a dry run, write it. Returns
+    """Log a recategorise plan and, unless a dry run, write it. Return
     (rewritten, failed)."""
     for problem in plan.problems:
         log.write("recategorise_refused", problem=problem)
@@ -31,8 +31,8 @@ def _apply_plan(client, cfg, log, plan, who: str, dry_run: bool) -> Tuple[int, i
 
 
 def _mark_applied(cfg, client, log, marker, vocab_dict, rewritten: int, **detail) -> None:
-    """The whole store is now up to this vocabulary: say so in the bucket
-    and on the trail."""
+    """Record in the bucket and on the trail that the whole store is now
+    up to this vocabulary."""
     recat.write_marker(client, cfg.s3_bucket, cfg.index_prefix, vocab_dict,
                        record.utc_now_iso(), log.run_id)
     log.write("vocabulary_replayed", from_version=(marker or {}).get("vocabulary_version"),
