@@ -2,7 +2,7 @@
 [--keep-staging] [--log PATH] [--no-verify-checksums]`
 
 `python -m promoter recategorise [--dry-run] [--changes FILE]
-[--dataset ID] [--by NAME] [--log PATH]` (r9): bring dataset records in
+[--dataset ID] [--by NAME] [--log PATH]`: bring dataset records in
 place up to the current vocabulary, and apply a steward's change file.
 
 `python -m promoter audit [--runs N | --since DATE] [--dataset ID]
@@ -18,17 +18,17 @@ the sensitivities PROMOTER_LLM_SENSITIVITIES allows, green by default);
 `python -m promoter index --embed` does the same by hand. With
 PROMOTER_PASSAGES=1 as well, a promotion also reads the dataset's
 text-bearing files, splits them into passages and embeds those
-(`index/passages/<identifier>.parquet`, finding-and-reuse.md §7);
+(`index/passages/<identifier>.parquet`);
 `python -m promoter passages [--dataset ID | --strand rsN]` rebuilds
 them for every record in place.
 
 A deposit whose derived_from names another dataset in the store has the
-parent's uuid and version filled in before promotion (r8 §4): logged as
+parent's uuid and version filled in before promotion: logged as
 resolved_reference, or reference_unresolved when the parent is absent
 (a warning; the deposit still promotes with the reference as typed).
 
 `python -m promoter remove --dataset ID [--dataset ID ...] [--confirm ID
-...] [--reason TEXT] [--by NAME]` (r10): a dataset leaves the store only
+...] [--reason TEXT] [--by NAME]`: a dataset leaves the store only
 this way. Every object version under the prefix is deleted, members
 first and the record last, then the index, embeddings and passages
 follow; a dry run (the plan, as would_remove and remaining lines)
