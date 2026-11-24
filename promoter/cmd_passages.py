@@ -48,7 +48,8 @@ def cmd_passages(args) -> int:
                 (not args.strand or identifier.startswith(args.strand + "/")))
 
     def remove(identifier, key, reason):
-        """Delete a passages file that is no longer permitted; True if done."""
+        """Delete a passages file that is no longer permitted. Return True if
+        it was deleted."""
         try:
             client.delete_object(Bucket=cfg.s3_bucket, Key=key)
         except Exception as e:
