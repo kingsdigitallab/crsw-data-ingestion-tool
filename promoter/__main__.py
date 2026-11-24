@@ -83,6 +83,7 @@ from .cmd_run import _replay_vocabulary, cmd_run
 from .cmd_remove import cmd_remove
 from .cmd_index import cmd_index
 from .cmd_passages import cmd_passages
+from .cmd_audit import cmd_audit, cmd_datasets
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,40 +170,6 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("--env-file", default=".env.promoter",
                     help="local env file to load (default .env.promoter)")
     return p
-
-
-def cmd_audit(args) -> int:
-    cfg, client = _connect(args)
-    if not cfg.audit_prefix:
-        print("PROMOTER_AUDIT_PREFIX is blank: no audit trail is kept", file=sys.stderr)
-        return 2
-    entries = audit.trail(client, cfg.s3_bucket, cfg.audit_prefix,
-                          runs=(None if args.runs == 0 else args.runs),
-                          since=args.since, dataset=args.dataset,
-                          user=args.user, action=args.action)
-    n = 0
-    for e in entries:
-        n += 1
-        print(json.dumps(e, ensure_ascii=False) if args.json else audit.describe(e))
-    if n == 0 and not args.json:
-        print("(no matching audit lines)")
-    return 0
-
-
-def cmd_datasets(args) -> int:
-    cfg, client = _connect(args)
-    try:
-        strand = audit.valid_strand(args.strand)
-    except ValueError as e:
-        print(str(e), file=sys.stderr)
-        return 2
-    rows = audit.list_records(client, cfg.s3_bucket, strand=strand)
-    if args.json:
-        for r in rows:
-            print(json.dumps(r, ensure_ascii=False))
-    else:
-        print(audit.table(rows))
-    return 0
 
 
 def main(argv=None) -> int:
