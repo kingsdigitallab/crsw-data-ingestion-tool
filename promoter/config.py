@@ -33,7 +33,7 @@ class PromoterConfig:
     # Where the index of every record in place is written; blank disables.
     index_prefix: str = "index"
     # The KCL LLM platform, for the embeddings behind meaning-based search
-    # (finding-and-reuse.md §5). Off unless both URL and key are set.
+    # (finding-and-reuse.md). Off unless both URL and key are set.
     llm_base_url: str = ""
     llm_api_key: str = ""
     # A blank model name switches that function off.
@@ -52,7 +52,7 @@ class PromoterConfig:
     llm_ocr_model: str = ""
     ocr_pages: int = 2
 
-    # Searching inside documents (finding-and-reuse.md §7): off unless
+    # Searching inside documents (finding-and-reuse.md): off unless
     # PROMOTER_PASSAGES=1, and then only for datasets of the allowed
     # sensitivities that are not excluded. Caps so one mistaken deposit
     # cannot fill the VM: a file over the size cap is skipped, and the
