@@ -33,7 +33,7 @@ specifications are in `docs/specs/`; "r5 Q4" means question 4 of
 ## Dataset UUID (`dataset_uuid_for`)
 
 - **Decision:** the UUID is minted once per prefix and kept on every later deposit.
-  **Reason:** it identifies the dataset and stays stable across moves.
+  **Reason:** it identifies the dataset. It is kept for re-deposits to the same prefix and through staging; a deposit at a different state or sensitivity is a new prefix and a new UUID.
   **Reference:** r5 Q1.
 
 ## Inherited fields (`INHERITED_FIELDS`, `KEPT_UNLESS_SUPPLIED`, `defaults_from_record`)

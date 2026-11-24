@@ -99,7 +99,9 @@ def dataset_prefix(meta: Dict) -> str:
 
 
 def dataset_uuid_for(existing: Optional[Dict], mint=record.mint_uuid) -> str:
-    """Return the existing record's UUID, or a new one for a first deposit."""
+    """Return the existing record's UUID, or a new one for a first deposit.
+    The UUID is kept for re-deposits to the same prefix and through
+    staging."""
     return existing["dataset_uuid"] if existing else mint()
 
 
