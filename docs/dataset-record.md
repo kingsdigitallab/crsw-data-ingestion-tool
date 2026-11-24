@@ -7,9 +7,9 @@ Moved from the README on 24 November 2026, text unchanged.
 
 Every dataset prefix holds one `dataset.<name>.json`: the description
 and the files manifest in a single document, written last so its
-presence marks a complete deposit. The current schema is **0.6**
-(`dataset.schema.json`). Records written as 0.5 are still read; the
-tool upgrades them on the way in and writes them back as 0.6, so nobody
+presence marks a complete deposit. The current schema is **0.7**
+(`dataset.schema.json`). Records written as 0.5 or 0.6 are still read; the
+tool upgrades them on the way in and writes them back as 0.7, so nobody
 converts a record by hand. Beyond the descriptive fields and the
 manifest, a record may carry:
 

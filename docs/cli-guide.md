@@ -228,7 +228,7 @@ python -m unittest discover -s tests -v
 ```
 
 The build spec is `docs/specs/DEPOSIT_TOOL_SPEC.md`, revised by
-`DEPOSIT_TOOL_SPEC_R2.md` to `_R9.md` (a later revision supersedes an
+`DEPOSIT_TOOL_SPEC_R2.md` to `_R13.md` (a later revision supersedes an
 earlier one where it speaks; r8 is provenance, r9 is categories that
 change after deposit). Module boundaries and constraints are documented
 there and in `CLAUDE.md`. `python -m pytest` runs the same tests plus the
