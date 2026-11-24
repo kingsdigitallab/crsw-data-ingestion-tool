@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 scratch/
+Claude outputs/
 *.png
 !docs/img/*.png
 
