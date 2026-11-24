@@ -1,8 +1,10 @@
-"""Subjects vocabulary: runtime fetch with cache and bundled fallback.
+"""Subjects vocabulary: fetched at run time, with a cache and a bundled
+fallback.
 
-Chain (spec §6): HTTPS fetch (short timeout) -> local cache -> bundled
-vocab.json. A slow or blocked network must never block a deposit.
-No user I/O here — callers decide how to surface the 'source' value."""
+The chain is an HTTPS fetch with a short timeout, then the local cache,
+then the bundled vocab.json. A slow or blocked network must never block
+a deposit. No user I/O here: callers decide how to report the 'source'
+value."""
 import json
 import os
 import sys
@@ -15,14 +17,15 @@ from . import authority
 from . import keys
 from . import record
 
-# Single line to update once the vocabulary repo is created.
+# Where the vocabulary is fetched from.
 VOCAB_URL = ("https://raw.githubusercontent.com/"
              "kingsdigitallab/crsw-vocabulary/main/vocab.json")
 FETCH_TIMEOUT = 4  # seconds
 
 
 def bundled_vocab_path() -> Path:
-    """Locate the bundled vocab.json, PyInstaller-compatible."""
+    """Return the path of the bundled vocab.json, in a checkout or inside a
+    PyInstaller build."""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         # A PyInstaller build must add crsw_deposit/vocab.json under the
@@ -43,9 +46,8 @@ def _default_opener(url, timeout):
 
 
 def _valid(vocab_dict) -> bool:
-    """A file is usable if it is the r9 authority shape and passes every
-    authority rule, or the older flat shape with facet lists. A fetched
-    file that fails is ignored and the chain falls through."""
+    """True if a vocabulary file is usable: the authority shape passing
+    every authority rule, or the older flat shape with facet lists."""
     if authority.is_authority(vocab_dict):
         return not authority.validate_authority(vocab_dict)
     return (isinstance(vocab_dict, dict)
@@ -54,8 +56,9 @@ def _valid(vocab_dict) -> bool:
 
 
 def _write_cache(cache: Path, raw: bytes, name: str = "vocab.json") -> None:
-    """Best-effort atomic cache write; failure to cache is never fatal.
-    `places.json` (r11) is cached beside the vocabulary the same way."""
+    """Write a fetched file to the cache, atomically. Best-effort: a
+    failure to cache is never an error. `name` is vocab.json or
+    places.json."""
     try:
         cache.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(cache), suffix=".tmp")
@@ -75,7 +78,8 @@ def load_vocabulary(url: str = VOCAB_URL,
                     cache: Optional[Path] = None,
                     bundled: Optional[Path] = None,
                     opener=None) -> Tuple[dict, str]:
-    """Return (vocabulary, source) with source in remote/cache/bundled."""
+    """Return (vocabulary, source), with source one of remote, cache or
+    bundled."""
     cache = cache if cache is not None else cache_dir()
     bundled = bundled if bundled is not None else bundled_vocab_path()
     opener = opener if opener is not None else _default_opener
@@ -103,7 +107,7 @@ def load_vocabulary(url: str = VOCAB_URL,
 
 
 def all_terms(vocab_dict: dict) -> Set[str]:
-    """Every current subject term, whichever shape the file has."""
+    """Return every current subject term, whichever shape the file has."""
     terms = set()
     for facet_terms in authority.facets_of(vocab_dict).values():
         terms.update(facet_terms)
@@ -111,14 +115,14 @@ def all_terms(vocab_dict: dict) -> Set[str]:
 
 
 def facets(vocab_dict: dict) -> dict:
-    """Facet name -> current terms in file order (r9: derived from the
-    term entries when the file is an authority file)."""
+    """Return facet name -> current terms, in file order."""
     return authority.facets_of(vocab_dict)
 
 
 def domains(vocab_dict: dict) -> List[dict]:
-    """Domain entries (code/label/steward). Falls back to the built-in
-    codes so an old cached vocabulary never breaks deposits (r2 §2)."""
+    """Return the domain entries (code, label, steward). If the vocabulary
+    has none, the built-in codes are returned, so an old cached vocabulary
+    never breaks a deposit."""
     entries = []
     for d in vocab_dict.get("domains") or []:
         if isinstance(d, dict) and d.get("code"):
@@ -135,9 +139,8 @@ def domain_codes(vocab_dict: dict) -> List[str]:
 
 
 def activities(vocab_dict: dict) -> List[dict]:
-    """Provenance activity kinds (code/label), r8 §2. Vocabulary-managed
-    so RS3 can add its own steps without a release; falls back to the
-    built-in list the same way domains do."""
+    """Return the provenance activity kinds (code, label). Falls back to
+    the built-in list as domains does."""
     entries = []
     for a in vocab_dict.get("activities") or []:
         if isinstance(a, dict) and a.get("code"):
@@ -152,10 +155,9 @@ def activity_codes(vocab_dict: dict) -> List[str]:
 
 
 def providers(vocab_dict: dict) -> List[dict]:
-    """Data provider entries (r11 §3): slug, name, url, rights, notes,
-    the optional ones "" when absent. No built-in fallback: an empty
-    list means the vocabulary in hand has no providers section, and
-    validation then warns rather than refuses an unknown slug."""
+    """Return the data provider entries (slug, name, url, rights, notes),
+    the optional ones "" when absent. An empty list means the vocabulary
+    in hand has no providers section; there is no built-in fallback."""
     entries = []
     for p in vocab_dict.get("providers") or []:
         if isinstance(p, dict) and isinstance(p.get("slug"), str) and p["slug"]:
