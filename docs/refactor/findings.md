@@ -11,6 +11,8 @@ left alone.
 - `scripts/check-no-secrets.sh` fails on a Windows checkout because of CRLF line endings; it passes with carriage returns stripped. Likely remedy: a `.gitattributes` rule forcing LF for shell scripts, as its own change on `main`.
 - Ruff's B904 (reported in the handoff as 42 places where `raise` inside `except` has no `from`) and its unused-variable findings, for GN to judge. Not re-measured here.
 
+- The repository is public on GitHub, and it contains the operations runbook (`docs/web-deposit/runbook.md`) and the security review (`docs/web-deposit/security-review.md`). Whether those two belong in a public repository is a decision for Neil and GN. Removing a file now would not remove it from the history.
+
 ## Already corrected on `docs/readme-sections`
 
 - `docs/dataset-record.md` said the schema was 0.6; the code is on 0.7. Corrected in `b0017d2`.

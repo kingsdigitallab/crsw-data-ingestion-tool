@@ -81,6 +81,7 @@ File sizes for the same stages: `deposit.py` 1,839 lines, `crsw_web/app.py` 1,28
 python -m unittest
 .venv\Scripts\python docs\refactor\baseline\collect.py SOME_OTHER_FOLDER
 python docs\refactor\baseline\compare_dry_run.py
+python docs\refactor\compare_validators.py
 ```
 
-The third writes the routes, help text and public names to another folder; compare each file with its baseline. The fourth is the dry-run comparison. The ruff command is as given above.
+The last feeds the same damaged records and vocabularies to `validate_record` and `validate_authority` on `main` and on this checkout, and reports any case where the answers differ. The third writes the routes, help text and public names to another folder; compare each file with its baseline. The fourth is the dry-run comparison. The ruff command is as given above.
