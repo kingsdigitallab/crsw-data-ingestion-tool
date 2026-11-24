@@ -18,9 +18,10 @@ def _write_index(cfg, client, log, dry_run: bool, changed: int,
     is written on a dry run. A run that changed nothing only checks
     whether the embed model or the vocabulary's text has moved. A failure
     is logged and does not change the exit code."""
+    # The index is never written on a dry run.
     if not cfg.index_prefix or dry_run:
         return None
-    # Not rewritten when nothing changed: the bucket is versioned, and a
+    # Never rewritten when nothing changed: the bucket is versioned, and a
     # write every five minutes would pile up versions.
     if not changed:
         return _embed_if_model_changed(cfg, client, log, vocab_doc)

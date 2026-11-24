@@ -156,6 +156,7 @@ def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
         texts[ident] = text_for(r, vocab_doc)
         base["text_sha"] = text_sha(texts[ident])
         old = existing.get(ident)
+        # A kept row must match on model, modified stamp, dims and text.
         if (old and old.get("embedding") and old.get("model") == model
                 and old.get("modified") == r.get("modified")
                 and (old.get("cut") or 0) == (dims or 0)

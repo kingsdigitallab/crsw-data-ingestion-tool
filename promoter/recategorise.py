@@ -241,6 +241,7 @@ def read_marker(client, bucket: str, index_prefix: str) -> Optional[Dict]:
     try:
         marker = json.loads(body.decode("utf-8"))
     except ValueError:
+        # An unreadable marker is the same as never having applied.
         return None
     return marker if isinstance(marker, dict) else None
 

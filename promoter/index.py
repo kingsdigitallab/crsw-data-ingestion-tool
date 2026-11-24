@@ -124,6 +124,8 @@ def rows(client, bucket: str, strand: Optional[str] = None,
 def read_rows(client, bucket: str, prefix: str) -> List[Dict]:
     """Return the rows of the index in place (one GET), or [] when there
     is none yet."""
+    # One GET: the quiet run's embedding check must not read every record
+    # every five minutes.
     key = prefix.strip("/") + "/" + JSONL_NAME
     try:
         body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
