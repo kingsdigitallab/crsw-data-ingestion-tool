@@ -66,6 +66,8 @@ ol.hits b, .hint b { font-weight: 600; }
 .search .actions { margin-top: .5rem; }
 .count { color: var(--muted); font-family: var(--serif); }
 .results td:first-child a { font-weight: 600; }
+.results td.shared { font-weight: 600; vertical-align: top; }
+.results td.state a { font-weight: 600; }
 .tag { display: inline-block; margin-left: .5rem; padding: 0 .4rem; border-radius: 3px; font-size: .75rem; font-weight: 600; text-transform: none; }
 .tag.green { background: var(--green); color: var(--action-ink); }
 .tag.amber { background: var(--amber); color: var(--action-ink); }
@@ -163,6 +165,10 @@ table.files tfoot td { border-bottom: 0; color: var(--muted); }
 tr.noise td:first-child { color: var(--muted); }
 tr.noise label { font-size: .85rem; margin-left: .5rem; }
 tr.refused td:first-child { color: var(--muted); text-decoration: line-through; }
+table.files details.view { display: inline-block; margin-left: .5rem; vertical-align: top; }
+table.files details.view[open] { display: block; margin: .4rem 0 0; }
+table.files details.view > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+table.files details.view img { display: block; max-width: 100%; height: auto; margin-top: .4rem; border: 1px solid var(--rule); }
 table.files .why { display: inline-block; font-size: .85rem; margin-left: .5rem; color: var(--muted); text-decoration: none; }
 tr.refused .why { color: var(--danger); }
 tr.refused .bar { visibility: hidden; }

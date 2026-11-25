@@ -65,7 +65,9 @@
       <tbody>
       {% for f in rec.files %}
       <tr>
-        <td>{% if not refusal %}<a href="/datasets/{{ identifier }}/files/{{ f.path }}" download><code>{{ f.path }}</code></a>{% else %}<code>{{ f.path }}</code>{% endif %}{% if f.path in archives %} <span class="why">archive: contents not checked</span>{% endif %}</td>
+        <td>{% if not refusal %}<a href="/datasets/{{ identifier }}/files/{{ f.path }}" download><code>{{ f.path }}</code></a>{% else %}<code>{{ f.path }}</code>{% endif %}{% if f.path in archives %} <span class="why">archive: contents not checked</span>{% endif %}{% if not refusal and f.path in images %}
+          {# Closed, the image is not fetched: it is lazy and not on the page until opened. #}
+          <details class="view"><summary>View</summary><img loading="lazy" src="/datasets/{{ identifier }}/files/{{ f.path|urlencode }}?inline=1" alt="{{ f.path }}"></details>{% endif %}</td>
         <td class="num">{{ sizes[f.path] }}</td>
         <td><code class="sha">{{ f.checksum_sha256[:16] }}…</code></td>
       </tr>

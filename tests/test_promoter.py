@@ -497,6 +497,8 @@ class TestIndex(PromoterBase):
         self.assertEqual(list(table.column_names), list(index_mod.COLUMNS))
         self.assertEqual(table.column("subject").to_pylist()[1], FORM["subject"])
         self.assertEqual(table.column("bytes").to_pylist(), [3, 11])
+        self.assertEqual([r["extensions"] for r in rows],
+                         table.column("extensions").to_pylist())
         # r11: domain stays the primary code for every reader of the
         # index; domains carries the list.
         self.assertEqual(promo["domain"], "quant")
