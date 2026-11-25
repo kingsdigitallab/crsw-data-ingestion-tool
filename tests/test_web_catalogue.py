@@ -647,6 +647,74 @@ class TestHierarchy(CatalogueBase):
         self.assertNotIn("\u2007", subject_select)
 
 
+class TestImageViewer(CatalogueBase):
+    """The dataset page shows a listed image type in place: the same
+    route and the same access rule as a download, sent for display only
+    when the page asks and the extension is on the list."""
+    IMAGES = "rs2/csac/green/0_raw/scans"
+    LOCKED = "rs1/oral/amber/0_raw/portraits"
+
+    def seed(self):
+        entries = [record.manifest_entry("pages/p 1.PNG", "a" * 64, 12),
+                   record.manifest_entry("p2.jpg", "b" * 64, 8),
+                   record.manifest_entry("drawing.svg", "c" * 64, 5),
+                   record.manifest_entry("list.csv", "d" * 64, 3)]
+        self.put_record(self.IMAGES, dict(META, dataset="scans"), entries,
+                        "k1234567", "55555555-5555-4555-8555-555555555555")
+        self.put_record(self.LOCKED, dict(META, strand="rs1", project="oral",
+                                          sensitivity="amber", dataset="portraits"),
+                        [record.manifest_entry("face.png", "e" * 64, 4)],
+                        "k2", "66666666-6666-4666-8666-666666666666")
+        super().seed()
+
+    def url(self, member, dataset=None):
+        return "/datasets/%s/files/%s" % (dataset or self.IMAGES, member)
+
+    def test_an_image_asked_for_inline_is_sent_for_display(self):
+        c = self.app()
+        r = c.get(self.url("p2.jpg"), params={"inline": "1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"], "image/jpeg")
+        self.assertEqual(r.headers["content-disposition"], "inline")
+        self.assertEqual(r.content, b"x" * 8)
+        r = c.get(self.url("pages/p 1.PNG"), params={"inline": "1"})
+        self.assertEqual(r.headers["content-type"], "image/png")
+        # A range still works.
+        r = c.get(self.url("p2.jpg"), params={"inline": "1"}, headers={"Range": "bytes=0-3"})
+        self.assertEqual((r.status_code, r.content), (206, b"xxxx"))
+
+    def test_anything_else_is_still_an_attachment(self):
+        c = self.app()
+        for member, params in (("p2.jpg", {}), ("p2.jpg", {"inline": "0"}),
+                               ("p2.jpg", {"inline": "yes"}),
+                               ("list.csv", {"inline": "1"}),
+                               ("drawing.svg", {"inline": "1"})):
+            r = c.get(self.url(member), params=params)
+            self.assertEqual(r.status_code, 200, (member, params))
+            self.assertEqual(r.headers["content-type"], "application/octet-stream")
+            self.assertTrue(r.headers["content-disposition"].startswith("attachment"))
+
+    def test_the_access_rule_is_the_download_rule(self):
+        c = self.app()
+        r = c.get(self.url("face.png", self.LOCKED), params={"inline": "1"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(c.get(self.url("nope.png"), params={"inline": "1"}).status_code, 404)
+        page = c.get("/datasets/" + self.LOCKED).text
+        self.assertNotIn("inline=1", page)
+        self.assertNotIn('<details class="view">', page)
+
+    def test_the_page_offers_view_on_images_only(self):
+        page = self.app().get("/datasets/" + self.IMAGES).text
+        self.assertEqual(page.count('<details class="view">'), 2)
+        self.assertIn('<img loading="lazy" src="/datasets/%s/files/p2.jpg?inline=1" alt="p2.jpg">'
+                      % self.IMAGES, page)
+        self.assertIn('files/pages/p%201.PNG?inline=1"', page)
+        self.assertNotIn("drawing.svg?inline=1", page)
+        self.assertNotIn("list.csv?inline=1", page)
+        self.assertNotIn("<script", page)
+        self.assertNotIn('<details class="view">', self.app().get("/datasets/" + GREEN).text)
+
+
 class TestDownload(CatalogueBase):
     """Streamed through the service, resumable, only what the record
     names, only what the amber rule allows."""

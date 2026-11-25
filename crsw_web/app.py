@@ -45,6 +45,10 @@ from .upload import Refused, TooLarge, stream_to_s3
 
 CONNECTIVITY_SAMPLE = 20
 DOWNLOAD_CHUNK = 8 * 1024 * 1024   # one chunk in memory at a time, never the file
+# The only files the dataset page shows in place, by extension, and the
+# type each is sent as. Never SVG: it can carry script.
+INLINE_IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                      "gif": "image/gif", "webp": "image/webp"}
 log = logging.getLogger("crsw_web")
 HERE = Path(__file__).resolve().parent
 SOURCE_TYPE_HELP = {
@@ -799,14 +803,16 @@ def create_app(settings: Optional[Settings] = None,
         return load_record_text_or_404(cat, identifier)[0]
 
     @app.get("/datasets/{identifier:path}/files/{member:path}")
-    def download(identifier: str, member: str, request: Request,
+    def download(identifier: str, member: str, request: Request, inline: str = "",
                  user: User = Depends(current_user)):
         """Stream one member of a dataset from the store to the browser
         (finding-and-reuse.md §1: the Ceph gateway is VPN-only, so the
         bytes pass through here; one chunk in memory, nothing on disk).
         Only members the record's manifest names are served, so this
         can never fetch an arbitrary key. A Range header is passed
-        through so a large download can resume."""
+        through so a large download can resume. `inline=1` on an image
+        the page can show sends it for display in place; on any other
+        file it changes nothing."""
         cat = need_read()
         rec = load_record_or_404(cat, identifier)
         refusal = may_download(user, rec.get("sensitivity"), rec.get("strand"), settings,
@@ -861,9 +867,18 @@ def create_app(settings: Optional[Settings] = None,
 
         log.info("download user=%s dataset=%s member=%s bytes=%s range=%s",
                  user.username, identifier, member, obj["ContentLength"], wanted or "-")
-        # Always an attachment of unspecified type: the browser saves it
-        # as named and never renders it, and the type table on the host
-        # (Windows says .csv is Excel) cannot leak into the response.
+        # The dataset page's viewer: a listed image type, asked for by
+        # the page, is sent for display. The type comes from the list,
+        # never from the host's type table or the file's own bytes.
+        image_type = INLINE_IMAGE_TYPES.get(filetypes.extension(member))
+        if inline == "1" and image_type:
+            headers["Content-Disposition"] = "inline"
+            return StreamingResponse(chunks(), status_code=status, headers=headers,
+                                     media_type=image_type)
+        # Otherwise always an attachment of unspecified type: the browser
+        # saves it as named and never renders it, and the type table on
+        # the host (Windows says .csv is Excel) cannot leak into the
+        # response.
         return StreamingResponse(chunks(), status_code=status, headers=headers,
                                  media_type="application/octet-stream")
 
@@ -887,6 +902,10 @@ def create_app(settings: Optional[Settings] = None,
             "archives": {f.get("path") for f in files
                          if isinstance(f.get("path"), str)
                          and filetypes.is_archive(f["path"])},
+            # Images the page can show in place.
+            "images": {f.get("path") for f in files
+                       if isinstance(f.get("path"), str)
+                       and filetypes.extension(f["path"]) in INLINE_IMAGE_TYPES},
             # Each subject as its label, slug and scope note, linked to the filter.
             "subjects": [{"slug": s, "label": labels.get(s), "scope": scopes.get(s)}
                          for s in (rec.get("subject") or [])],
