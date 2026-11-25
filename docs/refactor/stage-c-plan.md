@@ -4,6 +4,13 @@
 
 Nothing has moved. This is the plan and the check that will guard it.
 
+On 25 November 2026 `main` gained three changes to the find and dataset
+pages (a file type filter, an image viewer, one name for a dataset held
+at several states) and was merged into this branch. The route list is
+the same. Two query parameters are new: `filetype` on `GET /datasets`
+and `GET /datasets.json`, and `inline` on the download route. The
+figures below are from after that merge.
+
 ## What is there now
 
 `crsw_web/app.py` is 1,282 lines. One function, `create_app`, runs from
@@ -172,7 +179,7 @@ only with your say: `search_all` (87 on a rough count), `put_file` (23),
 - The OpenAPI description and the registered route list, switches off
   and on: `docs/refactor/baseline/collect.py`, compared with the saved
   files.
-- Both test runners: 1001 passed and 1 skipped; 1002 run, 416 skipped.
+- Both test runners: 1011 passed and 1 skipped; 1012 run, 426 skipped.
 - No test file is edited. Three tests reach into `crsw_web.app` by name
   and constrain the plan:
   - `tests/test_web_catalogue.py` imports `explorer_day` from it, so
@@ -196,7 +203,7 @@ matter and the whole body. It exits 1 if anything differs.
 
 What it covers today:
 
-- 998 requests, 81 distinct method-and-path pairs, every one of the 22
+- 1,055 requests, 86 distinct method-and-path pairs, every one of the 22
   routes plus the static files.
 - 13 configurations: read role off and on; amber open to all with the
   explorer link; search on with passages, without, with the embedding
@@ -212,7 +219,7 @@ What it covers today:
   untrusted peer, a platform that fails.
 
 Result on the branch as it stands, where `crsw_web/` is the same as on
-`main`: **0 of 998 differ.** As a test of the test, one word of one
+`main`: **0 of 1,055 differ.** As a test of the test, one word of one
 error message was changed and the run reported 6 differences; the
 change was then undone.
 

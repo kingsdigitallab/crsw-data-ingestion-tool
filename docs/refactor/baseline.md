@@ -12,8 +12,8 @@ complexity, which is expected to fall.
 
 ## 1. Tests
 
-- `.venv\Scripts\python -m pytest -q`: **1001 passed, 1 skipped**, 21 subtests passed.
-- `python -m unittest` (system Python, no web extras): **1002 run, OK, 416 skipped**.
+- `.venv\Scripts\python -m pytest -q`: **1011 passed, 1 skipped**, 21 subtests passed.
+- `python -m unittest` (system Python, no web extras): **1012 run, OK, 426 skipped**.
 
 Both counts must stay exactly as they are.
 

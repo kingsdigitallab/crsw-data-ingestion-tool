@@ -72,6 +72,7 @@ GREEN = "rs2/csac/green/0_raw/events"
 AMBER = "rs1/oral/amber/1_interim/interviews"
 CLEAN = "rs2/csac/green/2_final/csac-clean"
 CENTRE = "centre/cdisaw/green/2_final/acled"
+SCANS = "rs2/csac/green/1_interim/events"
 META = {"strand": "rs2", "sensitivity": "green", "state": "0_raw", "project": "csac",
         "dataset": "events", "domain": "quant", "version": "1-0",
         "coverage_start": "2020", "coverage_end": "2021", "subject": ["forced-labour"],
@@ -181,6 +182,13 @@ def seed(s3, bucket):
                     abstract="Armed conflict events harmonised for the corpus. " * 5),
                [record.manifest_entry("events.parquet", "e" * 64, 64)],
                USER, "44444444-4444-4444-8444-444444444444")
+    # The same dataset name as GREEN at another state, holding images:
+    # for the one-name accordion, the file type filter and the viewer.
+    put_record(s3, bucket, SCANS, dict(META, state="1_interim"),
+               [record.manifest_entry("pages/p 1.PNG", "f" * 64, 12),
+                record.manifest_entry("p2.jpg", "1" * 64, 8),
+                record.manifest_entry("drawing.svg", "2" * 64, 5)],
+               USER, "55555555-5555-4555-8555-555555555555")
     put_member(s3, bucket, CLEAN, "method.txt",
                b"Conflict deaths are counted per year from the CSAC database. "
                b"Each event is coded by location and actor.\n")
@@ -314,6 +322,20 @@ FIND = [
     G("/datasets/" + AMBER + "/files/t1.txt"),
     G("/datasets/" + CENTRE + "/files/events.parquet"),
     G("/datasets/rs2/csac/green/0_raw/missing/files/a.csv"),
+    G("/datasets?filetype=csv"), G("/datasets?filetype=.PNG"), G("/datasets?filetype=exe"),
+    G("/datasets?filetype=jpg&strand=rs2&page=2"), G("/datasets?filetype=%3Cb%3E"),
+    G("/datasets?project=csac"), G("/datasets.json?filetype=svg"),
+    G("/datasets/" + SCANS),
+    G("/datasets/" + SCANS + "/files/p2.jpg?inline=1"),
+    G("/datasets/" + SCANS + "/files/pages/p%201.PNG?inline=1"),
+    G("/datasets/" + SCANS + "/files/p2.jpg?inline=1", headers={"range": "bytes=0-3"}),
+    G("/datasets/" + SCANS + "/files/p2.jpg?inline=1", headers={"range": "bytes=900-"}),
+    G("/datasets/" + SCANS + "/files/p2.jpg"), G("/datasets/" + SCANS + "/files/p2.jpg?inline=0"),
+    G("/datasets/" + SCANS + "/files/p2.jpg?inline=yes"),
+    G("/datasets/" + SCANS + "/files/drawing.svg?inline=1"),
+    G("/datasets/" + SCANS + "/files/nope.png?inline=1"),
+    G("/datasets/" + GREEN + "/files/events.csv?inline=1"),
+    G("/datasets/" + AMBER + "/files/t1.txt?inline=1"),
     G("/deposits/lookup?strand=rs2&project=csac&sensitivity=green&state=0_raw&dataset=events"),
     G("/deposits/lookup?strand=rs2&project=csac&sensitivity=green&state=0_raw&dataset=new-one"),
     G("/deposits/lookup?strand=rs2&project=csac"), G("/deposits/lookup"),
@@ -449,7 +471,7 @@ HEADERS = ("content-type", "location", "content-range", "content-length", "accep
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 TIME_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00:00)")
 SEEDED = {"-".join((c * 8, c * 4, "4" + c * 3, "8" + c * 3, c * 12))
-          for c in "1234"}
+          for c in "12345"}
 
 
 class Side:
