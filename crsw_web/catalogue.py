@@ -46,7 +46,9 @@ def group_projects(rows: Sequence[Dict]) -> List[Dict]:
     """The find page's list, projects first: one group per (strand,
     project) in order of first appearance, so a newest-first list stays
     newest-first and an answer's ranking puts the best match's project
-    at the top. Rows keep their order inside the group."""
+    at the top. Rows keep their order inside the group. `datasets` is
+    the same rows folded by dataset name, so a dataset held at two
+    states is shown under one name; `counted` says how many."""
     groups: Dict[Tuple[str, str], Dict] = {}
     for r in rows:
         key = (r.get("strand") or "", r.get("project") or "")
@@ -58,7 +60,35 @@ def group_projects(rows: Sequence[Dict]) -> List[Dict]:
         g["files"] += int(r.get("files") or 0)
         g["bytes"] += int(r.get("bytes") or 0)
         g["modified"] = max(g["modified"], r.get("modified") or "")
+    for g in groups.values():
+        g["datasets"] = fold_datasets(g["rows"])
+        g["counted"] = counted(g["datasets"])
     return list(groups.values())
+
+
+def fold_datasets(rows: Sequence[Dict]) -> List[Dict]:
+    """Rows of one project folded by dataset name, in order of first
+    appearance: [{"dataset": name, "rows": [...]}]. Each row is still
+    its own record; this is for display only."""
+    by_name: Dict[str, Dict] = {}
+    for r in rows:
+        name = r.get("dataset") or r.get("identifier") or ""
+        by_name.setdefault(name, {"dataset": name, "rows": []})["rows"].append(r)
+    return list(by_name.values())
+
+
+def counted(datasets: Sequence[Dict]) -> str:
+    """How many datasets a folded list holds, in words: "2 datasets",
+    "1 dataset in 2 states", or "2 datasets, 3 records" when names and
+    records differ in any other way."""
+    names = len(datasets)
+    records = sum(len(d["rows"]) for d in datasets)
+    text = "%d dataset%s" % (names, "" if names == 1 else "s")
+    if records == names:
+        return text
+    if names == 1 and len({r.get("state") for r in datasets[0]["rows"]}) == records:
+        return text + " in %d states" % records
+    return text + ", %d records" % records
 
 
 def page_of(items: Sequence, page, per) -> Tuple[List, int, int, int]:
@@ -240,14 +270,17 @@ class Catalogue:
     def search(self, q: Optional[str] = None, strand: Optional[str] = None,
                state: Optional[str] = None, sensitivity: Optional[str] = None,
                subject: Optional[str] = None, project: Optional[str] = None,
-               limit: Optional[int] = None, place: Optional[str] = None) -> List[Dict]:
+               limit: Optional[int] = None, place: Optional[str] = None,
+               filetype: Optional[str] = None) -> List[Dict]:
         """Case-insensitive substring match over the descriptive fields;
         `subject` follows the vocabulary (`expand`: the term and every
         term under it, or a retired term's successors); `place` follows
         the places hierarchy (`expand_place`: the place, what contains it
-        and what it contains); the other arguments are exact filters.
-        Newest modified first."""
+        and what it contains); `filetype` is an extension, with or
+        without its dot, that at least one of the dataset's files has;
+        the other arguments are exact filters. Newest modified first."""
         needle = (q or "").strip().lower()
+        ext = (filetype or "").strip().lstrip(".").lower()
         wanted = set(self.expand(subject)[0]) if subject else None
         wanted_places = set(self.expand_place(place)[0]) if place else None
         out = []
@@ -264,6 +297,10 @@ class Catalogue:
                 continue
             if wanted_places is not None and not wanted_places.intersection(
                     r.get("spatial") or []):
+                continue
+            # A row from an index written before the column existed has
+            # no extensions and matches no file type.
+            if ext and ext not in (r.get("extensions") or []):
                 continue
             if needle:
                 hay = " ".join(str(r.get(f) or "") for f in SEARCH_FIELDS)
@@ -285,6 +322,13 @@ class Catalogue:
         seen = set()
         for r in self._rows_of(sensitivities):
             seen.update(r.get("subject") or [])
+        return sorted(seen)
+
+    def extensions(self) -> List[str]:
+        """File extensions in use across the index, sorted, no dot."""
+        seen = set()
+        for r in self.rows():
+            seen.update(r.get("extensions") or [])
         return sorted(seen)
 
     def projects(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:

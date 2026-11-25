@@ -84,6 +84,58 @@ class CatalogueBase(unittest.TestCase):
                                      read_client=s3mod.ReadOnly(self.s3)))
 
 
+class TestFileTypeFilter(CatalogueBase):
+    """The find page filters on the extensions the index says each
+    dataset holds; an index from before the column shows no filter."""
+    def test_index_lists_each_extension_once_without_the_dot(self):
+        rows = {r["identifier"]: r for r in index_mod.rows(self.s3, "crsw")}
+        self.assertEqual(rows[GREEN]["extensions"], ["csv", "md"])
+        self.assertEqual(rows[AMBER]["extensions"], ["txt"])
+        rec = {"files": [{"path": "a/B.CSV"}, {"path": "b.csv"}, {"path": "README"},
+                         {"path": ".hidden"}, {"path": "x.tar.gz"}, {"path": 7}]}
+        got = index_mod.row(mock.Mock(prefix="p", record_key="k"), rec, {}, "now")
+        self.assertEqual(got["extensions"], ["csv", "gz"])
+
+    def test_page_and_feed_filter_by_file_type(self):
+        c = self.app()
+        html = c.get("/datasets").text
+        for e in ("csv", "md", "txt"):
+            self.assertIn('<option value="%s">.%s</option>' % (e, e), html)
+        html = c.get("/datasets", params={"filetype": "csv"}).text
+        self.assertIn("1 dataset in 1 project holding .csv files", html)
+        self.assertIn(GREEN, html)
+        self.assertNotIn(AMBER, html)
+        self.assertIn('<option value="csv" selected>.csv</option>', html)
+        self.assertIn('<details class="project" open>', html)
+        # With the dot, in capitals: the same filter.
+        self.assertIn("holding .csv files", c.get("/datasets", params={"filetype": ".CSV"}).text)
+        self.assertIn("Nothing matches", c.get("/datasets", params={"filetype": "exe"}).text)
+        feed = c.get("/datasets.json", params={"filetype": "txt"}).json()["datasets"]
+        self.assertEqual([d["identifier"] for d in feed], [AMBER])
+
+    def test_the_pager_carries_the_file_type(self):
+        for n in range(11):
+            self.put_record("rs3/p-%02d/green/0_raw/d" % n,
+                            dict(META, strand="rs3", project="p-%02d" % n, dataset="d"),
+                            [record.manifest_entry("d.csv", ("%x" % n) * 64, 10)],
+                            "k1234567", "%08d-0000-4000-8000-000000000000" % n)
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        html = self.app().get("/datasets", params={"filetype": "csv"}).text
+        self.assertIn('href="/datasets?filetype=csv&amp;page=2&amp;per=10">Next', html)
+
+    def test_an_index_from_before_the_column_shows_no_filter(self):
+        old = [{k: v for k, v in r.items() if k != "extensions"}
+               for r in index_mod.rows(self.s3, "crsw")]
+        self.s3.put_object(Bucket="crsw", Key="index/datasets.jsonl",
+                           Body=index_mod.jsonl_bytes(old))
+        c = self.app()
+        page = c.get("/datasets")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn('name="filetype"', page.text)
+        self.assertIn("2 datasets in 2 projects", page.text)
+        self.assertIn("Nothing matches", c.get("/datasets", params={"filetype": "csv"}).text)
+
+
 class TestReadRoleOff(CatalogueBase):
     def test_every_route_is_404_and_no_nav_link(self):
         c = TestClient(create_app(Settings(**SETTINGS), s3_client=self.s3, vocab_dict=VOCAB))
@@ -275,6 +327,30 @@ class TestGrouping(unittest.TestCase):
                                "project": "csac", "files": 0, "bytes": 0, "modified": ""}]
         self.assertEqual(len(group_projects(rows)), 3)
 
+    def test_a_dataset_held_at_two_states_is_one_name(self):
+        from crsw_web.catalogue import counted, group_projects
+        rows = [
+            {"identifier": "rs1/wir/green/1_interim/papers", "strand": "rs1", "project": "wir",
+             "dataset": "papers", "state": "1_interim", "files": 3, "bytes": 30},
+            {"identifier": "rs1/wir/green/0_raw/maps", "strand": "rs1", "project": "wir",
+             "dataset": "maps", "state": "0_raw", "files": 1, "bytes": 5},
+            {"identifier": "rs1/wir/green/0_raw/papers", "strand": "rs1", "project": "wir",
+             "dataset": "papers", "state": "0_raw", "files": 50, "bytes": 500},
+        ]
+        g = group_projects(rows)[0]
+        self.assertEqual(len(g["rows"]), 3)                  # still one row per record
+        self.assertEqual([(d["dataset"], [r["state"] for r in d["rows"]])
+                          for d in g["datasets"]],
+                         [("papers", ["1_interim", "0_raw"]), ("maps", ["0_raw"])])
+        self.assertEqual(g["counted"], "2 datasets, 3 records")
+        papers = group_projects([rows[0], rows[2]])[0]
+        self.assertEqual(papers["counted"], "1 dataset in 2 states")
+        self.assertEqual(group_projects(rows[:2])[0]["counted"], "2 datasets")
+        # Same name and state at two sensitivities is not "2 states".
+        twice = [rows[0], dict(rows[0], identifier="rs1/wir/amber/1_interim/papers")]
+        self.assertEqual(counted(group_projects(twice)[0]["datasets"]),
+                         "1 dataset, 2 records")
+
     def test_pages_clamp_the_page_and_the_size(self):
         from crsw_web.catalogue import page_of, PER_CHOICES, PER_DEFAULT
         self.assertEqual((PER_CHOICES, PER_DEFAULT), ((10, 25, 50), 10))
@@ -362,6 +438,28 @@ class TestProjectAccordion(CatalogueBase):
             self.assertIn('<details class="project" open>', html, params)
             self.assertNotIn('<details class="project">', html, params)
             self.assertIn("1 dataset in 1 project", html)
+
+    def test_one_name_at_two_states_is_shown_once(self):
+        interim = "rs2/csac/green/1_interim/events"
+        self.put_record(interim, dict(META, state="1_interim"),
+                        [record.manifest_entry("clean.csv", "e" * 64, 7)],
+                        "k1234567", "44444444-4444-4444-8444-444444444444")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        c = self.app()
+        html = c.get("/datasets", params={"project": "csac"}).text
+        self.assertIn("1 dataset in 2 states in 1 project", html)
+        self.assertIn('<td class="shared" rowspan="2">events</td>', html)
+        self.assertEqual(html.count(">events</"), 1)         # the name once
+        self.assertIn('<a href="/datasets/%s">0_raw</a>' % GREEN, html)
+        self.assertIn('<a href="/datasets/%s">1_interim</a>' % interim, html)
+        self.assertEqual(html.count('<tr class="dataset">'), 2)
+        # A dataset at one state reads as before: the name is the link.
+        html = c.get("/datasets", params={"project": "oral"}).text
+        self.assertIn('<a href="/datasets/%s">interviews</a>' % AMBER, html)
+        self.assertIn("<td>1_interim</td>", html)
+        # The feed the form's pickers read stays one row per record.
+        feed = c.get("/datasets.json", params={"project": "csac"}).json()
+        self.assertEqual(len(feed["datasets"]), 2)
 
     def test_ten_projects_a_page_newest_first(self):
         c = self.app()
@@ -547,6 +645,74 @@ class TestHierarchy(CatalogueBase):
         # The subject select is flat; the place select beside it is a tree.
         subject_select = html[html.index('<select id="subject"'):html.index('<label for="place">')]
         self.assertNotIn("\u2007", subject_select)
+
+
+class TestImageViewer(CatalogueBase):
+    """The dataset page shows a listed image type in place: the same
+    route and the same access rule as a download, sent for display only
+    when the page asks and the extension is on the list."""
+    IMAGES = "rs2/csac/green/0_raw/scans"
+    LOCKED = "rs1/oral/amber/0_raw/portraits"
+
+    def seed(self):
+        entries = [record.manifest_entry("pages/p 1.PNG", "a" * 64, 12),
+                   record.manifest_entry("p2.jpg", "b" * 64, 8),
+                   record.manifest_entry("drawing.svg", "c" * 64, 5),
+                   record.manifest_entry("list.csv", "d" * 64, 3)]
+        self.put_record(self.IMAGES, dict(META, dataset="scans"), entries,
+                        "k1234567", "55555555-5555-4555-8555-555555555555")
+        self.put_record(self.LOCKED, dict(META, strand="rs1", project="oral",
+                                          sensitivity="amber", dataset="portraits"),
+                        [record.manifest_entry("face.png", "e" * 64, 4)],
+                        "k2", "66666666-6666-4666-8666-666666666666")
+        super().seed()
+
+    def url(self, member, dataset=None):
+        return "/datasets/%s/files/%s" % (dataset or self.IMAGES, member)
+
+    def test_an_image_asked_for_inline_is_sent_for_display(self):
+        c = self.app()
+        r = c.get(self.url("p2.jpg"), params={"inline": "1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"], "image/jpeg")
+        self.assertEqual(r.headers["content-disposition"], "inline")
+        self.assertEqual(r.content, b"x" * 8)
+        r = c.get(self.url("pages/p 1.PNG"), params={"inline": "1"})
+        self.assertEqual(r.headers["content-type"], "image/png")
+        # A range still works.
+        r = c.get(self.url("p2.jpg"), params={"inline": "1"}, headers={"Range": "bytes=0-3"})
+        self.assertEqual((r.status_code, r.content), (206, b"xxxx"))
+
+    def test_anything_else_is_still_an_attachment(self):
+        c = self.app()
+        for member, params in (("p2.jpg", {}), ("p2.jpg", {"inline": "0"}),
+                               ("p2.jpg", {"inline": "yes"}),
+                               ("list.csv", {"inline": "1"}),
+                               ("drawing.svg", {"inline": "1"})):
+            r = c.get(self.url(member), params=params)
+            self.assertEqual(r.status_code, 200, (member, params))
+            self.assertEqual(r.headers["content-type"], "application/octet-stream")
+            self.assertTrue(r.headers["content-disposition"].startswith("attachment"))
+
+    def test_the_access_rule_is_the_download_rule(self):
+        c = self.app()
+        r = c.get(self.url("face.png", self.LOCKED), params={"inline": "1"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(c.get(self.url("nope.png"), params={"inline": "1"}).status_code, 404)
+        page = c.get("/datasets/" + self.LOCKED).text
+        self.assertNotIn("inline=1", page)
+        self.assertNotIn('<details class="view">', page)
+
+    def test_the_page_offers_view_on_images_only(self):
+        page = self.app().get("/datasets/" + self.IMAGES).text
+        self.assertEqual(page.count('<details class="view">'), 2)
+        self.assertIn('<img loading="lazy" src="/datasets/%s/files/p2.jpg?inline=1" alt="p2.jpg">'
+                      % self.IMAGES, page)
+        self.assertIn('files/pages/p%201.PNG?inline=1"', page)
+        self.assertNotIn("drawing.svg?inline=1", page)
+        self.assertNotIn("list.csv?inline=1", page)
+        self.assertNotIn("<script", page)
+        self.assertNotIn('<details class="view">', self.app().get("/datasets/" + GREEN).text)
 
 
 class TestDownload(CatalogueBase):

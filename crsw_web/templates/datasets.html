@@ -48,29 +48,45 @@
           <label for="place">Place</label>
           <select id="place" name="place"><option value="">any</option>{% for group, options in place_groups %}<optgroup label="{{ group }}">{% for p in options %}<option value="{{ p.code }}"{% if p.code == place %} selected{% endif %}>{{ p.pad }}{{ p.label }} ({{ p.code }})</option>{% endfor %}</optgroup>{% endfor %}</select>
         </div>
+        {# Hidden until the index carries file types (one `promoter index` after the upgrade). #}
+        {% if filetypes %}
+        <div class="field">
+          <label for="filetype">File type</label>
+          <select id="filetype" name="filetype"><option value="">any</option>{% for e in filetypes %}<option value="{{ e }}"{% if e == filetype %} selected{% endif %}>.{{ e }}</option>{% endfor %}</select>
+        </div>
+        {% endif %}
       </div>
       <div class="actions"><button class="primary" type="submit">Search</button> <a href="/datasets">Clear</a></div>
     </form>
 
     {% if subject_notice %}<p class="notice">{{ subject_notice }}</p>{% endif %}
-    <p class="count">{{ results|length }} dataset{% if results|length != 1 %}s{% endif %} in {{ n_projects }} project{% if n_projects != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}{% if place_filter %} covering {{ place_filter.label }}{% if place_filter.how == "hierarchy" %} (or a place containing or inside it){% endif %}{% endif %}</p>
+    <p class="count">{{ counted }} in {{ n_projects }} project{% if n_projects != 1 %}s{% endif %}{% if subject_filter and subject_filter.narrower %} with subject {{ subject_filter.asked }} (and {{ subject_filter.narrower }} narrower term{% if subject_filter.narrower != 1 %}s{% endif %}){% endif %}{% if place_filter %} covering {{ place_filter.label }}{% if place_filter.how == "hierarchy" %} (or a place containing or inside it){% endif %}{% endif %}{% if filetype %} holding .{{ filetype }} files{% endif %}</p>
     {% if results %}
     <div class="projects">
     {% for g in groups %}
     <details class="project"{% if opened %} open{% endif %}>
-      <summary><span class="name">{{ g.project }}</span><span class="tag strand">{{ g.strand }}</span><span class="meta">{{ g.rows|length }} dataset{% if g.rows|length != 1 %}s{% endif %} · {{ g.files }} file{% if g.files != 1 %}s{% endif %} · {{ g.size }} · {{ g.modified[:10] }}</span></summary>
+      <summary><span class="name">{{ g.project }}</span><span class="tag strand">{{ g.strand }}</span><span class="meta">{{ g.counted }} · {{ g.files }} file{% if g.files != 1 %}s{% endif %} · {{ g.size }} · {{ g.modified[:10] }}</span></summary>
       <table class="files results">
         <thead><tr><th>Dataset</th><th>State</th><th>Depositor</th><th class="num">Files</th><th class="num">Size</th><th>Modified</th></tr></thead>
         <tbody>
-        {% for r in g.rows %}
+        {% for d in g.datasets %}{% set shared = d.rows|length > 1 %}
+        {% for r in d.rows %}
         <tr class="dataset">
-          <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span>{% set explore = explore_link(r.identifier, r.dataset, r.temporal_start, r.temporal_end) %}{% if explore %} <a class="explore" href="{{ explore }}" rel="noopener">Explore this data in (CD)ISaW</a>{% endif %}</td>
+          {% set explore = explore_link(r.identifier, r.dataset, r.temporal_start, r.temporal_end) %}
+          {% if shared %}
+          {# One name, several records: the name once, each state its own link. #}
+          {% if loop.first %}<td class="shared" rowspan="{{ d.rows|length }}">{{ d.dataset }}</td>{% endif %}
+          <td class="state"><a href="/datasets/{{ r.identifier }}">{{ r.state }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span>{% if explore %} <a class="explore" href="{{ explore }}" rel="noopener">Explore this data in (CD)ISaW</a>{% endif %}</td>
+          {% else %}
+          <td><a href="/datasets/{{ r.identifier }}">{{ r.dataset }}</a><span class="sens {{ r.sensitivity }} tag">{{ r.sensitivity }}</span>{% if explore %} <a class="explore" href="{{ explore }}" rel="noopener">Explore this data in (CD)ISaW</a>{% endif %}</td>
           <td>{{ r.state }}</td>
+          {% endif %}
           <td>{{ r.depositor or "" }}</td>
           <td class="num">{{ r.files }}</td>
           <td class="num">{{ sizes[r.identifier] }}</td>
           <td>{{ (r.modified or "")[:10] }}</td>
         </tr>
+        {% endfor %}
         {% endfor %}
         </tbody>
       </table>
