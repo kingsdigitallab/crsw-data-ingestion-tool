@@ -11,8 +11,8 @@ from crsw_deposit import record
 
 
 def new_run_id() -> str:
-    """`20260924T163000123456Z-ab12`: UTC to the microsecond so runs sort
-    in time order, plus a few random hex digits."""
+    """Return a run id such as `20260924T163000123456Z-ab12`: UTC to the
+    microsecond so runs sort in time order, plus a few random hex digits."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return "%s-%s" % (stamp, secrets.token_hex(2))
 

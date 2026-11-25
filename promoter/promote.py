@@ -79,7 +79,7 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
     staged_prefix = store.staged_key(dep.user, dep.id, dep.prefix)
 
     try:
-        # r8 §4 (decided): references the checks resolved are written to
+        # References the checks resolved are written to
         # the staged record first, then promoted like everything else, so
         # what was moved is what was checked.
         if rep.resolved_derived_from is not None and rep.staged_record:
@@ -125,7 +125,7 @@ def promote(dep: Deposit, rep: Report, store: DepositStore, log: Log,
         staged_created = (rep.staged_record or {}).get("created") or dep.finalised
         meta = dict(dep.meta)
         if rep.mapped_subjects is not None:
-            # r9: the checks mapped stale terms; the record says so.
+            # The checks mapped stale terms; the record says so.
             meta["subject"] = rep.mapped_subjects
             meta["category_history"] = rep.mapping_entries
             if rep.mapped_vocabulary_version:

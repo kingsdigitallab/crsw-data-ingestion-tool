@@ -1,28 +1,18 @@
-"""Meaning-based search needs one vector per dataset. This module builds
-them from the index rows and keeps them in the bucket as
-`<index_prefix>/embeddings.parquet`, separate from the index proper so
-the human-readable index stays lean and this file can be dropped or
-rebuilt on its own (finding-and-reuse.md §5).
+"""One vector per dataset, for search by meaning, kept in the bucket as
+`<index_prefix>/embeddings.parquet`.
 
 What is embedded is the record's title, abstract, subject terms and
-source note, nothing from the file manifest and nothing from any file.
+source note: nothing from the file manifest and nothing from any file.
 With the vocabulary to hand, a subject term is sent as its label and
-scope note ("Forced labour: work exacted under the menace of a
-penalty"), one line each after the abstract, never as the bare slug.
+scope note, never as the bare slug. Only records of the sensitivities
+the configuration allows are sent to the platform; the other rows are
+written with no vector, so the file says the dataset exists.
+
 The work is incremental: a row whose identifier, modified stamp, model
-and `text_sha` (the text it was made from) match the previous file is
-kept, so a routine run embeds only what changed, and a scope note or
-label edited in the vocabulary re-embeds exactly the rows carrying that
-term. `model` is not the alias from the configuration but the
-fingerprint of what that alias resolves to on the platform
-(`Platform.embed_fingerprint`): a backend swapped behind an unchanged
-alias gives a new fingerprint, and every row is embedded again, since
-vectors from different models cannot be compared. Only records of the
-sensitivities the configuration allows are sent to the platform (green
-until the Centre allows amber); the other rows are still written, with
-no vector, so the file says the dataset exists. Vectors are stored at
-half precision (16-bit floats), which the ranking cannot tell apart
-from full precision."""
+and `text_sha` match the previous file is kept. `model` is the
+fingerprint of what the embed alias resolves to on the platform, so a
+backend swapped behind an unchanged alias re-embeds every row. Vectors
+are stored at half precision (16-bit floats)."""
 import hashlib
 import io
 import logging
@@ -51,12 +41,12 @@ TEXT_FIELDS = ("dataset", "abstract", "subject", "source_detail")
 
 
 def text_for(row: Dict, vocab_doc: Optional[Dict] = None) -> str:
-    """The text one dataset is embedded from: title, abstract, subject
-    terms and source note, one per line, blanks left out. With a term
-    authority file, each subject is its label and scope note on a line
-    of its own ("Label: scope"; the label alone without a note; the
-    slug only when the vocabulary does not know it). Without one, or
-    with a flat pre-r9 file, the slugs as before."""
+    """Return the text one dataset is embedded from: title, abstract,
+    subject terms and source note, one per line, blanks left out. With a
+    term authority file each subject is its label and scope note on a
+    line of its own ("Label: scope"; the label alone without a note; the
+    slug only when the vocabulary does not know it). Without one, the
+    slugs."""
     parts = []
     for f in TEXT_FIELDS:
         v = row.get(f)
@@ -86,16 +76,16 @@ def _subject_lines(subjects: Sequence, vocab_doc: Dict) -> List[str]:
 
 
 def text_sha(text: str) -> str:
-    """Sixteen hex characters that name the text a vector was made from."""
+    """Return sixteen hex characters that name the text a vector was made
+    from."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def stale_text(index_rows: Sequence[Dict], existing: Dict[str, Dict],
                vocab_doc: Optional[Dict] = None) -> List[str]:
-    """Identifiers whose vector in `existing` was made from other text
-    than the row gives today (a scope note or label changed in the
-    vocabulary, or a file from before text_sha). Rows without a vector
-    are not counted: nothing was made from their text."""
+    """Return the identifiers whose vector in `existing` was made from
+    other text than the row gives today. Rows without a vector are not
+    counted."""
     stale = []
     for r in index_rows:
         old = existing.get(r.get("identifier"))
@@ -105,10 +95,8 @@ def stale_text(index_rows: Sequence[Dict], existing: Dict[str, Dict],
 
 
 def missing_rows(index_rows: Sequence[Dict], existing: Dict[str, Dict]) -> List[str]:
-    """Identifiers in the index with no row at all in `existing`: a
-    dataset promoted while the platform could not be used, or a file
-    not yet written. A row without a vector is not missing (its
-    sensitivity is not sent), so it is not counted."""
+    """Return the identifiers in the index with no row at all in
+    `existing`. A row without a vector is not missing."""
     return [r["identifier"] for r in index_rows
             if r.get("identifier") and r["identifier"] not in existing]
 
@@ -118,8 +106,8 @@ def embeddings_key(prefix: str) -> str:
 
 
 def read_existing(client, bucket: str, key: str) -> Dict[str, Dict]:
-    """The previous file's rows by identifier; {} when there is none or
-    pyarrow is absent."""
+    """Return the previous file's rows by identifier; {} when there is none
+    or pyarrow is absent."""
     if pq is None:
         return {}
     try:
@@ -134,9 +122,8 @@ def read_existing(client, bucket: str, key: str) -> Dict[str, Dict]:
 
 
 def models_in(existing: Dict[str, Dict]) -> List[str]:
-    """The distinct `model` values of the rows that carry a vector,
-    sorted: what the file's vectors are keyed to. A run compares this
-    with the fingerprint of the day to notice a backend change."""
+    """Return the distinct `model` values of the rows that carry a vector,
+    sorted."""
     return sorted({r.get("model") for r in existing.values()
                    if r.get("embedding") and r.get("model")})
 
@@ -144,12 +131,12 @@ def models_in(existing: Dict[str, Dict]) -> List[str]:
 def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
           model: str, sensitivities: Set[str], dims: Optional[int] = None,
           vocab_doc: Optional[Dict] = None) -> Dict:
-    """Rows for the new file, and a summary of what was done. `platform`
-    is anything with `embed(texts) -> vectors`; `model` is the resolved
-    fingerprint the vectors are keyed to, `dims` the vector length in
-    use, `text_sha` names the text; a kept row must match on all three,
-    so a change of any re-embeds. `vocab_doc` is the vocabulary whose
-    labels and scope notes go into the text (see `text_for`)."""
+    """Build the rows for the new file and a summary of what was done, and
+    return them. `platform` is anything with `embed(texts) -> vectors`;
+    `model` is the resolved fingerprint the vectors are keyed to and
+    `dims` the vector length in use. A previous row is kept only if it
+    matches on model, dims and `text_sha`. `vocab_doc` is the vocabulary
+    whose labels and scope notes go into the text (see `text_for`)."""
     out: List[Dict] = []
     todo: List[Dict] = []
     texts: Dict[str, str] = {}
@@ -169,6 +156,7 @@ def build(index_rows: Sequence[Dict], existing: Dict[str, Dict], platform,
         texts[ident] = text_for(r, vocab_doc)
         base["text_sha"] = text_sha(texts[ident])
         old = existing.get(ident)
+        # A kept row must match on model, modified stamp, dims and text.
         if (old and old.get("embedding") and old.get("model") == model
                 and old.get("modified") == r.get("modified")
                 and (old.get("cut") or 0) == (dims or 0)
@@ -215,7 +203,8 @@ def parquet_bytes(rows: Sequence[Dict]) -> Optional[bytes]:
 
 
 def write(client, bucket: str, prefix: str, rows: Sequence[Dict]) -> Optional[str]:
-    """Put the embeddings object; its key, or None when pyarrow is absent."""
+    """Put the embeddings object and return its key, or None when pyarrow
+    is absent."""
     data = parquet_bytes(rows)
     if data is None:
         return None
@@ -230,9 +219,9 @@ def refresh(client, bucket: str, prefix: str, index_rows: Sequence[Dict], platfo
             existing: Optional[Dict[str, Dict]] = None,
             vocab_doc: Optional[Dict] = None) -> Dict:
     """Read the previous file (or take it as `existing`, already read),
-    embed what changed, write the new one. Returns the summary from
-    `build` plus the key written ('key' is None when pyarrow is absent,
-    in which case nothing was embedded either)."""
+    embed what changed, write the new file and return the summary from
+    `build` plus the key written. 'key' is None when pyarrow is absent,
+    in which case nothing was embedded either."""
     if pq is None:
         return {"key": None, "embedded": 0, "kept": 0, "skipped": 0,
                 "dropped": 0, "dimension": None}

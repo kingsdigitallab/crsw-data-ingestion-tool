@@ -1,9 +1,8 @@
 """Dataset record: field definitions, validation, manifest logic, checksum.
 
-NO user I/O in this module — the future web gateway imports it.
-Schema reference: dataset record v0.4 (r5). One dataset.meta.json per
-dataset prefix holds the descriptive fields and the files manifest;
-per-file sidecars are retired (r5 §1 Q2)."""
+One dataset.<dataset>.json per dataset prefix holds the descriptive
+fields and the files manifest. No user I/O in this module: the web
+service imports it."""
 import datetime
 import getpass
 import hashlib
@@ -19,7 +18,7 @@ from . import keys
 
 # Every tool writes SCHEMA_VERSION. parse_record also reads the older
 # versions in ACCEPTED_SCHEMA_VERSIONS and upgrades them on the way in
-# (r8 §5): nobody converts a record by hand. 0.7 (r11 §2): `domain` is
+# so nobody converts a record by hand. In 0.7 `domain` is
 # a list, primary first; `provider` (slugs) and `spatial_note` are new;
 # `spatial` is a list of place codes.
 SCHEMA_VERSION = "0.7"
@@ -37,25 +36,25 @@ RECOMMENDED_FIELDS = (
 OPTIONAL_FIELDS = ("derived_from", "provenance", "category_history",
                    "language", "ethics_ref", "spatial", "spatial_note", "notes")
 
-# r11 §4: a place code in `spatial`: a UN M49 node or an ISO 3166
+# A place code in `spatial`: a UN M49 node or an ISO 3166
 # alpha-2 country. The hierarchy itself is places.json (crsw_deposit.places).
 PLACE_CODE_RE = re.compile(r"^(m49:[0-9]{3}|iso:[A-Z]{2})$")
 
 MANIFEST_REQUIRED = ("path", "checksum_sha256", "bytes")
 MANIFEST_OPTIONAL = ("temporal", "format", "derived_from", "notes")
 
-# r8 §1: a derived_from reference is a dataset in the store or something
-# outside it. r8 §2: an activity is one transformation step; the kinds
+# A derived_from reference is a dataset in the store or something
+# outside it. An activity is one transformation step; the kinds
 # are vocabulary-managed (vocab.activity_codes) with this fallback.
 REFERENCE_KINDS = ("dataset", "external")
 ACTIVITY_KINDS = ("convert", "clean", "harmonise", "aggregate", "geocode",
                   "anonymise", "merge", "subset", "manual", "other")
 _URL_SCHEMES = ("http", "https")
 
-# r9: what a category_history entry can say happened to a record's
+# What a category_history entry can say happened to a record's
 # subject terms or domain after deposit. `by` is a username, or
 # "vocabulary" when a vocabulary change was applied mechanically.
-# r11: `field_set`, one entry per descriptive field a steward set in
+# `field_set`: one entry per descriptive field a steward set in
 # place; the entry names the field.
 HISTORY_KINDS = ("added", "removed", "replaced", "split_review",
                  "domain_changed", "field_set")
@@ -66,7 +65,7 @@ VOCABULARY_ACTOR = "vocabulary"
 SOURCE_TYPES = ("archive", "survey", "scrape", "instrument", "partner",
                 "derived", "other")
 
-# r11: the fields a change file may set in place, in record order, each
+# The fields a change file may set in place, in record order, each
 # with its shape. Only descriptive fields: `subject` and `domain` have
 # their own change-file keys (add/remove/set_domain) and their own history
 # kinds; `derived_from`, `provenance`, `depositors` and `category_history`
@@ -96,13 +95,14 @@ ABSTRACT_MIN_WORDS = 50
 
 
 class RecordParseError(ValueError):
-    """Raised when dataset.meta.json exists but cannot be used. Callers
-    must surface this and stop — modifying a record that was never read
-    would silently drop its manifest members (r5 §4)."""
+    """Raised when a dataset record exists but cannot be used. Callers
+    must report this and stop: building on a record that was not read
+    would silently drop its manifest members."""
 
 
 def sha256_file(path, chunk_size=1024 * 1024) -> str:
-    """Chunked SHA-256 so a 10GB raster never loads into memory."""
+    """Return a file's SHA-256 as hex, read in chunks so a large file never
+    loads into memory."""
     h = hashlib.sha256()
     with open(str(path), "rb") as f:
         while True:
@@ -114,7 +114,8 @@ def sha256_file(path, chunk_size=1024 * 1024) -> str:
 
 
 def coverage_error(value: str) -> Optional[str]:
-    """Valid: a 4-digit year ('1989') or an ISO date ('2025-12-31')."""
+    """Return why a coverage value is not a 4-digit year ('1989') or an ISO
+    date ('2025-12-31'), or None if it is one."""
     if _YEAR_RE.match(value or ""):
         return None
     try:
@@ -126,9 +127,8 @@ def coverage_error(value: str) -> Optional[str]:
 
 
 def abstract_warning(text: str) -> Optional[str]:
-    """Warn below 50 words; never block (r6 §0). Length guidance lives
-    here in the tool, not in the schema - a contract constraint the tool
-    doesn't enforce just breeds a permanently red CI test."""
+    """Return a warning if the abstract is under 50 words, else None. The
+    warning never blocks a deposit."""
     n = len((text or "").split())
     if n < ABSTRACT_MIN_WORDS:
         return ("Abstract is %d words. Guidance is at least %d - enough "
@@ -138,9 +138,9 @@ def abstract_warning(text: str) -> Optional[str]:
 
 
 def normalise_version(value: str) -> Optional[str]:
-    """Normalise version input to '{major}-{minor}' (r2 §3).
-    Accepts 3-0 / v3-0 / 3.0 / v3.0; returns None for anything else -
-    a bare '3' is rejected, never guessed."""
+    """Return a version as '{major}-{minor}', or None if it is not one.
+    Accepts 3-0, v3-0, 3.0 and v3.0; a bare '3' is rejected, never
+    guessed."""
     m = _VERSION_IN_RE.match((value or "").strip())
     if not m:
         return None
@@ -163,9 +163,10 @@ def default_depositor() -> str:
 
 
 def mint_uuid() -> str:
-    """UUID4 for a dataset, minted once at first record creation (r5 Q1).
-    Promotion or reclassification creates a NEW record with a new UUID;
-    derived_from carries the lineage."""
+    """Return a new UUID4 for a dataset. It is minted once, when the
+    dataset's first record is created. A dataset deposited at a different
+    state or sensitivity is a new record with a new UUID; derived_from
+    carries the lineage."""
     return str(uuid.uuid4())
 
 
@@ -177,25 +178,28 @@ _MIME_TYPES = mimetypes.MimeTypes()
 
 
 def guess_format(filename: str) -> Optional[str]:
-    """MIME type from the filename, or None — omitted, never guessed (r5 §2)."""
+    """Return the MIME type for a filename, or None. An unknown type is
+    omitted, never guessed."""
     return _MIME_TYPES.guess_type(filename)[0]
 
 
 # --- coverage envelope -------------------------------------------------
 # Temporal coverage is a nested {"start": ..., "end": ...} object
-# (r6 §3.1, the DCAT-shaped form of dcterms:temporal). Values are years
+# (the DCAT-shaped form of dcterms:temporal). Values are years
 # ('1989') or ISO dates ('2025-12-31'), already checked by
 # coverage_error. Comparison expands a year to its first/last day so
 # ISO strings compare lexicographically; returned values keep whichever
 # form the depositor gave.
 
 def temporal_object(start, end) -> dict:
-    """The nested temporal shape used at record and manifest level."""
+    """Return the nested {"start", "end"} object used at record and
+    manifest level."""
     return {"start": start, "end": end}
 
 
 def human_bytes(n) -> str:
-    """1234567 -> '1.2 MB' (decimal units, one decimal above bytes)."""
+    """Return a size in words: 1234567 -> '1.2 MB' (decimal units, one
+    decimal above bytes)."""
     try:
         n = float(n)
     except (TypeError, ValueError):
@@ -208,9 +212,9 @@ def human_bytes(n) -> str:
 
 
 def temporal_pair(temporal):
-    """(start, end) out of a temporal object; (None, None) when absent or
-    malformed - callers that need to enforce the shape (validate_record)
-    do so explicitly; this one just needs to not crash on bad input."""
+    """Return (start, end) from a temporal object, or (None, None) when it
+    is absent or malformed. Does not check the shape; validate_record
+    does."""
     if not isinstance(temporal, dict):
         return None, None
     return temporal.get("start"), temporal.get("end")
@@ -225,8 +229,8 @@ def _as_end(value: str) -> str:
 
 
 def widen(envelope, pairs):
-    """The smallest envelope containing `envelope` and every (start, end)
-    pair in `pairs`. Pairs may contain None/empty ends, which are skipped."""
+    """Return the smallest envelope containing `envelope` and every (start,
+    end) pair in `pairs`. None or empty ends in a pair are skipped."""
     start, end = envelope
     for pair_start, pair_end in pairs:
         if pair_start and _as_start(pair_start) < _as_start(start):
@@ -237,8 +241,8 @@ def widen(envelope, pairs):
 
 
 def envelope_errors(rec: dict) -> List[str]:
-    """Containment check (r5 Q5): every per-file temporal range must sit
-    inside the record's envelope."""
+    """Return an error for each per-file temporal range that is not inside
+    the record's envelope."""
     errors = []
     start, end = temporal_pair(rec.get("temporal"))
     if not start or not end:
@@ -262,8 +266,8 @@ def envelope_errors(rec: dict) -> List[str]:
 def manifest_entry(path_name: str, checksum_sha256: str, size_bytes: int,
                    temporal=None, fmt=None,
                    derived_from=None, notes=None) -> dict:
-    """A files[] entry; empty optionals are omitted. `temporal` is the
-    nested {"start", "end"} object (r6 §3.1)."""
+    """Return a files[] entry; empty optional values are omitted.
+    `temporal` is the nested {"start", "end"} object."""
     entry = {
         "path": path_name,
         "checksum_sha256": checksum_sha256,
@@ -280,12 +284,10 @@ def manifest_entry(path_name: str, checksum_sha256: str, size_bytes: int,
 
 
 def merge_manifest(existing: Optional[List[dict]], new: List[dict]):
-    """Union of an existing manifest and the current batch (r5 Q4).
-
-    A new entry replaces the existing entry at the same path; existing
-    paths are never dropped — removing a member is deliberate curation,
-    out of scope for the tool. Returns (union sorted by path, added
-    paths, changed paths), changed meaning same path, new checksum."""
+    """Return (union sorted by path, added paths, changed paths) for an
+    existing manifest and the current batch. A new entry replaces the
+    existing entry at the same path; changed means same path, new
+    checksum. Existing paths are never dropped."""
     by_path = {entry["path"]: entry for entry in existing or []}
     added = []
     changed = []
@@ -301,8 +303,8 @@ def merge_manifest(existing: Optional[List[dict]], new: List[dict]):
 
 
 def unchanged_paths(existing: Optional[List[dict]], new: List[dict]) -> Set[str]:
-    """Paths whose upload can be skipped on a re-run: same path, same
-    checksum, same size as the existing manifest entry."""
+    """Return the paths whose upload can be skipped on a re-run: same
+    path, same checksum and same size as the existing manifest entry."""
     by_path = {entry["path"]: entry for entry in existing or []}
     out = set()
     for entry in new:
@@ -315,21 +317,21 @@ def unchanged_paths(existing: Optional[List[dict]], new: List[dict]) -> Set[str]
 
 
 def append_depositor(depositors: Optional[List[str]], name: str) -> List[str]:
-    """Depositors accumulate per deposit, first-seen order, no repeats."""
+    """Return the depositors with `name` added: first-seen order, no
+    repeats."""
     out = list(depositors or [])
     if name and name not in out:
         out.append(name)
     return out
 
 
-# --- provenance: references and activities (r8) ------------------------
+# --- provenance: references and activities -----------------------------
 
 def reference_from_text(text: str) -> dict:
-    """The one rule that turns what a person typed into a derived_from
-    reference (r8 §1, decided). A five-part identifier is a `dataset`
-    reference; anything that parses as an http(s) URL or a doi: is
-    `external` with `url`; anything else is `external` with `citation`.
-    Used by the CLI interview, the web form and the 0.5 upgrade path."""
+    """Return a derived_from reference for what a person typed. A
+    five-part identifier is a `dataset` reference; an http(s) URL or a
+    doi: is `external` with `url`; anything else is `external` with
+    `citation`."""
     value = (text or "").strip()
     if _IDENTIFIER_RE.match(value):
         return {"kind": "dataset", "identifier": value}
@@ -341,10 +343,9 @@ def reference_from_text(text: str) -> dict:
 
 
 def references_from_lines(text_or_list) -> List[dict]:
-    """What a person typed into a "derived from" box, one reference per
-    line (or one per list item): blanks dropped, each line through
-    reference_from_text. The CLI interview and the web form both call
-    this so the two routes cannot drift."""
+    """Return the references typed into a "derived from" box, one per line
+    (or one per list item): blanks dropped, each line through
+    reference_from_text."""
     if text_or_list is None:
         return []
     if isinstance(text_or_list, str):
@@ -361,8 +362,8 @@ def references_from_lines(text_or_list) -> List[dict]:
 
 def validate_reference(ref, label: str,
                        own_identifier: Optional[str] = None) -> List[str]:
-    """Errors for one derived_from reference; `label` names it in
-    messages (e.g. 'derived_from[2]')."""
+    """Return the errors for one derived_from reference; `label` names it
+    in messages (e.g. 'derived_from[2]')."""
     errors = []
     if not isinstance(ref, dict):
         errors.append("%s is not an object" % label)
@@ -406,9 +407,9 @@ def validate_reference(ref, label: str,
 def validate_activity(act, label: str, manifest_paths: Set[str],
                       activity_codes: Optional[List[str]] = None
                       ) -> Tuple[List[str], List[str]]:
-    """(errors, warnings) for one provenance activity (r8 §2). Outputs
-    and bare-path inputs must be members of this dataset; a commit that
-    is not 7-40 hex characters is a warning, nothing more."""
+    """Return (errors, warnings) for one provenance activity. Outputs and
+    bare-path inputs must be members of this dataset; a commit that is
+    not 7-40 hex characters is a warning, nothing more."""
     errors = []
     warnings = []
     if not isinstance(act, dict):
@@ -464,14 +465,15 @@ def validate_activity(act, label: str, manifest_paths: Set[str],
     return errors, warnings
 
 
-# --- category history (r9) ---------------------------------------------
+# --- category history --------------------------------------------------
 
 class RecordChangeError(ValueError):
     """A category change that cannot be applied to a record."""
 
 
 def validate_history_entry(entry, label: str) -> List[str]:
-    """Errors for one category_history entry; `label` names it."""
+    """Return the errors for one category_history entry; `label` names it
+    in messages."""
     errors = []
     if not isinstance(entry, dict):
         return ["%s is not an object" % label]
@@ -532,9 +534,9 @@ def history_entry(when: str, by: str, kind: str, frm=None, to=None,
 
 def provider_errors(value, provider_slugs: Optional[List[str]] = None,
                     label: str = "provider") -> Tuple[List[str], List[str]]:
-    """(errors, warnings) for a `provider` value (r11 §2.2): a list of
-    slugs; with a providers list in hand an unknown slug is an error,
-    without one it is a warning that it could not be checked."""
+    """Return (errors, warnings) for a `provider` value, a list of slugs.
+    With a providers list in hand an unknown slug is an error; without
+    one it is a warning that it could not be checked."""
     if not (isinstance(value, list) and all(isinstance(s, str) for s in value)):
         return ["%s must be a list of provider slugs" % label], []
     errors = []
@@ -558,9 +560,9 @@ def provider_errors(value, provider_slugs: Optional[List[str]] = None,
 
 def place_errors(value, place_codes: Optional[Set[str]] = None,
                  label: str = "spatial") -> Tuple[List[str], List[str]]:
-    """(errors, warnings) for a `spatial` value (r11 §2.3): a list of
-    place codes (`m49:NNN` or `iso:XX`); with places in hand an unknown
-    code is an error, without them a warning."""
+    """Return (errors, warnings) for a `spatial` value, a list of place
+    codes (`m49:NNN` or `iso:XX`). With places in hand an unknown code
+    is an error; without them it is a warning."""
     if isinstance(value, str):
         return ["%s is a string (the 0.6 form); records read through "
                 "parse_record are upgraded to a list of place codes" % label], []
@@ -581,9 +583,8 @@ def place_errors(value, place_codes: Optional[Set[str]] = None,
 def field_set_error(field: str, value,
                     provider_slugs: Optional[List[str]] = None,
                     place_codes: Optional[Set[str]] = None) -> Optional[str]:
-    """Why one `set` pair cannot be applied, or None. `None` as the value
-    clears the field. Shared by the change-file reader (so a bad file is
-    refused before any record is read) and apply_dataset_change."""
+    """Return why one `set` pair cannot be applied, or None. A value of
+    None clears the field."""
     kinds = dict(SETTABLE_FIELDS)
     if field not in kinds:
         return ("%r cannot be set this way; a change file may set %s "
@@ -613,8 +614,8 @@ def field_set_error(field: str, value,
 
 
 def domain_list(value) -> List[str]:
-    """A record's or interview's domain as the 0.7 list: a bare code
-    (0.6, or a flag) becomes a one-element list; None becomes []."""
+    """Return a domain as a list: a bare code becomes a one-element list,
+    None becomes []."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -635,16 +636,17 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
                          provider_slugs: Optional[List[str]] = None,
                          place_codes: Optional[Set[str]] = None
                          ) -> Tuple[dict, List[dict]]:
-    """One steward decision about one dataset (r9 §4, r11 §1): `change`
-    may carry `add` and `remove` (subject terms), `set_domain` (a code
-    or a list, primary first), `set` (descriptive fields, see
-    SETTABLE_FIELDS; a null value clears) and `reason`. Returns (new
-    record, the history entries appended). Unknown terms, unknown
-    domains, removing a term the record does not have, leaving no
-    subject at all, or setting a field that cannot be set this way raise
-    RecordChangeError; the input record is untouched. `modified` moves
-    to `now`; `vocabulary_version` is stamped when given. A change that
-    changes nothing returns the record as it was and no entries."""
+    """Apply one steward decision to one dataset and return (new record,
+    the history entries appended). `change` may carry `add` and `remove`
+    (subject terms), `set_domain` (a code or a list, primary first),
+    `set` (descriptive fields, see SETTABLE_FIELDS; a null value clears)
+    and `reason`. `modified` moves to `now`; `vocabulary_version` is
+    stamped when given. A change that changes nothing returns the record
+    as it was and no entries.
+
+    Raises RecordChangeError for an unknown term or domain, removing a
+    term the record does not have, leaving no subject at all, or setting
+    a field that cannot be set this way. The input record is untouched."""
     add = [s for s in (change.get("add") or [])]
     remove = [s for s in (change.get("remove") or [])]
     domain = change.get("set_domain")
@@ -728,11 +730,11 @@ def apply_dataset_change(rec: dict, change: dict, who: str, now: str,
 
 def apply_vocabulary_mapping(rec: dict, vocab_doc: dict, now: str
                              ) -> Tuple[dict, List[dict]]:
-    """The record with its subjects brought up to the vocabulary's
-    current terms (r9 §2 and §3), recorded as history entries by the
-    actor "vocabulary". A record whose terms are all current comes back
-    as it was, with no entries, so this is safe to run on every record
-    on every run."""
+    """Return (record, history entries): the record with its subjects
+    brought up to the vocabulary's current terms, the entries recorded
+    by the actor "vocabulary". A record whose terms are all current
+    comes back as it was, with no entries, so this is safe to run on
+    every record on every run."""
     subjects, applied = authority.map_subjects(
         list(rec.get("subject") or []), vocab_doc)
     # Changes that end where they began are nothing to record: a rewrite
@@ -755,8 +757,8 @@ def apply_vocabulary_mapping(rec: dict, vocab_doc: dict, now: str
 
 
 def _in_field_order(rec: dict) -> dict:
-    """The record's keys in build_record order, so a rewritten record
-    diffs cleanly against the original."""
+    """Return the record with its keys in build_record order, so a
+    rewritten record diffs cleanly against the original."""
     order = ["schema_version", "dataset_uuid", "identifier", "strand",
              "project", "dataset", "sensitivity", "state", "domain",
              "version", "abstract", "subject", "vocabulary_version",
@@ -771,7 +773,7 @@ def _in_field_order(rec: dict) -> dict:
 
 
 def _spatial_text(value) -> str:
-    """The 0.6 free-text `spatial` as one line for `spatial_note`."""
+    """Return the 0.6 free-text `spatial` as one line for `spatial_note`."""
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, list):
@@ -780,8 +782,8 @@ def _spatial_text(value) -> str:
 
 
 def _with_spatial_note(rec: dict, text: str) -> dict:
-    """`spatial` (the 0.6 form) replaced in place by `spatial_note`, so
-    the upgraded record keeps its field order."""
+    """Return the record with `spatial` (the 0.6 form) replaced in place
+    by `spatial_note`, so the upgraded record keeps its field order."""
     note = rec.get("spatial_note")
     if isinstance(note, str) and note.strip():
         text = note.strip() + "; " + text
@@ -795,16 +797,17 @@ def _with_spatial_note(rec: dict, text: str) -> dict:
 
 
 def upgrade_record(rec: dict) -> Tuple[dict, bool]:
-    """Bring a record read from storage up to SCHEMA_VERSION. Returns
-    (record, upgraded). A current record is returned untouched, which
-    the write-then-read-back checks rely on. The steps run in order, so
-    a 0.5 record goes 0.5 -> 0.6 -> 0.7 in one call.
-    0.5 -> 0.6: the string derived_from becomes one reference (r8 §5);
+    """Bring a record read from storage up to SCHEMA_VERSION and return
+    (record, upgraded). A current record is returned untouched; the
+    write-then-read-back checks rely on that. The steps run in order,
+    so a 0.5 record goes 0.5 -> 0.6 -> 0.7 in one call.
+    0.5 -> 0.6: the string derived_from becomes one reference;
     files[].derived_from stays a string.
-    0.6 -> 0.7 (r11 §2.5): the string domain becomes a one-element list;
-    a free-text spatial moves to spatial_note and the key goes; a list
-    of place codes is kept as it is.
-    Anything else raises RecordParseError."""
+    0.6 -> 0.7: the string domain becomes a one-element list; a
+    free-text spatial moves to spatial_note and the key goes; a list of
+    place codes is kept as it is.
+
+    Raises RecordParseError for any other version."""
     version = rec.get("schema_version")
     if version == SCHEMA_VERSION:
         return rec, False
@@ -850,14 +853,12 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
                  derived_from=None, provenance=None, category_history=None,
                  language=None, ethics_ref=None, spatial=None,
                  spatial_note=None, notes=None) -> dict:
-    """Assemble the dataset record in field order.
-    Recommended/optional fields that are None or empty are omitted.
-    `temporal` is the nested {"start", "end"} object; `subject` and
-    `license` carry the Dublin Core spellings (r6 §3.1). `derived_from`
-    is a list of references and `provenance` a list of activities (r8).
-    `domain` is a list, primary first (a bare code is wrapped);
-    `provider` a list of provider slugs and `spatial` a list of place
-    codes (r11)."""
+    """Assemble and return the dataset record, in field order. Optional
+    fields that are None or empty are omitted. `temporal` is the nested
+    {"start", "end"} object; `domain` is a list, primary first (a bare
+    code is wrapped); `derived_from` is a list of references,
+    `provenance` a list of activities, `provider` a list of provider
+    slugs and `spatial` a list of place codes."""
     rec = {
         "schema_version": SCHEMA_VERSION,
         "dataset_uuid": dataset_uuid,
@@ -896,29 +897,11 @@ def build_record(dataset_uuid, identifier, strand, domain, project, dataset,
     return rec
 
 
-def validate_record(rec: dict, vocab_terms: Set[str],
-                    domain_codes: Optional[List[str]] = None,
-                    activity_codes: Optional[List[str]] = None,
-                    provider_slugs: Optional[List[str]] = None,
-                    place_codes: Optional[Set[str]] = None
-                    ) -> Tuple[List[str], List[str]]:
-    """Return (errors, warnings). Errors block a deposit; warnings do not.
-    Hand-rolled on purpose: the shipped tool cannot use jsonschema (stdlib
-    constraint) — dataset.schema.json is the contract artefact for CI and
-    the gateway, this function is the runtime check (r5 §7).
-    domain_codes / activity_codes: valid codes from the fetched vocabulary;
-    None falls back to the built-in lists (r2 §2 - fetched, not hardcoded).
-    provider_slugs / place_codes (r11): the providers list and the
-    places in hand; None or empty means an unknown value is a warning,
-    not an error, so an old cache never blocks a deposit."""
+def _identity_errors(rec: dict,
+                     domain_codes: Optional[List[str]] = None) -> List[str]:
+    """Return what is wrong with the fields that place a record: strand,
+    domain, state, sensitivity, dataset, identifier and dataset_uuid."""
     errors = []
-    warnings = []
-    for field in REQUIRED_FIELDS:
-        if field not in rec or rec[field] in (None, "", [], {}):
-            errors.append("required field '%s' is missing or empty" % field)
-    if errors:
-        return errors, warnings
-
     if rec["strand"] not in keys.STRANDS:
         errors.append("strand %r is not one of %s"
                       % (rec["strand"], "/".join(keys.STRANDS)))
@@ -945,7 +928,7 @@ def validate_record(rec: dict, vocab_terms: Set[str],
         errors.append("dataset %r is not a valid slug (lowercase "
                       "letters/digits and hyphens)" % (rec["dataset"],))
 
-    # r6 §2: the identifier is the five-part prefix and its final
+    # The identifier is the five-part prefix and its final
     # element must equal the dataset field - a mismatch means the record
     # was moved or hand-edited, and is an error, not a warning.
     expected_id = "/".join((rec["strand"], rec["project"],
@@ -956,7 +939,12 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                       % (rec["identifier"], expected_id))
     if not _UUID4_RE.match(str(rec["dataset_uuid"])):
         errors.append("dataset_uuid %r is not a UUID4" % (rec["dataset_uuid"],))
+    return errors
 
+
+def _temporal_errors(rec: dict) -> List[str]:
+    """Return what is wrong with the record's coverage dates."""
+    errors = []
     if not isinstance(rec["temporal"], dict):
         errors.append("'temporal' must be an object with start and end")
     else:
@@ -964,7 +952,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             err = coverage_error(rec["temporal"].get(part))
             if err:
                 errors.append("temporal %s: %s" % (part, err))
+    return errors
 
+
+def _subject_errors(rec: dict, vocab_terms: Set[str]) -> List[str]:
+    """Return an error if there is no subject term, and one for each term
+    that is not in the vocabulary."""
+    errors = []
     if not isinstance(rec["subject"], list) or not rec["subject"]:
         errors.append("at least one subject term is required")
     else:
@@ -972,7 +966,14 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             errors.append(
                 "subject %r is not in the vocabulary; to propose an addition, "
                 "open a pull request or issue on the vocabulary repo" % term)
+    return errors
 
+
+def _abstract_and_version_problems(rec: dict) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the abstract's length and the form of
+    the version."""
+    errors = []
+    warnings = []
     warn = abstract_warning(rec["abstract"])
     if warn:
         warnings.append(warn)
@@ -982,7 +983,17 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     elif canonical != rec["version"]:
         warnings.append("version %r should be stored as %r"
                         % (rec["version"], canonical))
+    return errors, warnings
 
+
+def _descriptive_problems(rec: dict,
+                          provider_slugs: Optional[List[str]] = None,
+                          place_codes: Optional[Set[str]] = None
+                          ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the optional descriptive fields: their
+    types, the source type, providers, places and the licence spelling."""
+    errors = []
+    warnings = []
     for field in ("depositors", "language"):
         if field in rec and not isinstance(rec[field], list):
             errors.append("'%s' must be a list" % field)
@@ -993,7 +1004,7 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     if "source_type" in rec and rec["source_type"] not in SOURCE_TYPES:
         errors.append("source_type %r is not one of %s"
                       % (rec["source_type"], "/".join(SOURCE_TYPES)))
-    # r11: provider slugs and place codes, against the lists in hand.
+    # Provider slugs and place codes, against the lists in hand.
     if "provider" in rec:
         more_errors, more_warnings = provider_errors(rec["provider"], provider_slugs)
         errors.extend(more_errors)
@@ -1006,8 +1017,14 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     if "license" not in rec and "licence" in rec:
         errors.append("'licence' was renamed 'license' in v0.5 (the "
                       "Dublin Core spelling)")
+    return errors, warnings
 
-    # r8 §1: derived_from is a list of references. A bare string is the
+
+def _derived_from_problems(rec: dict) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the derived_from references."""
+    errors = []
+    warnings = []
+    # derived_from is a list of references. A bare string is the
     # 0.5 shape arriving unupgraded (parse_record would have converted it).
     if "derived_from" in rec:
         derived = rec["derived_from"]
@@ -1024,54 +1041,76 @@ def validate_record(rec: dict, vocab_terms: Set[str],
     if rec.get("source_type") == "derived" and not rec.get("derived_from"):
         warnings.append("source type is 'derived' but derived_from is empty "
                         "- derived from what?")
+    return errors, warnings
 
+
+def _file_entry_errors(entry, i: int, seen_paths: Set[str]) -> List[str]:
+    """Return what is wrong with one manifest entry. Adds the entry's path
+    to `seen_paths`, which is how a duplicate path is noticed."""
+    errors = []
+    if not isinstance(entry, dict):
+        errors.append("files entry %d is not an object" % (i + 1))
+        return errors
+    name = entry.get("path") or ("entry %d" % (i + 1))
+    for field in MANIFEST_REQUIRED:
+        if field not in entry or entry[field] in (None, ""):
+            errors.append("file %s: required field '%s' is missing or "
+                          "empty" % (name, field))
+    path = entry.get("path")
+    if path:
+        structural = keys.member_path_error(path)
+        if structural:
+            errors.append("manifest path %s" % structural)
+    if path and keys.is_reserved_member(path):
+        errors.append("manifest path %r matches the reserved "
+                      "dataset.*.json pattern (at any depth)" % path)
+    if path:
+        if path in seen_paths:
+            errors.append("duplicate manifest path %r" % path)
+        seen_paths.add(path)
+    checksum = entry.get("checksum_sha256")
+    if checksum and not _SHA256_RE.match(str(checksum)):
+        errors.append("file %s: checksum_sha256 is not a 64-character "
+                      "SHA-256 hex digest" % name)
+    size = entry.get("bytes")
+    if size is not None and size != "" and (
+            not isinstance(size, int) or isinstance(size, bool) or size < 0):
+        errors.append("file %s: bytes must be a non-negative integer" % name)
+    file_temporal = entry.get("temporal")
+    if file_temporal is not None:
+        if not isinstance(file_temporal, dict):
+            errors.append("file %s: temporal must be an object with "
+                          "start and end" % name)
+        else:
+            for part in ("start", "end"):
+                err = coverage_error(file_temporal.get(part))
+                if err:
+                    errors.append("file %s temporal %s: %s"
+                                  % (name, part, err))
+    return errors
+
+
+def _files_errors(rec: dict) -> Tuple[List[str], Optional[Set[str]]]:
+    """Return (errors, manifest paths) for the files manifest. The paths
+    are None when `files` is not a list."""
+    errors = []
     if not isinstance(rec["files"], list):
         errors.append("'files' must be a list of manifest entries")
-        return errors, warnings
+        return errors, None
     seen_paths = set()
     for i, entry in enumerate(rec["files"]):
-        if not isinstance(entry, dict):
-            errors.append("files entry %d is not an object" % (i + 1))
-            continue
-        name = entry.get("path") or ("entry %d" % (i + 1))
-        for field in MANIFEST_REQUIRED:
-            if field not in entry or entry[field] in (None, ""):
-                errors.append("file %s: required field '%s' is missing or "
-                              "empty" % (name, field))
-        path = entry.get("path")
-        if path:
-            structural = keys.member_path_error(path)
-            if structural:
-                errors.append("manifest path %s" % structural)
-        if path and keys.is_reserved_member(path):
-            errors.append("manifest path %r matches the reserved "
-                          "dataset.*.json pattern (at any depth)" % path)
-        if path:
-            if path in seen_paths:
-                errors.append("duplicate manifest path %r" % path)
-            seen_paths.add(path)
-        checksum = entry.get("checksum_sha256")
-        if checksum and not _SHA256_RE.match(str(checksum)):
-            errors.append("file %s: checksum_sha256 is not a 64-character "
-                          "SHA-256 hex digest" % name)
-        size = entry.get("bytes")
-        if size is not None and size != "" and (
-                not isinstance(size, int) or isinstance(size, bool) or size < 0):
-            errors.append("file %s: bytes must be a non-negative integer" % name)
-        file_temporal = entry.get("temporal")
-        if file_temporal is not None:
-            if not isinstance(file_temporal, dict):
-                errors.append("file %s: temporal must be an object with "
-                              "start and end" % name)
-            else:
-                for part in ("start", "end"):
-                    err = coverage_error(file_temporal.get(part))
-                    if err:
-                        errors.append("file %s temporal %s: %s"
-                                      % (name, part, err))
-    errors.extend(envelope_errors(rec))
+        errors.extend(_file_entry_errors(entry, i, seen_paths))
+    return errors, seen_paths
 
-    # r8 §2: provenance activities, checked against the manifest paths.
+
+def _provenance_problems(rec: dict, seen_paths: Set[str],
+                         activity_codes: Optional[List[str]] = None
+                         ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for the provenance activities, checked
+    against the manifest paths."""
+    errors = []
+    warnings = []
+    # Provenance activities, checked against the manifest paths.
     if "provenance" in rec:
         if not isinstance(rec["provenance"], list):
             errors.append("provenance must be a list of activities")
@@ -1081,7 +1120,13 @@ def validate_record(rec: dict, vocab_terms: Set[str],
                     act, "provenance[%d]" % (i + 1), seen_paths, activity_codes)
                 errors.extend(act_errors)
                 warnings.extend(act_warnings)
-    # r9: category history entries.
+    return errors, warnings
+
+
+def _category_history_errors(rec: dict) -> List[str]:
+    """Return what is wrong with the category history entries."""
+    errors = []
+    # Category history entries.
     if "category_history" in rec:
         if not isinstance(rec["category_history"], list):
             errors.append("category_history must be a list of entries")
@@ -1089,6 +1134,54 @@ def validate_record(rec: dict, vocab_terms: Set[str],
             for i, entry in enumerate(rec["category_history"]):
                 errors.extend(validate_history_entry(
                     entry, "category_history[%d]" % (i + 1)))
+    return errors
+
+
+def validate_record(rec: dict, vocab_terms: Set[str],
+                    domain_codes: Optional[List[str]] = None,
+                    activity_codes: Optional[List[str]] = None,
+                    provider_slugs: Optional[List[str]] = None,
+                    place_codes: Optional[Set[str]] = None
+                    ) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for a record. Errors block a deposit;
+    warnings do not.
+
+    `domain_codes` and `activity_codes` are the valid codes from the
+    vocabulary; None falls back to the built-in lists. `provider_slugs`
+    and `place_codes` are the lists in hand; None or empty makes an
+    unknown value a warning, not an error, so an old cache never blocks
+    a deposit."""
+    # Written by hand on purpose: this package is standard-library only,
+    # so it cannot use jsonschema.
+    errors = []
+    warnings = []
+    for field in REQUIRED_FIELDS:
+        if field not in rec or rec[field] in (None, "", [], {}):
+            errors.append("required field '%s' is missing or empty" % field)
+    if errors:
+        return errors, warnings
+
+    errors.extend(_identity_errors(rec, domain_codes))
+    errors.extend(_temporal_errors(rec))
+    errors.extend(_subject_errors(rec, vocab_terms))
+    more_errors, more_warnings = _abstract_and_version_problems(rec)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, more_warnings = _descriptive_problems(rec, provider_slugs, place_codes)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, more_warnings = _derived_from_problems(rec)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    more_errors, seen_paths = _files_errors(rec)
+    errors.extend(more_errors)
+    if seen_paths is None:
+        return errors, warnings
+    errors.extend(envelope_errors(rec))
+    more_errors, more_warnings = _provenance_problems(rec, seen_paths, activity_codes)
+    errors.extend(more_errors)
+    warnings.extend(more_warnings)
+    errors.extend(_category_history_errors(rec))
     return errors, warnings
 
 
@@ -1097,14 +1190,13 @@ def record_json(rec: dict) -> str:
 
 
 def parse_record_with_status(text: str) -> Tuple[dict, bool]:
-    """Parse an existing dataset record fetched from storage and bring it
-    up to SCHEMA_VERSION; returns (record, upgraded) so callers that log
-    can say a 0.5 record was converted. Raises RecordParseError for
-    anything the tool must not build on: invalid JSON, a non-object, a
-    schema_version it does not understand (including newer ones — never
-    blind-overwrite the future), or a missing/empty files manifest.
-    Absence-vs-fetch-error is the transfer layer's distinction, not this
-    function's."""
+    """Parse a dataset record fetched from storage, bring it up to
+    SCHEMA_VERSION and return (record, upgraded).
+
+    Raises RecordParseError for anything the tool must not build on:
+    invalid JSON, a non-object, a schema_version it does not understand
+    (including a newer one, which is never overwritten blind), or a
+    missing or empty files manifest."""
     try:
         rec = json.loads(text)
     except ValueError as e:
@@ -1119,5 +1211,5 @@ def parse_record_with_status(text: str) -> Tuple[dict, bool]:
 
 
 def parse_record(text: str) -> dict:
-    """parse_record_with_status without the flag; the common call."""
+    """Return the record from parse_record_with_status, without the flag."""
     return parse_record_with_status(text)[0]

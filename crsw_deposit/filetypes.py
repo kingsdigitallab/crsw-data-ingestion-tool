@@ -1,26 +1,16 @@
-"""File types the shared store does not take, and archives it takes
-with a caution (r13).
+"""File types the shared store refuses, and archives it takes with a
+caution.
 
-The store holds data, documents and analysis code. A program, an
-installer, a system script, a shortcut or an Office file with macros is
-refused at deposit: nothing in the service ever runs a deposited file,
-but a colleague who downloads one might. Refused twice over, by name
-(the last extension) and by the file's opening bytes, so a program
-called results.csv is caught too.
+A program, an installer, a system script, a shortcut or an Office file
+with macros is refused, by name (the last extension) and by the file's
+opening bytes, so a program called results.csv is caught too. Analysis
+code (.py, .R, .do, .ipynb, .sql, .js ...) is allowed. Archives are
+allowed and never opened.
 
-Analysis code (.py, .R, .do, .ipynb, .sql, .js ...) is deliberately
-allowed: it is text until somebody chooses to run it, and a dataset may
-carry the code that made it. Archives are allowed and never opened;
-callers say so to the depositor and to whoever downloads.
-
-Called where a file ENTERS (the CLI, the web upload, the bulk route,
-the promoter's check of a staged deposit) and nowhere else: never from
-record.validate_record, the schema or keys.build_key, which also run
-over records already in the store.
-
-Known limits, stated not solved: a macro file renamed .docx/.xlsx,
-macros in legacy .doc/.xls, whatever is inside an archive or disk
-image, and a header crafted to dodge the byte tests.
+These checks are called only where a file enters: the CLI, the web
+upload, the bulk route and the promoter's check of a staged deposit.
+They are never called from record.validate_record, the schema or
+keys.build_key, which also run over records already in the store.
 
 No user I/O. Stdlib only."""
 from typing import Dict, FrozenSet, Optional
@@ -86,10 +76,11 @@ SHELL_KIND = "a system script"
 
 
 def extension(member: str) -> str:
-    """The last extension of a member path's file name, lower-cased and
-    without the dot; "" when there is none. Trailing dots and spaces are
-    dropped first, because Windows ignores them ("x.exe." runs as
-    x.exe). A leading dot alone is a hidden file, not an extension."""
+    """Return the last extension of a member path's file name, lower-cased
+    and without the dot; "" when there is none. Trailing dots and spaces
+    are dropped first. A leading dot alone is a hidden file, not an
+    extension."""
+    # Windows ignores trailing dots and spaces: "x.exe." runs as x.exe.
     name = member.rsplit("/", 1)[-1].rstrip(". ")
     dot = name.rfind(".")
     if dot <= 0:
@@ -98,8 +89,8 @@ def extension(member: str) -> str:
 
 
 def refused_name(member: str) -> Optional[str]:
-    """Why a member is refused for its name, e.g. "a Windows program
-    (.exe)", or None. Only the file name counts: a folder called
+    """Return why a member is refused for its name, e.g. "a Windows
+    program (.exe)", or None. Only the file name counts: a folder called
     tools.exe/ refuses nothing."""
     ext = extension(member)
     kind = REFUSED_EXTENSIONS.get(ext)
@@ -109,14 +100,14 @@ def refused_name(member: str) -> Optional[str]:
 
 
 def is_archive(member: str) -> bool:
-    """True for a compressed or archive file: allowed, never opened."""
+    """True if the member is a compressed or archive file."""
     return extension(member) in ARCHIVE_EXTENSIONS
 
 
 def _shebang_interpreter(head: bytes) -> str:
-    """The program a "#!" first line asks for, as a bare name; "" when
-    the line is not one. "env" is looked through, past its options and
-    NAME=value settings."""
+    """Return the program a "#!" first line asks for, as a bare name; ""
+    when the line is not one. "env" is looked through, past its options
+    and NAME=value settings."""
     if head[:2] != b"#!":
         return ""
     line = head[2:].split(b"\n", 1)[0].decode("ascii", "replace")
@@ -138,7 +129,7 @@ def _shebang_interpreter(head: bytes) -> str:
 
 
 def refused_content(head: bytes) -> Optional[str]:
-    """Why a file is refused for how it starts, e.g. "a Windows
+    """Return why a file is refused for how it starts, e.g. "a Windows
     program", or None. `head` is its first SNIFF_BYTES bytes (fewer for
     a shorter file)."""
     if (head[:2] == WINDOWS_MAGIC
@@ -153,6 +144,7 @@ def refused_content(head: bytes) -> Optional[str]:
 
 
 def sniff_file(path) -> Optional[str]:
-    """refused_content for a local file. OSError is the caller's."""
+    """Return refused_content for a local file. An OSError is left to the
+    caller."""
     with open(str(path), "rb") as f:
         return refused_content(f.read(SNIFF_BYTES))

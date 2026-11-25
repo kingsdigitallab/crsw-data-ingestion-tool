@@ -1,11 +1,9 @@
 """The audit trail: one object per promoter run in the bucket, and the
 two review commands that read the bucket back.
 
-Journald on the internal VM is size-capped and dies with the VM, so
-each run's log lines are also written, once, as
-`<audit_prefix>/YYYY/MM/DD/<run-id>.jsonl` with the key the promoter
-already holds. The bucket is versioned, so the trail cannot be edited
-in place. Nothing here changes a dataset."""
+Each run's log lines are written once as
+`<audit_prefix>/YYYY/MM/DD/<run-id>.jsonl`. Nothing here changes a
+dataset."""
 import json
 import re
 from typing import Dict, Iterable, Iterator, List, Optional
@@ -19,14 +17,16 @@ _RUN_KEY_RE = re.compile(r"/(?P<date>\d{4}/\d{2}/\d{2})/(?P<run>[^/]+)\.jsonl$")
 
 
 def audit_key(prefix: str, run_id: str) -> str:
-    """`audit/promoter/2026/09/24/20260924T163000Z-ab12.jsonl`; the date
+    """Return the key for a run's audit object, e.g.
+    `audit/promoter/2026/09/24/20260924T163000Z-ab12.jsonl`. The date
     comes from the run id, so one run is one object under one day."""
     d = run_id[:8]
     return "%s/%s/%s/%s/%s.jsonl" % (prefix.strip("/"), d[:4], d[4:6], d[6:8], run_id)
 
 
 def write_run(client, bucket: str, prefix: str, log: Log) -> str:
-    """Put this run's lines so far as one JSON-lines object; returns the key."""
+    """Put this run's lines so far as one JSON-lines object and return its
+    key."""
     key = audit_key(prefix, log.run_id)
     body = "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in log.lines)
     client.put_object(Bucket=bucket, Key=key, Body=body.encode("utf-8"),
@@ -38,8 +38,8 @@ def write_run(client, bucket: str, prefix: str, log: Log) -> str:
 
 def list_runs(client, bucket: str, prefix: str,
               since: Optional[str] = None) -> List[str]:
-    """Audit object keys, newest first. `since` is YYYY-MM-DD; runs on
-    or after that day only."""
+    """Return the audit object keys, newest first. `since` is YYYY-MM-DD
+    and keeps the runs on or after that day."""
     paginator = client.get_paginator("list_objects_v2")
     found = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix.strip("/") + "/"):
@@ -76,8 +76,8 @@ def matches(entry: Dict, dataset: Optional[str] = None, user: Optional[str] = No
 
 def trail(client, bucket: str, prefix: str, runs: Optional[int] = 10,
           since: Optional[str] = None, **filters) -> Iterator[Dict]:
-    """Entries from the newest `runs` runs (all runs when None or when
-    `since` is given), each run oldest line first, filtered."""
+    """Yield the entries of the newest `runs` runs (all runs when None or
+    when `since` is given), each run oldest line first, filtered."""
     run_keys = list_runs(client, bucket, prefix, since=since)
     if since is None and runs is not None:
         run_keys = run_keys[:runs]
@@ -94,7 +94,8 @@ _HEAD = ("when", "action", "deposit", "user", "by", "prefix", "run_id")
 
 
 def describe(entry: Dict) -> str:
-    """One readable line: time, action, what, who, then the rest."""
+    """Return one readable line for an entry: time, action, what, who,
+    then the rest."""
     when = str(entry.get("when", ""))[:16].replace("T", " ")
     action = entry.get("action", "?")
     parts = [when, action.ljust(20)]
@@ -126,7 +127,7 @@ DATASET_COLUMNS = ("prefix", "identifier", "dataset_uuid", "depositor", "created
 
 
 def list_records(client, bucket: str, strand: Optional[str] = None) -> List[Dict]:
-    """One row per dataset record in place, from the record and the
+    """Return one row per dataset record in place, from the record and the
     object's depositor label."""
     rows = []
     for ref, rec, labels in index_mod.read_records(client, bucket, strand):

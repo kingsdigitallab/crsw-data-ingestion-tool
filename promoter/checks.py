@@ -23,12 +23,12 @@ class Report:
     existing_record: Optional[Dict] = None
     staged_record: Optional[Dict] = None
     total_bytes: int = 0
-    # r9: set when the staged record's subject terms were stale and mapped
+    # Set when the staged record's subject terms were stale and mapped
     # cleanly (rename/merge/retire) to the current vocabulary.
     mapped_subjects: Optional[List[str]] = None
     mapping_entries: List[Dict] = field(default_factory=list)
     mapped_vocabulary_version: Optional[str] = None
-    # r8 §4: derived_from with parents' uuid/version filled in from the
+    # derived_from with parents' uuid/version filled in from the
     # store, when any reference needed it; None when nothing changed.
     resolved_derived_from: Optional[List[Dict]] = None
     resolved_references: List[Dict] = field(default_factory=list)
@@ -43,7 +43,7 @@ _read_json_object = read_json_object
 
 
 def _sha256_and_head(client, bucket, key, n: int) -> Tuple[str, bytes]:
-    """The object's SHA-256 and its first `n` bytes, from one read."""
+    """Return the object's SHA-256 and its first `n` bytes, from one read."""
     h = hashlib.sha256()
     head = b""
     body = client.get_object(Bucket=bucket, Key=key)["Body"]
@@ -55,42 +55,31 @@ def _sha256_and_head(client, bucket, key, n: int) -> Tuple[str, bytes]:
 
 
 def _head_of_object(client, bucket, key, n: int) -> bytes:
-    """The object's first `n` bytes alone (when checksums are not being
-    verified, so nothing else reads it). Not for an empty object."""
+    """Return the object's first `n` bytes. Used when checksums are not
+    being verified, so nothing else reads the object. Not for an empty
+    object."""
     body = client.get_object(Bucket=bucket, Key=key,
                              Range="bytes=0-%d" % (n - 1))["Body"]
     return body.read()
 
 
-def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
-          vocab_terms: Set[str], domain_codes: List[str],
-          verify_checksums: bool = True,
-          vocab_doc: Optional[Dict] = None,
-          provider_slugs: Optional[List[str]] = None,
-          place_codes: Optional[Set[str]] = None) -> Report:
-    """`vocab_doc`, when given, is the whole vocabulary (r9 authority
-    file): a staged record whose subject terms have since been renamed,
-    merged or retired is mapped and promoted with the mapping in its
-    history; one whose term was split needs a person and is refused.
-    `provider_slugs` and `place_codes` (r11) are the lists the record's
-    provider and spatial are checked against."""
-    rep = Report()
-    client, bucket = store.client, store.bucket
+def _check_control(dep: Deposit, rep: Report) -> None:
+    """Report a deposit that is not complete, has no record key or has
+    no files."""
     p = rep.problems
-
-    # 1. control object state
     if dep.status != STATUS_COMPLETE:
         p.append("deposit status is %r, not complete" % dep.status)
     if not dep.record_key:
         p.append("deposit has no record_key")
     if not dep.entries:
         p.append("deposit has no files")
-    if p:
-        return rep
 
-    staged_prefix = store.staged_key(dep.user, dep.id, dep.prefix)
 
-    # 2. the staged record
+def _read_staged_record(dep: Deposit, client, bucket, staged_prefix: str,
+                        rep: Report) -> Optional[Dict]:
+    """Read and parse the staged record. Return it, or None with the
+    reason reported."""
+    p = rep.problems
     expected_record_key = staged_prefix + "/" + keys.record_filename(dep.meta["dataset"])
     if dep.record_key != expected_record_key:
         p.append("record_key %r is not where the layout says (%r)"
@@ -108,6 +97,14 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             if upgraded:
                 rep.warnings.append("staged record was schema 0.5; it will be "
                                     "written as %s" % record.SCHEMA_VERSION)
+    return staged_rec
+
+
+def _map_stale_subjects(staged_rec: Optional[Dict], vocab_doc: Optional[Dict],
+                        rep: Report) -> Optional[Dict]:
+    """Bring the staged record's subject terms up to the vocabulary and
+    return the record to use. A split is reported as a problem."""
+    p = rep.problems
     if staged_rec and vocab_doc:
         mapped, entries = record.apply_vocabulary_mapping(
             staged_rec, vocab_doc, record.utc_now_iso())
@@ -127,9 +124,15 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             rep.mapping_entries = entries
             rep.mapped_vocabulary_version = mapped.get("vocabulary_version")
             staged_rec = mapped
-    rep.staged_record = staged_rec
+    return staged_rec
+
+
+def _resolve_derived_from(staged_rec: Optional[Dict], client, bucket,
+                          rep: Report) -> None:
+    """Look up the datasets the staged record says it was derived from,
+    and note on the report which were found."""
     if staged_rec and isinstance(staged_rec.get("derived_from"), list):
-        # r8 §4: resolve, don't invent. A parent that is not there is a
+        # Resolve, don't invent. A parent that is not there is a
         # warning; the reference is left as typed and the deposit goes on.
         refs, resolved, unresolved = lookup(client, bucket, staged_rec["derived_from"])
         rep.resolved_references = resolved
@@ -141,6 +144,16 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
                 "derived_from[%d] %s: %s in the store; reference left as typed"
                 % (u["index"], u["identifier"],
                    "no dataset record" if u["reason"] == "absent" else u["reason"]))
+
+
+def _check_staged_record(staged_rec: Optional[Dict], dep: Deposit,
+                         vocab_terms: Set[str], domain_codes: List[str],
+                         vocab_doc: Optional[Dict],
+                         provider_slugs: Optional[List[str]],
+                         place_codes: Optional[Set[str]], rep: Report) -> None:
+    """Report a staged record that is not valid, or that disagrees with
+    the deposit about its identifier, uuid or files."""
+    p = rep.problems
     if staged_rec:
         errors, _ = record.validate_record(
             staged_rec, vocab_terms, domain_codes,
@@ -159,14 +172,13 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
         if want != have:
             p.append("staged record's files manifest differs from the deposit's entries")
 
-    # 3. objects present at size
-    for prob in deposit_logic.completion_problems(staged_prefix, dep.entries,
-                                                  store.stored_size):
-        p.append(prob)
-    if p:
-        return rep      # no point hashing or label-checking missing objects
 
-    # 4 + 5 + 6. checksums, labels, sizes
+def _check_members(dep: Deposit, client, bucket, cfg: PromoterConfig,
+                   staged_prefix: str, verify_checksums: bool,
+                   rep: Report) -> int:
+    """Check each member's size limit, labels, checksum and opening
+    bytes. Return the total bytes of the deposit."""
+    p = rep.problems
     total = 0
     for entry in dep.entries:
         key = staged_prefix + "/" + entry["path"]
@@ -192,24 +204,25 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
             opening = _head_of_object(client, bucket, key, filetypes.SNIFF_BYTES)
         else:
             opening = b""
-        # r13: a program under another name. Its name is step 7's.
+        # A program under another name. Its name is step 7's.
         kind = filetypes.refused_content(opening)
         if kind and not filetypes.refused_name(entry["path"]):
             p.append("member content: %s starts like %s; not accepted"
                      % (entry["path"], kind))
-    rep.total_bytes = total
-    if cfg.max_deposit_bytes is not None and total > cfg.max_deposit_bytes:
-        p.append("deposit totals %d bytes, over the %d-byte limit"
-                 % (total, cfg.max_deposit_bytes))
+    return total
 
-    # 7. member paths (belt and braces)
+
+def _check_member_paths(dep: Deposit, rep: Report) -> None:
+    """Report member paths that are unusable, reserved or of a refused
+    type, and warn about archives."""
+    p = rep.problems
     for entry in dep.entries:
         err = keys.member_path_error(entry["path"])
         if err:
             p.append("member path: %s" % err)
         if keys.is_reserved_member(entry["path"]):
             p.append("member path %r is reserved" % entry["path"])
-        # r13: only what this deposit brings; what is already in the
+        # Only what this deposit brings; what is already in the
         # dataset is never judged here.
         kind = filetypes.refused_name(entry["path"])
         if kind:
@@ -221,12 +234,11 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
                             % (len(archives), ", ".join(archives[:5])
                                + (" ..." if len(archives) > 5 else "")))
 
-    # 8. authorisation
-    if not cfg.user_may_deposit_to(dep.user, dep.meta["strand"]):
-        p.append("depositor %s is not authorised for strand %s"
-                 % (dep.user, dep.meta["strand"]))
 
-    # 9. destination record
+def _check_destination(dep: Deposit, client, bucket, rep: Report) -> None:
+    """Read the record already at the destination, if there is one.
+    Report one that cannot be built on; otherwise note the merge."""
+    p = rep.problems
     dest_record_key = dep.prefix + "/" + keys.record_filename(dep.meta["dataset"])
     text, err = _read_json_object(client, bucket, dest_record_key)
     if text is not None:
@@ -258,5 +270,65 @@ def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
                        existing.get("dataset_uuid", "?")[:8], len(added), len(updated)))
     elif err != "absent":
         p.append("could not read destination record %s: %s" % (dest_record_key, err))
+
+
+def check(dep: Deposit, store: DepositStore, cfg: PromoterConfig,
+          vocab_terms: Set[str], domain_codes: List[str],
+          verify_checksums: bool = True,
+          vocab_doc: Optional[Dict] = None,
+          provider_slugs: Optional[List[str]] = None,
+          place_codes: Optional[Set[str]] = None) -> Report:
+    """Run every check on a staged deposit and return the Report. An empty
+    `problems` list means the deposit may be promoted.
+
+    With `vocab_doc` (the whole vocabulary), a staged record whose subject
+    terms have since been renamed, merged or retired is mapped and
+    promoted with the mapping in its history; one whose term was split
+    needs a person and is refused. `provider_slugs` and `place_codes` are
+    the lists the record's provider and spatial are checked against."""
+    rep = Report()
+    client, bucket = store.client, store.bucket
+    p = rep.problems
+
+    # 1. control object state
+    _check_control(dep, rep)
+    if p:
+        return rep
+
+    staged_prefix = store.staged_key(dep.user, dep.id, dep.prefix)
+
+    # 2. the staged record
+    staged_rec = _read_staged_record(dep, client, bucket, staged_prefix, rep)
+    staged_rec = _map_stale_subjects(staged_rec, vocab_doc, rep)
+    rep.staged_record = staged_rec
+    _resolve_derived_from(staged_rec, client, bucket, rep)
+    _check_staged_record(staged_rec, dep, vocab_terms, domain_codes, vocab_doc,
+                         provider_slugs, place_codes, rep)
+
+    # 3. objects present at size
+    for prob in deposit_logic.completion_problems(staged_prefix, dep.entries,
+                                                  store.stored_size):
+        p.append(prob)
+    if p:
+        return rep      # no point hashing or label-checking missing objects
+
+    # 4 + 5 + 6. checksums, labels, sizes
+    total = _check_members(dep, client, bucket, cfg, staged_prefix,
+                           verify_checksums, rep)
+    rep.total_bytes = total
+    if cfg.max_deposit_bytes is not None and total > cfg.max_deposit_bytes:
+        p.append("deposit totals %d bytes, over the %d-byte limit"
+                 % (total, cfg.max_deposit_bytes))
+
+    # 7. member paths (belt and braces)
+    _check_member_paths(dep, rep)
+
+    # 8. authorisation
+    if not cfg.user_may_deposit_to(dep.user, dep.meta["strand"]):
+        p.append("depositor %s is not authorised for strand %s"
+                 % (dep.user, dep.meta["strand"]))
+
+    # 9. destination record
+    _check_destination(dep, client, bucket, rep)
 
     return rep

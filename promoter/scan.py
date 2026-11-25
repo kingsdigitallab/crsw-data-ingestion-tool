@@ -1,5 +1,5 @@
 """Find deposits in staging: every staging/<user>/<id>/_deposit.json;
-and (r9) find datasets in place: every <strand>/<project>/<sensitivity>/
+and find datasets in place: every <strand>/<project>/<sensitivity>/
 <state>/<dataset>/dataset.<dataset>.json."""
 import re
 from dataclasses import dataclass
@@ -22,9 +22,8 @@ class DatasetRef:
 
 
 def list_datasets(client, bucket: str) -> Iterator[DatasetRef]:
-    """Every dataset record in place, by walking every strand
-    prefix (keys.STRANDS). The bucket is the index: no register to keep in step.
-    Sorted by prefix so runs are repeatable."""
+    """Yield every dataset record in place, by walking every strand prefix
+    (keys.STRANDS), sorted by prefix so runs are repeatable."""
     paginator = client.get_paginator("list_objects_v2")
     found = []
     for strand in keys.STRANDS:
@@ -40,8 +39,8 @@ def list_datasets(client, bucket: str) -> Iterator[DatasetRef]:
 def list_deposits(store: DepositStore, user: Optional[str] = None,
                   deposit_id: Optional[str] = None,
                   only_complete: bool = True) -> Iterator[Deposit]:
-    """Yield deposits under the staging prefix, oldest created first.
-    Filters by user and/or deposit id when given."""
+    """Yield the deposits under the staging prefix, oldest created first,
+    filtered by user and deposit id when given."""
     prefix = store.staging_prefix + "/"
     if user:
         prefix += user + "/"

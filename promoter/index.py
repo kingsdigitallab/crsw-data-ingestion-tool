@@ -1,15 +1,13 @@
 """The index: one row per dataset record in place, written to the bucket
-after every run that changed something, in two forms.
+after every run that changed something.
 
-`<index_prefix>/datasets.jsonl` (one JSON object per line) and
-`<index_prefix>/datasets.parquet` (the same rows; readable straight from
-S3 by DuckDB, cdisaw-parquet, a laptop). The bucket is the truth and the
-records are the source; the index is a cache anything can rebuild with
-`python -m promoter index`. Nothing here changes a record.
+The same rows in two forms: `<index_prefix>/datasets.jsonl` (one JSON
+object per line) and `<index_prefix>/datasets.parquet`. The records are
+the source; the index is a cache that `python -m promoter index`
+rebuilds. Nothing here changes a record.
 
-Parquet needs pyarrow, which is in the `web` extra the image installs;
-without it the JSON lines are still written and the Parquet is skipped
-with a log line."""
+Parquet needs pyarrow. Without it the JSON lines are still written and
+the Parquet is skipped with a log line."""
 import io
 import json
 from typing import Dict, Iterator, List, Optional, Tuple
@@ -48,10 +46,9 @@ INT_COLUMNS = ("files", "bytes")
 
 def read_records(client, bucket: str, strand: Optional[str] = None
                  ) -> Iterator[Tuple[DatasetRef, Dict, Dict]]:
-    """(ref, record, labels) for every dataset record in place, the
-    record upgraded to the current schema on read (so a 0.5 string
-    derived_from is a reference like any other). An unreadable record
-    yields an empty dict so the row still says the prefix exists."""
+    """Yield (ref, record, labels) for every dataset record in place, the
+    record upgraded to the current schema. An unreadable record yields an
+    empty dict, so the row still says the prefix exists."""
     for ref in list_datasets(client, bucket):
         if strand and not ref.prefix.startswith(strand + "/"):
             continue
@@ -68,7 +65,7 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
     files = [f for f in (rec.get("files") or []) if isinstance(f, dict)]
     start, end = record.temporal_pair(rec.get("temporal"))
     refs = rec.get("derived_from") if isinstance(rec.get("derived_from"), list) else []
-    # r11: `domain` stays the primary code, which every reader of the index
+    # `domain` stays the primary code, which every reader of the index
     # expects as a string; `domains` is the whole list.
     domains = record.domain_list(rec.get("domain"))
     acts = rec.get("provenance") if isinstance(rec.get("provenance"), list) else []
@@ -90,7 +87,7 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
         "version": rec.get("version"), "creator": rec.get("creator"),
         "license": rec.get("license"), "source_type": rec.get("source_type"),
         "source_detail": rec.get("source_detail"),
-        # r11: as recorded; the find page expands the places hierarchy at
+        # As recorded; the find page expands the places hierarchy at
         # query time, as it does the subjects.
         "provider": list(rec.get("provider") or []),
         "spatial": list(rec.get("spatial") or []),
@@ -131,9 +128,10 @@ def rows(client, bucket: str, strand: Optional[str] = None,
 
 
 def read_rows(client, bucket: str, prefix: str) -> List[Dict]:
-    """The rows of the index in place (one GET), or [] when there is
-    none yet. For the quiet run's embedding check, which must not read
-    every record every five minutes."""
+    """Return the rows of the index in place (one GET), or [] when there
+    is none yet."""
+    # One GET: the quiet run's embedding check must not read every record
+    # every five minutes.
     key = prefix.strip("/") + "/" + JSONL_NAME
     try:
         body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -150,7 +148,8 @@ def jsonl_bytes(rows_: List[Dict]) -> bytes:
 
 
 def parquet_bytes(rows_: List[Dict]) -> Optional[bytes]:
-    """The same rows as Parquet, or None when pyarrow is not installed."""
+    """Return the same rows as Parquet, or None when pyarrow is not
+    installed."""
     if pa is None:
         return None
     fields = []
@@ -170,8 +169,8 @@ def parquet_bytes(rows_: List[Dict]) -> Optional[bytes]:
 
 
 def write(client, bucket: str, prefix: str, rows_: List[Dict]) -> Dict[str, Optional[str]]:
-    """Put both index objects. Returns {'jsonl': key, 'parquet': key or
-    None (pyarrow absent)}."""
+    """Put both index objects and return {'jsonl': key, 'parquet': key}.
+    The parquet key is None when pyarrow is absent."""
     prefix = prefix.strip("/")
     keys_ = {"jsonl": prefix + "/" + JSONL_NAME, "parquet": None}
     client.put_object(Bucket=bucket, Key=keys_["jsonl"], Body=jsonl_bytes(rows_),

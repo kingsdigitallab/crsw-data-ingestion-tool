@@ -1,0 +1,10 @@
+
+2020
+2021
+1
+A small two file sample used only to record what the command line prints in a dry run before the legibility refactor begins so that the same run can be repeated after every stage and compared line by line with this one and any difference at all in the keys or the record is then a change in behaviour.
+
+1
+Refactor baseline sample, made by hand
+Baseline Check
+

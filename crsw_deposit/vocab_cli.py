@@ -1,4 +1,4 @@
-"""crsw-vocab: edit the term authority file without typing JSON (r9 §1.6).
+"""crsw-vocab: edit the term authority file without typing JSON.
 
     crsw-vocab validate [--file vocab.json]
     crsw-vocab tree FACET
@@ -15,11 +15,9 @@ Every editing command takes --by (default: your login), --date (default:
 today), --note. The file is validated after the change and only written
 if it passes; the input file is never touched on refusal. `describe`
 edits a term's scope note and other spellings, which is description,
-not a change: no entry in the change list, the version stays, and the
-git history is the record. No git calls: commit the result yourself, or
-let the vocabulary repo's Action do it. Stdlib only, the only user I/O
-in the package besides deposit.py.
-"""
+not a change: no entry in the change list, and the version stays. No
+git calls: commit the result yourself, or let the vocabulary repo's
+Action do it. Stdlib only, and the only user I/O in the package."""
 import argparse
 import datetime
 import getpass
@@ -50,7 +48,7 @@ def _write(path: Path, doc: dict) -> None:
 
 
 def _slug_label(text: str):
-    """NEW=Label -> (slug, label); a bare slug -> (slug, None)."""
+    """Return (slug, label) for NEW=Label, or (slug, None) for a bare slug."""
     if "=" in text:
         slug, label = text.split("=", 1)
         return slug.strip(), label.strip() or None
@@ -65,7 +63,8 @@ def _base(args) -> dict:
 
 
 def _apply(args, doc: dict, changes) -> dict:
-    """Apply changes in order; any refusal aborts before writing."""
+    """Apply the changes in order and return the new document. Any refusal
+    exits before anything is written."""
     for change in changes:
         try:
             doc = authority.apply_change(doc, change)
@@ -150,8 +149,8 @@ def cmd_rename(args) -> int:
 
 
 def _ensure_terms(args, doc, specs, facet):
-    """add changes for any NEW=Label that does not exist yet; a bare
-    slug must exist already."""
+    """Return an `add` change for each NEW=Label that does not exist yet.
+    A bare slug must exist already; if it does not, exit with a refusal."""
     by_slug = authority.terms_by_slug(doc)
     changes = []
     for slug, label in specs:

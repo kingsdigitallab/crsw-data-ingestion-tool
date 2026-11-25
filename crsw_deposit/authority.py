@@ -1,25 +1,20 @@
-"""Term authority file: the vocabulary with its history (r9).
+"""Term authority file: the vocabulary with its history.
 
 The vocabulary file lists every subject term ever approved, current or
 retired, and an append-only list of the changes that got it there. This
 module validates such a file, derives the flat facet lists older readers
 expect, applies a change to it, and maps a record's subjects forward
-through the changes. Pure functions, stdlib only, no I/O: the vocabulary
-repo's CI, the command line, the promoter and the deposit tool all call
-the same code.
+through the changes. Pure functions, stdlib only, no I/O.
 
-A file with no `terms` key is the pre-r9 flat shape and is left alone by
-everything here except `facets_of`, which reads it as-is. A file whose
-terms have no `broader` parents is flat too; every function below then
-behaves exactly as if the hierarchy did not exist.
+A file with no `terms` key is the older flat shape and is left alone by
+everything here except `facets_of`, which reads it as it is. A file
+whose terms have no `broader` parents is flat too; every function below
+then behaves exactly as if the hierarchy did not exist.
 
 A term may also carry a description: `scope`, a note on what it covers
-and excludes (a SKOS scope note), and `aliases`, other spellings people
-use that the deposit tool resolves to the term. Description is not
-identity: it changes which records a term applies to not at all, so
-`describe_term` edits it without a change entry and the promoter never
-acts on it.
-"""
+and excludes, and `aliases`, other spellings that the deposit tool
+resolves to the term. Description is not identity, so `describe_term`
+edits it without a change entry and the promoter never acts on it."""
 import copy
 import datetime
 import json
@@ -59,19 +54,19 @@ def current_terms(doc: dict) -> List[dict]:
 
 
 def labels_of(doc: dict) -> Dict[str, str]:
-    """slug -> label, every term, current or retired."""
+    """Return slug -> label for every term, current or retired."""
     return {s: t.get("label") or s for s, t in terms_by_slug(doc).items()}
 
 
 def scopes_of(doc: dict) -> Dict[str, str]:
-    """slug -> scope note, for the terms that have one."""
+    """Return slug -> scope note, for the terms that have one."""
     return {s: t["scope"] for s, t in terms_by_slug(doc).items()
             if isinstance(t.get("scope"), str) and t["scope"].strip()}
 
 
 def aliases_of(doc: dict) -> Dict[str, str]:
-    """alias -> the current term it stands for. A retired term's aliases
-    are not offered: nothing should resolve to a retired term."""
+    """Return alias -> the current term it stands for. A retired term's
+    aliases are left out: nothing should resolve to a retired term."""
     out = {}
     for t in current_terms(doc):
         for alias in t.get("aliases") or []:
@@ -81,14 +76,14 @@ def aliases_of(doc: dict) -> Dict[str, str]:
 
 
 def providers_of(doc: dict) -> Dict[str, dict]:
-    """slug -> provider entry (r11 §3), for the entries that have a slug."""
+    """Return slug -> provider entry, for the entries that have a slug."""
     return {p["slug"]: p for p in doc.get("providers") or []
             if isinstance(p, dict) and isinstance(p.get("slug"), str)}
 
 
 def facet_order(doc: dict) -> List[str]:
-    """Facet names in file order: the `facets` block's order when there
-    is one, else first appearance in `terms`."""
+    """Return the facet names in file order: the `facets` block's order
+    when there is one, else first appearance in `terms`."""
     order = []
     if isinstance(doc.get("facets"), dict):
         order.extend(doc["facets"].keys())
@@ -99,8 +94,7 @@ def facet_order(doc: dict) -> List[str]:
 
 
 def facets_from_terms(doc: dict) -> Dict[str, List[str]]:
-    """The flat facet lists (facet -> current slugs, file order) that
-    `vocab.all_terms` and the subject listing read."""
+    """Return the flat facet lists: facet -> current slugs, in file order."""
     facets = {name: [] for name in facet_order(doc)}
     for t in current_terms(doc):
         facets.setdefault(t["facet"], []).append(t["slug"])
@@ -108,15 +102,15 @@ def facets_from_terms(doc: dict) -> Dict[str, List[str]]:
 
 
 def facets_of(doc: dict) -> Dict[str, List[str]]:
-    """Facet lists for either shape of file."""
+    """Return the facet lists for either shape of file."""
     if is_authority(doc):
         return facets_from_terms(doc)
     return {k: list(v) for k, v in (doc.get("facets") or {}).items()}
 
 
 def normalise(doc: dict) -> dict:
-    """An authority file with its derived `facets` filled in, so readers
-    that only know the flat shape keep working. Returns a copy."""
+    """Return a copy of an authority file with its derived `facets` filled
+    in, so readers that only know the flat shape keep working."""
     if not is_authority(doc):
         return doc
     out = dict(doc)
@@ -131,7 +125,7 @@ def children_of(doc: dict, slug: str) -> List[str]:
 
 
 def narrower(doc: dict, slug: str) -> List[str]:
-    """Every current term below `slug`, depth first, file order."""
+    """Return every current term below `slug`, depth first, in file order."""
     out = []
     for child in children_of(doc, slug):
         out.append(child)
@@ -140,9 +134,9 @@ def narrower(doc: dict, slug: str) -> List[str]:
 
 
 def tree(doc: dict, facet: str) -> List[Tuple[str, int]]:
-    """Current terms of a facet as (slug, depth), roots in file order
-    and each root followed by its descendants. Depth is 0 everywhere
-    for a flat vocabulary."""
+    """Return the current terms of a facet as (slug, depth): roots in file
+    order, each followed by its descendants. Depth is 0 everywhere for a
+    flat vocabulary."""
     out = []
 
     def walk(parent: Optional[str], depth: int):
@@ -156,14 +150,12 @@ def tree(doc: dict, facet: str) -> List[Tuple[str, int]]:
 
 
 def expand_subject(doc, slug: str) -> Tuple[List[str], str]:
-    """The slugs a search for `slug` should match, and why. A current
-    term matches itself and every current term below it ("narrower"
-    when there are any, else "exact"). A retired term matches its
-    current successors, each expanded the same way ("replaced"), or
+    """Return (slugs, why): the slugs a search for `slug` should match.
+    A current term matches itself and every current term below it
+    ("narrower" when there are any, else "exact"). A retired term matches
+    its current successors, each expanded the same way ("replaced"), or
     nothing when it has none ("removed"). An unknown slug, or a file
-    without the authority shape, is matched as typed. Never raises;
-    records never carry a retired term (the promoter rewrites them), so
-    without this a search for one would look like an empty store."""
+    without the authority shape, is matched as typed. Never raises."""
     if not is_authority(doc):
         return [slug], "exact"
     term = terms_by_slug(doc).get(slug)
@@ -182,8 +174,8 @@ def expand_subject(doc, slug: str) -> Tuple[List[str], str]:
 
 
 def ancestors(doc: dict, slug: str) -> List[str]:
-    """The terms above `slug`, nearest first; empty at the top level or
-    for an unknown slug."""
+    """Return the terms above `slug`, nearest first; empty at the top
+    level or for an unknown slug."""
     return _ancestors(terms_by_slug(doc), slug)
 
 
@@ -199,20 +191,55 @@ def _ancestors(by_slug: Dict[str, dict], slug: str) -> List[str]:
 
 # --- validation --------------------------------------------------------
 
-def validate_authority(doc) -> List[str]:
-    """Every rule the file must satisfy, as plain messages. Empty means
-    the file is good. Runs in the vocabulary repo's CI and in the tool
-    before a fetched file is trusted."""
+def _term_field_errors(t: dict, label: str) -> List[str]:
+    """Return what is wrong with one term's own fields."""
     errors = []
-    if not isinstance(doc, dict):
-        return ["the vocabulary is not a JSON object"]
-    if not isinstance(doc.get("vocabulary_version"), str) or not DATE_RE.match(
-            doc["vocabulary_version"]):
-        errors.append("vocabulary_version must be a date like 2026-07-23")
-    terms = doc.get("terms")
-    if not isinstance(terms, list) or not terms:
-        return errors + ["terms must be a non-empty list"]
+    if not isinstance(t.get("facet"), str) or not t["facet"]:
+        errors.append("%s: facet is missing" % label)
+    if not isinstance(t.get("label"), str) or not t["label"].strip():
+        errors.append("%s: label is missing" % label)
+    if t.get("status") not in STATUSES:
+        errors.append("%s: status must be current or retired" % label)
+    for field in ("since", "until"):
+        value = t.get(field)
+        if value is not None and not (isinstance(value, str)
+                                      and DATE_RE.match(value)):
+            errors.append("%s: %s %r is not a date" % (label, field, value))
+    if t.get("status") == "retired":
+        if not t.get("until"):
+            errors.append("%s: a retired term needs an until date" % label)
+        rb = t.get("replaced_by")
+        if rb is not None and not (isinstance(rb, list)
+                                   and all(isinstance(s, str) for s in rb)):
+            errors.append("%s: replaced_by must be a list of slugs" % label)
+    elif t.get("until") or t.get("replaced_by"):
+        errors.append("%s: only a retired term has until or replaced_by"
+                      % label)
+    broader = t.get("broader")
+    if broader is not None and not isinstance(broader, str):
+        errors.append("%s: broader must be a slug or null" % label)
+    scope = t.get("scope")
+    if scope is not None and not (isinstance(scope, str) and scope.strip()):
+        errors.append("%s: scope must be a non-empty string" % label)
+    aliases = t.get("aliases")
+    if aliases is not None:
+        if not (isinstance(aliases, list)
+                and all(isinstance(a, str) for a in aliases)):
+            errors.append("%s: aliases must be a list of slugs" % label)
+        else:
+            for alias in aliases:
+                if not SLUG_RE.match(alias):
+                    errors.append("%s: alias %r is not lower-case words joined "
+                                  "by hyphens" % (label, alias))
+            if len(set(aliases)) != len(aliases):
+                errors.append("%s: aliases repeat" % label)
+    return errors
 
+
+def _collect_terms(terms: list) -> Tuple[Dict[str, dict], List[str]]:
+    """Return (terms by slug, errors). A term that is not an object, or
+    whose slug is unusable or repeated, is reported and left out."""
+    errors = []
     by_slug = {}
     for i, t in enumerate(terms):
         label = "terms[%d]" % (i + 1)
@@ -229,47 +256,14 @@ def validate_authority(doc) -> List[str]:
             errors.append("%s appears twice" % label)
             continue
         by_slug[slug] = t
-        if not isinstance(t.get("facet"), str) or not t["facet"]:
-            errors.append("%s: facet is missing" % label)
-        if not isinstance(t.get("label"), str) or not t["label"].strip():
-            errors.append("%s: label is missing" % label)
-        if t.get("status") not in STATUSES:
-            errors.append("%s: status must be current or retired" % label)
-        for field in ("since", "until"):
-            value = t.get(field)
-            if value is not None and not (isinstance(value, str)
-                                          and DATE_RE.match(value)):
-                errors.append("%s: %s %r is not a date" % (label, field, value))
-        if t.get("status") == "retired":
-            if not t.get("until"):
-                errors.append("%s: a retired term needs an until date" % label)
-            rb = t.get("replaced_by")
-            if rb is not None and not (isinstance(rb, list)
-                                       and all(isinstance(s, str) for s in rb)):
-                errors.append("%s: replaced_by must be a list of slugs" % label)
-        elif t.get("until") or t.get("replaced_by"):
-            errors.append("%s: only a retired term has until or replaced_by"
-                          % label)
-        broader = t.get("broader")
-        if broader is not None and not isinstance(broader, str):
-            errors.append("%s: broader must be a slug or null" % label)
-        scope = t.get("scope")
-        if scope is not None and not (isinstance(scope, str) and scope.strip()):
-            errors.append("%s: scope must be a non-empty string" % label)
-        aliases = t.get("aliases")
-        if aliases is not None:
-            if not (isinstance(aliases, list)
-                    and all(isinstance(a, str) for a in aliases)):
-                errors.append("%s: aliases must be a list of slugs" % label)
-            else:
-                for alias in aliases:
-                    if not SLUG_RE.match(alias):
-                        errors.append("%s: alias %r is not lower-case words joined "
-                                      "by hyphens" % (label, alias))
-                if len(set(aliases)) != len(aliases):
-                    errors.append("%s: aliases repeat" % label)
+        errors.extend(_term_field_errors(t, label))
+    return by_slug, errors
 
-    # Cross-term rules.
+
+def _alias_errors(by_slug: Dict[str, dict]) -> List[str]:
+    """Return the aliases that are a current term's slug or are also on
+    another term."""
+    errors = []
     seen_alias: Dict[str, str] = {}
     for slug, t in by_slug.items():
         if t.get("status") == "current" and isinstance(t.get("aliases"), list):
@@ -284,6 +278,13 @@ def validate_authority(doc) -> List[str]:
                                   % (slug, alias, seen_alias[alias]))
                 else:
                     seen_alias[alias] = slug
+    return errors
+
+
+def _link_errors(by_slug: Dict[str, dict]) -> List[str]:
+    """Return what is wrong with each term's replaced_by and broader
+    links to other terms."""
+    errors = []
     for slug, t in by_slug.items():
         for succ in t.get("replaced_by") or []:
             if succ not in by_slug:
@@ -307,7 +308,13 @@ def validate_authority(doc) -> List[str]:
                 chain = _ancestors(by_slug, slug)
                 if slug in chain:
                     errors.append("term %s: broader chain loops" % slug)
+    return errors
 
+
+def _facet_errors(doc: dict) -> List[str]:
+    """Return where the flat `facets` lists, when present, differ from the
+    lists derived from the terms."""
+    errors = []
     # The flat lists, when present, must be exactly the derivation.
     if "facets" in doc:
         derived = facets_from_terms(doc)
@@ -321,15 +328,39 @@ def validate_authority(doc) -> List[str]:
             for name in derived:
                 if name not in doc["facets"]:
                     errors.append("facets is missing %s" % name)
+    return errors
 
+
+def validate_authority(doc) -> List[str]:
+    """Return every rule the file breaks, as plain messages. Empty means
+    the file is good."""
+    errors = []
+    if not isinstance(doc, dict):
+        return ["the vocabulary is not a JSON object"]
+    if not isinstance(doc.get("vocabulary_version"), str) or not DATE_RE.match(
+            doc["vocabulary_version"]):
+        errors.append("vocabulary_version must be a date like 2026-07-23")
+    terms = doc.get("terms")
+    if not isinstance(terms, list) or not terms:
+        return errors + ["terms must be a non-empty list"]
+
+    by_slug, term_errors = _collect_terms(terms)
+    errors.extend(term_errors)
+
+    # Cross-term rules.
+    errors.extend(_alias_errors(by_slug))
+    errors.extend(_link_errors(by_slug))
+
+    errors.extend(_facet_errors(doc))
     errors.extend(_validate_changes(doc, by_slug))
     errors.extend(_validate_providers(doc))
     return errors
 
 
 def _validate_providers(doc: dict) -> List[str]:
-    """r11 §3: `providers`, when present, is a list of entries with a
-    unique slug and a name; url, rights and notes are optional text."""
+    """Return what is wrong with `providers`. When present it is a list of
+    entries with a unique slug and a name; url, rights and notes are
+    optional text."""
     errors = []
     if "providers" not in doc:
         return errors
@@ -443,11 +474,13 @@ def _require(cond: bool, message: str) -> None:
 
 
 def apply_change(doc: dict, change: dict) -> dict:
-    """The authority file after one change, as a new document. The
+    """Return the authority file after one change, as a new document. The
     change is appended to `changes`, the terms it names are updated,
     `facets` is regenerated and `vocabulary_version` moves to the
-    change's date if that is later. Anything the validator would refuse
-    raises AuthorityError and the input is untouched."""
+    change's date if that is later.
+
+    Raises AuthorityError for anything the validator would refuse; the
+    input is untouched."""
     _require(is_authority(doc), "not an authority file (no terms list)")
     out = copy.deepcopy(doc)
     change = dict(change)
@@ -567,13 +600,13 @@ def apply_change(doc: dict, change: dict) -> dict:
 def describe_term(doc: dict, slug: str, scope: Optional[str] = None,
                   aliases: Optional[List[str]] = None,
                   clear_aliases: bool = False) -> dict:
-    """The authority file with one term's description changed, as a new
-    document: `scope` replaced when given, the aliases cleared when
-    asked, `aliases` added (without repeats). The term may be current
-    or retired. No change entry and the version stays, since nothing
-    about which records the term applies to has moved; the vocabulary
-    repo's history is the audit trail. Refuses an unknown term, nothing
-    to do, or anything the validator would; the input is untouched."""
+    """Return the authority file with one term's description changed, as a
+    new document: `scope` replaced when given, the aliases cleared when
+    asked, `aliases` added without repeats. The term may be current or
+    retired. No change entry is written and the version stays.
+
+    Raises AuthorityError for an unknown term, nothing to do, or anything
+    the validator would refuse; the input is untouched."""
     _require(is_authority(doc), "not an authority file (no terms list)")
     _require(scope is not None or bool(aliases) or clear_aliases,
              "nothing to do: no scope note, no alias, nothing to clear")
@@ -600,11 +633,11 @@ def describe_term(doc: dict, slug: str, scope: Optional[str] = None,
 # --- mapping subjects forward ------------------------------------------
 
 def map_subjects(subjects: List[str], doc: dict) -> Tuple[List[str], List[dict]]:
-    """A record's subject list brought up to the current vocabulary, and
-    what was done to it. Renames and merges substitute; a split gives
-    every successor and reports `split_review`; a retirement with no
-    successor drops the term and reports `removed`. Order is kept,
-    duplicates collapse, and a list that is already current comes back
+    """Return (subjects, what was done): a record's subject list brought
+    up to the current vocabulary. Renames and merges substitute; a split
+    gives every successor and reports `split_review`; a retirement with
+    no successor drops the term and reports `removed`. Order is kept and
+    duplicates collapse. A list that is already current comes back
     unchanged with nothing reported, so mapping twice is a no-op.
 
     Changes are replayed in date order. A retired term with no change
@@ -647,6 +680,7 @@ def map_subjects(subjects: List[str], doc: dict) -> Tuple[List[str], List[dict]]
         elif kind == "retire":
             substitute(frm, [], MAPPED_REMOVED, c.get("date"))
 
+    # Records never carry a retired term: the promoter rewrites them with this.
     # Safety net for retired terms the changes list did not cover.
     for slug in list(current):
         t = by_slug.get(slug)
@@ -661,8 +695,9 @@ def map_subjects(subjects: List[str], doc: dict) -> Tuple[List[str], List[dict]]
 # --- writing -----------------------------------------------------------
 
 def dump_authority(doc: dict) -> str:
-    """The file as text, one term, one change, one domain per line, so
-    a change shows as a small diff in review. `facets` is regenerated."""
+    """Return the file as text with one term, one change and one domain
+    per line, so a change shows as a small diff in review. `facets` is
+    regenerated."""
     doc = normalise(doc)
 
     def block(key, items):

@@ -1,4 +1,4 @@
-"""Resolve `derived_from` references against the store (r8 §4).
+"""Resolve `derived_from` references against the store.
 
 A web deposit cannot see destinations, so a `dataset` reference arrives
 with only the identifier the researcher typed. The promoter holds the
@@ -14,7 +14,7 @@ from crsw_deposit import keys, record
 
 
 def read_json_object(client, bucket: str, key: str):
-    """(text, None) or (None, 'absent') or (None, error)."""
+    """Return (text, None), (None, 'absent') or (None, error)."""
     try:
         obj = client.get_object(Bucket=bucket, Key=key)
     except ClientError as e:

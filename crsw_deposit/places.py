@@ -1,18 +1,14 @@
-"""Places: the UN M49 geoscheme as a small hierarchy (r11 §4).
+"""Places: the UN M49 geoscheme as a small hierarchy.
 
 `places.json` lists the world, its regions, subregions and
 intermediate regions (`m49:NNN`) and every country or area (`iso:XX`,
 ISO 3166 alpha-2; `m49:NNN` for the few the scheme gives no alpha-2
-code), each with a label, a kind and a `broader` parent. It is
-generated in the vocabulary repo from the UNSD CSV, never edited by
-hand, and reaches the tool by the vocabulary's own chain: fetch ->
-cache -> the bundled copy. A record's `spatial` is a list of these
-codes; search expands the hierarchy at query time the way subject
-`broader` expansion does.
+code), each with a label, a kind and a `broader` parent. The file is
+generated in the vocabulary repo and never edited by hand. It is loaded
+by the same chain as the vocabulary: fetch, then cache, then the
+bundled copy. A record's `spatial` is a list of these codes.
 
-Pure functions, stdlib only, no user I/O. The hierarchy readers mirror
-`authority`'s rather than reuse them: those are keyed on terms, facets
-and status, these on codes and kinds."""
+Pure functions, stdlib only, no user I/O."""
 import json
 import re
 import sys
@@ -35,9 +31,10 @@ EXPANDED_UNKNOWN = "unknown"      # not a place in the file: matched as typed
 
 
 def bundled_places_path() -> Path:
-    """Locate the bundled places.json, PyInstaller-compatible (a build
-    adds it beside vocab.json: datas=[("crsw_deposit/places.json",
-    "crsw_deposit")])."""
+    """Return the path of the bundled places.json, in a checkout or inside
+    a PyInstaller build."""
+    # A PyInstaller build adds the file beside vocab.json:
+    # datas=[("crsw_deposit/places.json", "crsw_deposit")].
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         return Path(meipass) / "crsw_deposit" / "places.json"
@@ -47,9 +44,8 @@ def bundled_places_path() -> Path:
 # --- validation --------------------------------------------------------
 
 def validate_places(doc) -> List[str]:
-    """Every rule the file must satisfy, as plain messages. Empty means
-    the file is good; a fetched file that fails is ignored and the
-    chain falls through, as for the vocabulary."""
+    """Return every rule the file breaks, as plain messages. Empty means
+    the file is good."""
     errors = []
     if not isinstance(doc, dict):
         return ["places is not a JSON object"]
@@ -100,10 +96,9 @@ def _valid(doc) -> bool:
 def load_places(url: str = PLACES_URL, timeout: int = vocab.FETCH_TIMEOUT,
                 cache: Optional[Path] = None, bundled: Optional[Path] = None,
                 opener=None) -> Tuple[dict, str]:
-    """Return (places, source) with source in remote/cache/bundled. The
-    same chain as vocab.load_vocabulary, the cache file beside the
-    vocabulary's. A fetch that fails or returns a bad file costs nothing
-    but the timeout; the bundled copy is always there."""
+    """Return (places, source), with source one of remote, cache or
+    bundled. A fetched or cached file is used only if it passes
+    validate_places; the bundled copy is the last resort."""
     cache = cache if cache is not None else vocab.cache_dir()
     bundled = bundled if bundled is not None else bundled_places_path()
     opener = opener if opener is not None else vocab._default_opener
@@ -144,7 +139,8 @@ def children_of(doc: dict, code: str) -> List[str]:
 
 
 def narrower(doc: dict, code: str) -> List[str]:
-    """Every place under `code`, tree order, the code itself excluded."""
+    """Return every place under `code`, in tree order, without the code
+    itself."""
     out = []
     for child in children_of(doc, code):
         out.append(child)
@@ -164,13 +160,13 @@ def _ancestors(by_code: Dict[str, dict], code: str) -> List[str]:
 
 
 def ancestors(doc: dict, code: str) -> List[str]:
-    """What contains `code`, nearest first."""
+    """Return what contains `code`, nearest first."""
     return _ancestors(places_by_code(doc), code)
 
 
 def tree(doc: dict) -> List[Tuple[str, int]]:
-    """Every place as (code, depth), roots first, children after their
-    parent in file order: what a select or a tree listing wants."""
+    """Return every place as (code, depth), roots first, children after
+    their parent in file order."""
     by_code = places_by_code(doc)
     out = []
 
@@ -186,12 +182,10 @@ def tree(doc: dict) -> List[Tuple[str, int]]:
 
 
 def expand_place(doc: Optional[dict], code: str) -> Tuple[List[str], str]:
-    """What a search for `code` should match: the places that contain it
-    and the places it contains, plus itself. Coverage in a tree overlaps
-    when one place is inside the other, so a query for a country finds a
-    dataset tagged with its subregion or the world, and a query for a
-    region finds one tagged with a country inside it. Unknown codes, or
-    no places document at all, match as typed."""
+    """Return (codes, how) for a search on `code`: the places that contain
+    it, the code itself and the places it contains. `how` is one of the
+    EXPANDED_ constants. An unknown code, or no places document at all,
+    gives the code alone."""
     by_code = places_by_code(doc)
     if code not in by_code:
         return [code], EXPANDED_UNKNOWN

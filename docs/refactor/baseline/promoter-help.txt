@@ -1,0 +1,105 @@
+$ python -m promoter --help
+usage: promoter [-h] {run,recategorise,audit,datasets,index,passages,remove} ...
+
+positional arguments:
+  {run,recategorise,audit,datasets,index,passages,remove}
+    run                 check every complete deposit in staging and promote the ones that pass
+    recategorise        rewrite dataset records whose categories the vocabulary's changes or a
+                        change file affect
+    audit               read the audit trail back from the bucket
+    datasets            every dataset record in place
+    index               rebuild the index of every record in place
+    passages            rebuild the passages behind search inside documents (needs
+                        PROMOTER_PASSAGES=1)
+    remove              remove a dataset (every object version under its prefix) or an abandoned
+                        staging deposit; the plan only, unless --confirm repeats every id
+
+options:
+  -h, --help            show this help message and exit
+
+$ python -m promoter run --help
+usage: promoter run [-h] [--dry-run] [--log LOG] [--env-file ENV_FILE] [--deposit DEPOSIT]
+                    [--user USER] [--keep-staging] [--no-verify-checksums]
+
+options:
+  -h, --help            show this help message and exit
+  --dry-run             report what would happen; write nothing
+  --log LOG             JSON-lines log path (default PROMOTER_LOG_PATH)
+  --env-file ENV_FILE   local env file to load (default .env.promoter)
+  --deposit DEPOSIT     only this deposit id
+  --user USER           only this depositor
+  --keep-staging        promote but leave the staged copy in place
+  --no-verify-checksums
+                        skip re-hashing staged objects (labels are still checked)
+
+$ python -m promoter recategorise --help
+usage: promoter recategorise [-h] [--dry-run] [--log LOG] [--env-file ENV_FILE]
+                             [--changes CHANGES] [--dataset DATASET] [--by BY]
+
+options:
+  -h, --help           show this help message and exit
+  --dry-run            report what would happen; write nothing
+  --log LOG            JSON-lines log path (default PROMOTER_LOG_PATH)
+  --env-file ENV_FILE  local env file to load (default .env.promoter)
+  --changes CHANGES    JSON change file: per-dataset add/remove/set_domain decisions, and fields
+                       to set in place (r11)
+  --dataset DATASET    only this dataset (identifier or uuid)
+  --by BY              who is making the change (default: your login)
+
+$ python -m promoter audit --help
+usage: promoter audit [-h] [--env-file ENV_FILE] [--runs RUNS] [--since SINCE] [--dataset DATASET]
+                      [--user USER] [--action ACTION] [--json]
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  local env file to load (default .env.promoter)
+  --runs RUNS          newest N runs (default 10; 0 = all)
+  --since SINCE        every run on or after this day, YYYY-MM-DD
+  --dataset DATASET    only lines about this dataset (prefix, dataset name or uuid)
+  --user USER          only lines about this depositor or steward
+  --action ACTION      only this action, e.g. promoted, checked, record_rewritten,
+                       resolved_reference
+  --json               raw JSON lines
+
+$ python -m promoter datasets --help
+usage: promoter datasets [-h] [--env-file ENV_FILE] [--strand STRAND] [--json]
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  local env file to load (default .env.promoter)
+  --strand STRAND      only this strand
+  --json               one JSON object per line
+
+$ python -m promoter index --help
+usage: promoter index [-h] [--env-file ENV_FILE] [--embed]
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  local env file to load (default .env.promoter)
+  --embed              also refresh embeddings.parquet through the LLM platform (needs
+                       PROMOTER_LLM_BASE_URL and PROMOTER_LLM_API_KEY)
+
+$ python -m promoter passages --help
+usage: promoter passages [-h] [--env-file ENV_FILE] [--dataset DATASET] [--strand STRAND]
+
+options:
+  -h, --help           show this help message and exit
+  --env-file ENV_FILE  local env file to load (default .env.promoter)
+  --dataset DATASET    only this dataset identifier
+  --strand STRAND      only this strand
+
+$ python -m promoter remove --help
+usage: promoter remove [-h] (--dataset ID | --staging DEPOSIT_ID) [--confirm ID] [--reason REASON]
+                       [--by BY] [--log LOG] [--env-file ENV_FILE]
+
+options:
+  -h, --help            show this help message and exit
+  --dataset ID          a dataset identifier (strand/project/sensitivity/state/dataset); repeat
+                        for several. No wildcards.
+  --staging DEPOSIT_ID  an abandoned deposit in staging (no record written)
+  --confirm ID          repeat every --dataset or --staging id to do it; without, the plan is
+                        printed and nothing is touched
+  --reason REASON       why, for the audit line
+  --by BY               who is removing it (default: your login)
+  --log LOG             JSON-lines log path (default PROMOTER_LOG_PATH)
+  --env-file ENV_FILE   local env file to load (default .env.promoter)
