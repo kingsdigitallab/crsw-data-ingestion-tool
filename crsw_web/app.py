@@ -31,7 +31,7 @@ from crsw_deposit import (authority, deposit_logic, filetypes, keys,
 from . import s3
 from .access import may_download
 from .auth import User, make_authenticator, peer_address
-from .catalogue import PER_CHOICES, PER_DEFAULT, Catalogue, group_projects, page_of
+from .catalogue import PER_CHOICES, PER_DEFAULT, Catalogue, counted, group_projects, page_of
 from .llm import Platform, PlatformError
 from .passages import (open_index, split_sentences, mark_closest, word_pattern,
                        question_stems)
@@ -464,7 +464,9 @@ def create_app(settings: Optional[Settings] = None,
             "place_filter": place_view(cat, place),
             "results": results, "groups": shown,
             "opened": bool(q or strand or state or sensitivity or subject or project or place),
-            "n_projects": len(groups), "page": page, "pages": pages, "per": per,
+            "n_projects": len(groups),
+            "counted": counted([d for g in groups for d in g["datasets"]]),
+            "page": page, "pages": pages, "per": per,
             "per_choices": PER_CHOICES, "per_default": PER_DEFAULT, "pager_url": pager_url,
             "first": (page - 1) * per + 1, "last": min(page * per, len(groups)),
             "sizes": {r["identifier"]: record.human_bytes(r.get("bytes") or 0) for r in results},

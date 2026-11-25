@@ -275,6 +275,30 @@ class TestGrouping(unittest.TestCase):
                                "project": "csac", "files": 0, "bytes": 0, "modified": ""}]
         self.assertEqual(len(group_projects(rows)), 3)
 
+    def test_a_dataset_held_at_two_states_is_one_name(self):
+        from crsw_web.catalogue import counted, group_projects
+        rows = [
+            {"identifier": "rs1/wir/green/1_interim/papers", "strand": "rs1", "project": "wir",
+             "dataset": "papers", "state": "1_interim", "files": 3, "bytes": 30},
+            {"identifier": "rs1/wir/green/0_raw/maps", "strand": "rs1", "project": "wir",
+             "dataset": "maps", "state": "0_raw", "files": 1, "bytes": 5},
+            {"identifier": "rs1/wir/green/0_raw/papers", "strand": "rs1", "project": "wir",
+             "dataset": "papers", "state": "0_raw", "files": 50, "bytes": 500},
+        ]
+        g = group_projects(rows)[0]
+        self.assertEqual(len(g["rows"]), 3)                  # still one row per record
+        self.assertEqual([(d["dataset"], [r["state"] for r in d["rows"]])
+                          for d in g["datasets"]],
+                         [("papers", ["1_interim", "0_raw"]), ("maps", ["0_raw"])])
+        self.assertEqual(g["counted"], "2 datasets, 3 records")
+        papers = group_projects([rows[0], rows[2]])[0]
+        self.assertEqual(papers["counted"], "1 dataset in 2 states")
+        self.assertEqual(group_projects(rows[:2])[0]["counted"], "2 datasets")
+        # Same name and state at two sensitivities is not "2 states".
+        twice = [rows[0], dict(rows[0], identifier="rs1/wir/amber/1_interim/papers")]
+        self.assertEqual(counted(group_projects(twice)[0]["datasets"]),
+                         "1 dataset, 2 records")
+
     def test_pages_clamp_the_page_and_the_size(self):
         from crsw_web.catalogue import page_of, PER_CHOICES, PER_DEFAULT
         self.assertEqual((PER_CHOICES, PER_DEFAULT), ((10, 25, 50), 10))
@@ -362,6 +386,28 @@ class TestProjectAccordion(CatalogueBase):
             self.assertIn('<details class="project" open>', html, params)
             self.assertNotIn('<details class="project">', html, params)
             self.assertIn("1 dataset in 1 project", html)
+
+    def test_one_name_at_two_states_is_shown_once(self):
+        interim = "rs2/csac/green/1_interim/events"
+        self.put_record(interim, dict(META, state="1_interim"),
+                        [record.manifest_entry("clean.csv", "e" * 64, 7)],
+                        "k1234567", "44444444-4444-4444-8444-444444444444")
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        c = self.app()
+        html = c.get("/datasets", params={"project": "csac"}).text
+        self.assertIn("1 dataset in 2 states in 1 project", html)
+        self.assertIn('<td class="shared" rowspan="2">events</td>', html)
+        self.assertEqual(html.count(">events</"), 1)         # the name once
+        self.assertIn('<a href="/datasets/%s">0_raw</a>' % GREEN, html)
+        self.assertIn('<a href="/datasets/%s">1_interim</a>' % interim, html)
+        self.assertEqual(html.count('<tr class="dataset">'), 2)
+        # A dataset at one state reads as before: the name is the link.
+        html = c.get("/datasets", params={"project": "oral"}).text
+        self.assertIn('<a href="/datasets/%s">interviews</a>' % AMBER, html)
+        self.assertIn("<td>1_interim</td>", html)
+        # The feed the form's pickers read stays one row per record.
+        feed = c.get("/datasets.json", params={"project": "csac"}).json()
+        self.assertEqual(len(feed["datasets"]), 2)
 
     def test_ten_projects_a_page_newest_first(self):
         c = self.app()

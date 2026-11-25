@@ -66,6 +66,8 @@ ol.hits b, .hint b { font-weight: 600; }
 .search .actions { margin-top: .5rem; }
 .count { color: var(--muted); font-family: var(--serif); }
 .results td:first-child a { font-weight: 600; }
+.results td.shared { font-weight: 600; vertical-align: top; }
+.results td.state a { font-weight: 600; }
 .tag { display: inline-block; margin-left: .5rem; padding: 0 .4rem; border-radius: 3px; font-size: .75rem; font-weight: 600; text-transform: none; }
 .tag.green { background: var(--green); color: var(--action-ink); }
 .tag.amber { background: var(--amber); color: var(--action-ink); }

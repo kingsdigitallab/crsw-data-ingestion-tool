@@ -46,7 +46,9 @@ def group_projects(rows: Sequence[Dict]) -> List[Dict]:
     """The find page's list, projects first: one group per (strand,
     project) in order of first appearance, so a newest-first list stays
     newest-first and an answer's ranking puts the best match's project
-    at the top. Rows keep their order inside the group."""
+    at the top. Rows keep their order inside the group. `datasets` is
+    the same rows folded by dataset name, so a dataset held at two
+    states is shown under one name; `counted` says how many."""
     groups: Dict[Tuple[str, str], Dict] = {}
     for r in rows:
         key = (r.get("strand") or "", r.get("project") or "")
@@ -58,7 +60,35 @@ def group_projects(rows: Sequence[Dict]) -> List[Dict]:
         g["files"] += int(r.get("files") or 0)
         g["bytes"] += int(r.get("bytes") or 0)
         g["modified"] = max(g["modified"], r.get("modified") or "")
+    for g in groups.values():
+        g["datasets"] = fold_datasets(g["rows"])
+        g["counted"] = counted(g["datasets"])
     return list(groups.values())
+
+
+def fold_datasets(rows: Sequence[Dict]) -> List[Dict]:
+    """Rows of one project folded by dataset name, in order of first
+    appearance: [{"dataset": name, "rows": [...]}]. Each row is still
+    its own record; this is for display only."""
+    by_name: Dict[str, Dict] = {}
+    for r in rows:
+        name = r.get("dataset") or r.get("identifier") or ""
+        by_name.setdefault(name, {"dataset": name, "rows": []})["rows"].append(r)
+    return list(by_name.values())
+
+
+def counted(datasets: Sequence[Dict]) -> str:
+    """How many datasets a folded list holds, in words: "2 datasets",
+    "1 dataset in 2 states", or "2 datasets, 3 records" when names and
+    records differ in any other way."""
+    names = len(datasets)
+    records = sum(len(d["rows"]) for d in datasets)
+    text = "%d dataset%s" % (names, "" if names == 1 else "s")
+    if records == names:
+        return text
+    if names == 1 and len({r.get("state") for r in datasets[0]["rows"]}) == records:
+        return text + " in %d states" % records
+    return text + ", %d records" % records
 
 
 def page_of(items: Sequence, page, per) -> Tuple[List, int, int, int]:
