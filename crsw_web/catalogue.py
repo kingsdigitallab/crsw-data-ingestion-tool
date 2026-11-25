@@ -270,14 +270,17 @@ class Catalogue:
     def search(self, q: Optional[str] = None, strand: Optional[str] = None,
                state: Optional[str] = None, sensitivity: Optional[str] = None,
                subject: Optional[str] = None, project: Optional[str] = None,
-               limit: Optional[int] = None, place: Optional[str] = None) -> List[Dict]:
+               limit: Optional[int] = None, place: Optional[str] = None,
+               filetype: Optional[str] = None) -> List[Dict]:
         """Case-insensitive substring match over the descriptive fields;
         `subject` follows the vocabulary (`expand`: the term and every
         term under it, or a retired term's successors); `place` follows
         the places hierarchy (`expand_place`: the place, what contains it
-        and what it contains); the other arguments are exact filters.
-        Newest modified first."""
+        and what it contains); `filetype` is an extension, with or
+        without its dot, that at least one of the dataset's files has;
+        the other arguments are exact filters. Newest modified first."""
         needle = (q or "").strip().lower()
+        ext = (filetype or "").strip().lstrip(".").lower()
         wanted = set(self.expand(subject)[0]) if subject else None
         wanted_places = set(self.expand_place(place)[0]) if place else None
         out = []
@@ -294,6 +297,10 @@ class Catalogue:
                 continue
             if wanted_places is not None and not wanted_places.intersection(
                     r.get("spatial") or []):
+                continue
+            # A row from an index written before the column existed has
+            # no extensions and matches no file type.
+            if ext and ext not in (r.get("extensions") or []):
                 continue
             if needle:
                 hay = " ".join(str(r.get(f) or "") for f in SEARCH_FIELDS)
@@ -315,6 +322,13 @@ class Catalogue:
         seen = set()
         for r in self._rows_of(sensitivities):
             seen.update(r.get("subject") or [])
+        return sorted(seen)
+
+    def extensions(self) -> List[str]:
+        """File extensions in use across the index, sorted, no dot."""
+        seen = set()
+        for r in self.rows():
+            seen.update(r.get("extensions") or [])
         return sorted(seen)
 
     def projects(self, sensitivities: Optional[Sequence[str]] = None) -> List[str]:

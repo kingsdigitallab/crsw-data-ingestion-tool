@@ -354,10 +354,12 @@ def create_app(settings: Optional[Settings] = None,
                                       "subject", "version", "provider", "spatial")} | {
             "abstract": abstract[:200] + ("…" if len(abstract) > 200 else "")}
 
-    def search_args(q, strand, state, sensitivity, subject, project, place=""):
+    def search_args(q, strand, state, sensitivity, subject, project, place="",
+                    filetype=""):
         return dict(q=q, strand=strand or None, state=state or None,
                     sensitivity=sensitivity or None, subject=subject or None,
-                    project=project or None, place=place or None)
+                    project=project or None, place=place or None,
+                    filetype=filetype or None)
 
     def place_view(cat: Catalogue, place: str) -> Optional[Dict]:
         """How a place filter was read (r11 §4): the codes it matched
@@ -433,12 +435,13 @@ def create_app(settings: Optional[Settings] = None,
     @app.get("/datasets", response_class=HTMLResponse)
     def datasets_page(request: Request, q: str = "", strand: str = "", state: str = "",
                       sensitivity: str = "", subject: str = "", project: str = "",
-                      place: str = "", page: int = 1,
+                      place: str = "", filetype: str = "", page: int = 1,
                       per: Optional[int] = None, user: User = Depends(current_user)):
         cat = need_read()
         per, remember = per_from(per, request)
+        filetype = filetype.strip().lstrip(".").lower()
         results = cat.search(**search_args(q, strand, state, sensitivity, subject,
-                                           project, place))
+                                           project, place, filetype))
         view = subject_view(cat, subject, results)
         # Projects first (r11 find page): the list folds into projects,
         # ten a page, closed while browsing and open once something
@@ -449,7 +452,8 @@ def create_app(settings: Optional[Settings] = None,
             g["size"] = record.human_bytes(g["bytes"])
         query = [(k, v) for k, v in (("q", q), ("strand", strand), ("state", state),
                                      ("sensitivity", sensitivity), ("subject", subject),
-                                     ("project", project), ("place", place)) if v]
+                                     ("project", project), ("place", place),
+                                     ("filetype", filetype)) if v]
 
         def pager_url(to_page: int, to_per: int) -> str:
             return "/datasets?" + urlencode(query + [("page", to_page), ("per", to_per)])
@@ -462,8 +466,10 @@ def create_app(settings: Optional[Settings] = None,
             "subject_filter": view, "subject_notice": view["notice"] if view else None,
             "place": place, "place_groups": group_places(cat.place_options()),
             "place_filter": place_view(cat, place),
+            "filetype": filetype, "filetypes": cat.extensions(),
             "results": results, "groups": shown,
-            "opened": bool(q or strand or state or sensitivity or subject or project or place),
+            "opened": bool(q or strand or state or sensitivity or subject or project or place
+                           or filetype),
             "n_projects": len(groups),
             "counted": counted([d for g in groups for d in g["datasets"]]),
             "page": page, "pages": pages, "per": per,
@@ -479,12 +485,14 @@ def create_app(settings: Optional[Settings] = None,
 
     @app.get("/datasets.json")
     def datasets_json(q: str = "", strand: str = "", state: str = "", sensitivity: str = "",
-                      subject: str = "", project: str = "", place: str = "", limit: int = 50,
+                      subject: str = "", project: str = "", place: str = "",
+                      filetype: str = "", limit: int = 50,
                       user: User = Depends(current_user)):
         cat = need_read()
         limit = max(1, min(limit, 500))
         rows = cat.search(limit=limit,
-                          **search_args(q, strand, state, sensitivity, subject, project, place))
+                          **search_args(q, strand, state, sensitivity, subject, project, place,
+                                        filetype))
         out = {"datasets": [public_row(r) for r in rows], "built_at": cat.built_at()}
         view = subject_view(cat, subject, rows)
         if view:

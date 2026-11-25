@@ -84,6 +84,58 @@ class CatalogueBase(unittest.TestCase):
                                      read_client=s3mod.ReadOnly(self.s3)))
 
 
+class TestFileTypeFilter(CatalogueBase):
+    """The find page filters on the extensions the index says each
+    dataset holds; an index from before the column shows no filter."""
+    def test_index_lists_each_extension_once_without_the_dot(self):
+        rows = {r["identifier"]: r for r in index_mod.rows(self.s3, "crsw")}
+        self.assertEqual(rows[GREEN]["extensions"], ["csv", "md"])
+        self.assertEqual(rows[AMBER]["extensions"], ["txt"])
+        rec = {"files": [{"path": "a/B.CSV"}, {"path": "b.csv"}, {"path": "README"},
+                         {"path": ".hidden"}, {"path": "x.tar.gz"}, {"path": 7}]}
+        got = index_mod.row(mock.Mock(prefix="p", record_key="k"), rec, {}, "now")
+        self.assertEqual(got["extensions"], ["csv", "gz"])
+
+    def test_page_and_feed_filter_by_file_type(self):
+        c = self.app()
+        html = c.get("/datasets").text
+        for e in ("csv", "md", "txt"):
+            self.assertIn('<option value="%s">.%s</option>' % (e, e), html)
+        html = c.get("/datasets", params={"filetype": "csv"}).text
+        self.assertIn("1 dataset in 1 project holding .csv files", html)
+        self.assertIn(GREEN, html)
+        self.assertNotIn(AMBER, html)
+        self.assertIn('<option value="csv" selected>.csv</option>', html)
+        self.assertIn('<details class="project" open>', html)
+        # With the dot, in capitals: the same filter.
+        self.assertIn("holding .csv files", c.get("/datasets", params={"filetype": ".CSV"}).text)
+        self.assertIn("Nothing matches", c.get("/datasets", params={"filetype": "exe"}).text)
+        feed = c.get("/datasets.json", params={"filetype": "txt"}).json()["datasets"]
+        self.assertEqual([d["identifier"] for d in feed], [AMBER])
+
+    def test_the_pager_carries_the_file_type(self):
+        for n in range(11):
+            self.put_record("rs3/p-%02d/green/0_raw/d" % n,
+                            dict(META, strand="rs3", project="p-%02d" % n, dataset="d"),
+                            [record.manifest_entry("d.csv", ("%x" % n) * 64, 10)],
+                            "k1234567", "%08d-0000-4000-8000-000000000000" % n)
+        index_mod.write(self.s3, "crsw", "index", index_mod.rows(self.s3, "crsw"))
+        html = self.app().get("/datasets", params={"filetype": "csv"}).text
+        self.assertIn('href="/datasets?filetype=csv&amp;page=2&amp;per=10">Next', html)
+
+    def test_an_index_from_before_the_column_shows_no_filter(self):
+        old = [{k: v for k, v in r.items() if k != "extensions"}
+               for r in index_mod.rows(self.s3, "crsw")]
+        self.s3.put_object(Bucket="crsw", Key="index/datasets.jsonl",
+                           Body=index_mod.jsonl_bytes(old))
+        c = self.app()
+        page = c.get("/datasets")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn('name="filetype"', page.text)
+        self.assertIn("2 datasets in 2 projects", page.text)
+        self.assertIn("Nothing matches", c.get("/datasets", params={"filetype": "csv"}).text)
+
+
 class TestReadRoleOff(CatalogueBase):
     def test_every_route_is_404_and_no_nav_link(self):
         c = TestClient(create_app(Settings(**SETTINGS), s3_client=self.s3, vocab_dict=VOCAB))
