@@ -16,7 +16,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
-from crsw_deposit import record
+from crsw_deposit import filetypes, record
 
 from .scan import DatasetRef, list_datasets
 
@@ -36,11 +36,12 @@ COLUMNS = (
     "dataset", "domain", "domains", "abstract", "subject", "temporal_start",
     "temporal_end", "version", "creator", "license", "source_type", "source_detail",
     "provider", "spatial", "spatial_note", "steward", "depositor", "depositors",
-    "created", "modified", "files", "bytes", "schema_version", "vocabulary_version",
+    "created", "modified", "files", "bytes", "extensions", "schema_version",
+    "vocabulary_version",
     "derived_from", "derived_from_identifiers", "provenance", "provenance_tools",
     "origin", "record_key", "indexed_at",
 )
-LIST_COLUMNS = ("domains", "subject", "provider", "spatial", "depositors",
+LIST_COLUMNS = ("domains", "subject", "provider", "spatial", "depositors", "extensions",
                 "derived_from_identifiers", "provenance_tools")
 INT_COLUMNS = ("files", "bytes")
 
@@ -100,6 +101,11 @@ def row(ref: DatasetRef, rec: Dict, labels: Dict, indexed_at: str) -> Dict:
         "created": rec.get("created"), "modified": rec.get("modified"),
         "files": len(files),
         "bytes": sum(int(f.get("bytes") or 0) for f in files),
+        # The file types the dataset holds, for the find page's filter:
+        # each extension once, lower case, no dot. A file with no
+        # extension adds nothing.
+        "extensions": sorted({filetypes.extension(f["path"]) for f in files
+                              if isinstance(f.get("path"), str)} - {""}),
         "schema_version": rec.get("schema_version"),
         "vocabulary_version": rec.get("vocabulary_version"),
         "derived_from": json.dumps(refs, ensure_ascii=False) if refs else None,
